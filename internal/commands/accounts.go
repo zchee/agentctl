@@ -393,7 +393,7 @@ func expiry(millis *int64) string {
 // writes share one error path: a closed stdout is reported, never
 // panicked over.
 func tell(w io.Writer, report string) error {
-	if _, err := io.WriteString(w, report+"\n"); err != nil {
+	if err := render.Print(w, report); err != nil {
 		return errs.NewIO("could not write the report", err)
 	}
 	return nil
