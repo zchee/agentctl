@@ -1,6 +1,6 @@
 # Plan: port agctl (Rust) to agentctl (Go)
 
-- Status: **approved 2026-10-05 (user, "approve via team"); P1 in progress**
+- Status: **approved 2026-10-05 (user, "approve via team"); P0–P2 done, P3 in progress (W4), W5/W6 partly landed early; section 8 is the truth**
 - Written: 2026-10-05; last revised 2026-10-05 15:52:37 JST (`date`; earlier revisions in the
   changelog, section 21)
 - Session: https://claude.ai/code/session_019Gqsu3YqQoibgVecjoSu1o
@@ -408,7 +408,7 @@ Codex refresh `https://auth.openai.com/oauth/token`; Codex usage
 | P8 (later) | `--restart-remote-control`: tmux transport, RC attestation, fake-tmux + 10 screen fixtures, version pin policy | 🔜 not scheduled | — |
 | P9 (later) | Linux: process backend (procfs), platform refusals (keychain unsupported, `--remove-stale` exit 1), CI on `ubuntu-26.04`; Phase 2 credentials stay NO-GO until re-decided | 🔜 not scheduled | — |
 
-Current point: **P1 / W1 and P2 / W2 running together (eight lanes); next boundary is the W1 exit gate, then the four spike verdicts.**
+Current point: **session restart on 2026-10-05 during W4 (status wave) with W5/W6/runtime lanes partly landed; see `docs/handoffs/agctl-go-port-session2-handoff.md` for the in-flight files and the resume order.**
 
 ### Wave table (P1–P7)
 
@@ -814,3 +814,5 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
 - 2026-10-05 19:39:01 JST: signal-exit decision recorded (forced exit skips Purge after the deferral).
 - 2026-10-05 19:44:32 JST: read-path verification (one blocker, to the status lane) and review (approve,
   two moves to a fix lane) recorded.
+- 2026-10-05 21:01:02 JST: session restart requested by the user during W4; in-flight files and the
+  resume order recorded in docs/handoffs/agctl-go-port-session2-handoff.md.
