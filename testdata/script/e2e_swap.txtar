@@ -7,6 +7,8 @@ stdout '"budget_ms": 3000'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 0
+swap-io 3 0 0
+swap-tree
 
 # A first item write records no keychain baseline and removes only the shadow.
 swapfixture first-write
@@ -46,6 +48,7 @@ stdout '"outcome": "applied"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 1 0
+swap-tree
 
 # An expired migrated incoming item is not rotated by this swap.
 swapfixture migrated-expired
@@ -79,6 +82,8 @@ exists $SWAP_STORE/.credentials.adopted.json
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 0
+swap-audit failed 0
+swap-io 2 0 0
 
 # Empty securestorage scope selects the unsuffixed live item and config step.
 swapfixture live
@@ -90,6 +95,8 @@ stdout '"config": {'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 2
+swap-audit applied 1
+swap-config incoming
 
 # Live plaintext is never a fallback and remains byte-identical.
 swapfixture live-absent
@@ -184,6 +191,9 @@ stdout '"refusal": "D"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 0
+swap-io 1 0 0
+swap-audit none 0
+! exists $SWAP_STORE/.credentials.adopted.json
 
 # A newly minted oversized pair is saved before transport sizing refuses it.
 swapfixture refresh-too-long
@@ -192,6 +202,9 @@ stdout '"refusal": "D"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 1 0
+swap-io 4 0 0
+swap-audit none 0
+! exists $SWAP_STORE/.credentials.adopted.json
 
 # Timeouts release the hold and retain recovery copies with an unknown audit.
 swapfixture namespace-timeout
@@ -201,6 +214,9 @@ exists $SWAP_STORE/.credentials.adopted.json
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 0
+swap-audit unknown 0
+stdout '"id": "[^"]+"'
+swap-io 3 0 0
 
 swapfixture first-write-timeout
 exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
@@ -218,6 +234,9 @@ stdout '"reason": "swap_unknown"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 2
+swap-audit unknown 1
+stdout '"id": "[^"]+"'
+swap-io 3 0 0
 
 # A peer winning after refresh discards the swap but not the saved minted pair.
 swapfixture refresh-peer-change
@@ -276,6 +295,8 @@ stderr 'private-session-name'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 1
+swap-audit none 1
+swap-config incoming
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "already_current"'
 ! stdout 'Remote Control'
@@ -283,6 +304,8 @@ stdout '"reason": "already_current"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 2
+swap-audit none 2
+swap-config incoming
 
 # Config locks never nest in credential holds or get broken by a live swap.
 swapfixture live-config-busy
@@ -308,6 +331,8 @@ stdout '"backup": "'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 2
+swap-audit applied 1
+swap-config incoming
 
 # A concurrent incoming-store writer survives guarded refreshed persistence.
 swapfixture refresh-save-race
@@ -318,6 +343,263 @@ stderr 'refreshed credential was not saved back'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 1 0
+
+# An existing namespace keychain item is an idempotent no-write return.
+swapfixture namespace-duplicate
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# A non-owned securestorage override refuses before any keychain child.
+swapfixture namespace-unowned
+exec expectexit 15 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# Token overrides identify whose environment was inspected and spawn no child.
+swapfixture namespace-env-token
+exec expectexit 11 agentctl claude use $INCOMING --live --yes
+stdout 'own environment'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# Backend uncertainty warns on stderr rather than refusing a safe namespace swap.
+swapfixture namespace backend-warning
+exec agentctl claude use $INCOMING --live --yes
+stderr 'inspected its own environment for a secure-storage backend'
+stderr 'cannot inspect the target session'
+! stdout 'secure-storage backend'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+swap-audit applied 0
+
+# An unreadable outgoing item refuses after one read and never adopts plaintext.
+swapfixture namespace-unreadable
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "F"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# Contradictory outgoing server identity never selects an adoption destination.
+swapfixture live-outgoing-mismatch
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "F"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+swap-audit none 0
+
+# A dangling live store is unreachable, never a compromised credential hold.
+swapfixture live-dangling
+exec expectexit 23 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "live_unreachable"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# Expired live credentials with no own audit attribution never ask a server.
+swapfixture live-expired
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "live_token_expired"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# A declined config-only catch-up is already_active, not swap cancellation.
+swapfixture live-duplicate catchup-consent
+exec agentctl claude use $INCOMING --live --json
+stdout '"direction": "config"'
+stdout '"outcome": "already_active"'
+stdout '"reason": "declined"'
+! stdout '"outcome": "cancelled"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+swap-audit none 0
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 2
+swap-audit none 1
+swap-config incoming
+
+# Repeating a live write whose config lock was busy only catches up config.
+swapfixture live-config-busy skipped-then-catchup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "lock_busy"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+swap-audit applied 1
+exec rmdir $HOME/.claude.json.lock
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"direction": "config"'
+stdout '"outcome": "already_active"'
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-audit applied 2
+swap-config incoming
+
+# A changed artifact under the hold causes refusal before any keychain write.
+swapfixture namespace compromised-hold
+env AGENTCTL_FAULT=swap_pause_in_locks
+exec expectexit 10 agentctl claude use $INCOMING --live --yes --json &drift&
+swap-action wait-held
+swap-action drift
+swap-action resume
+wait drift
+stdout '"refusal": "A"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# SIGTERM inside an observed three-artifact hold releases the record and paths.
+swapfixture namespace signal-hold
+env AGENTCTL_FAULT=swap_pause_in_locks
+! exec agentctl claude use $INCOMING --live --yes --json &signalled&
+swap-action wait-held
+swap-action terminate
+wait signalled
+swap-action signal-exit
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-audit none 0
+
+# A third-lock collision releases the acquired locks without stale sampling.
+swapfixture namespace-storage-busy
+exec expectexit 16 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "busy"'
+stdout '"hold_ms": null'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-io 1 0 0
+swap-audit none 0
+swap-tree
+
+# Doctor reports a parked copy without exposing its bytes.
+swapfixture namespace doctor-parked
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude doctor
+stdout 'adopted copy'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+# A leaked hold is reported as three recoverable directories, not token content.
+swapfixture namespace doctor-leaked
+env AGENTCTL_FAULT=swap_lock_leak
+exec agentctl claude use $INCOMING --live --yes --json
+swap-action held
+env AGENTCTL_FAULT=
+exec agentctl claude doctor
+stdout 'held locks'
+stdout '.oauth_refresh.lock.*leaked'
+stdout '.storage-write.lock.*leaked'
+stdout '.lock.*doctor --remove-stale'
+! stdout SENTINEL
+! stderr SENTINEL
+! exec agentctl claude doctor --remove-stale $SWAP_STORE/.oauth_refresh.lock --yes
+stderr 'staleness threshold'
+! stderr 'outside the namespace root'
+swap-action held
+swap-action release-leak
+swap-check 1 0 0
+
+# Live parking preserves an independently refreshed owned grant byte-for-byte.
+swapfixture live-independent
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+swap-io 3 0 0
+swap-audit applied 1
+
+# A missing owner namespace is created privately and contains only the parked copy.
+swapfixture live-owner-missing
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "absent"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+swap-io 3 0 0
+swap-audit applied 1
+swap-tree
+
+# A refused audit prevents every forward config-only return from changing files.
+swapfixture live-duplicate-audit-refused
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"reason": "audit_refused"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+swap-io 1 0 0
+swap-tree
+
+swapfixture live-newer-audit-refused
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"reason": "audit_refused"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+swap-io 1 0 0
+swap-tree
+
+# An expired attributed duplicate needs no profile and performs no config rewrite.
+swapfixture live-expired-own
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"reason": "profile_unavailable"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# An expired attributed item can read a wrong-mode log but cannot follow a link.
+swapfixture live-expired-audit-mode
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"reason": "profile_unavailable"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+swapfixture live-expired-audit-symlink
+exec expectexit 22 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "audit_refused"'
+stdout '"config": null'
+! stdout '"outcome": "already_active"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
 
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
