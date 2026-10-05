@@ -601,6 +601,111 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
+# Account removal sweeps adopted credentials without touching the keychain.
+swapfixture namespace remove-adopted
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+swap-check 1 0 0
+swap-io 3 0 0
+swap-audit applied 0
+cp $SWAP_ROOT/security.log removal-before-security
+cp $UNDO_ITEM removal-before-item
+exec agentctl claude accounts remove $OWNER --yes --delete-secret
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR
+cmp $SWAP_ROOT/security.log removal-before-security
+cmp $UNDO_ITEM removal-before-item
+! stdout SENTINEL
+! stderr SENTINEL
+
+# A displaced incoming-account copy is parked beside the subject, not its refresh source.
+swapfixture refresh incoming-copy-repeat
+undo-setup own-alias
+rm $UNDO_OWNER_DIR/.credentials.json
+undo-blob $UNDO_ITEM incoming-earlier $INCOMING
+cp $UNDO_ITEM earlier-incoming
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"refusal": null'
+stdout '"adopted_to": ".credentials.adopted.json"'
+! stdout SENTINEL
+! stderr SENTINEL
+undo-credential $UNDO_INCOMING_DIR/.credentials.json outgoing-rotated
+cmp $UNDO_ITEM $UNDO_INCOMING_DIR/.credentials.json
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json earlier-incoming
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_INCOMING_DIR/.credentials.adopted.json
+undo-check 1 1 0
+swap-audit applied 0
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"refusal": null'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+undo-check 1 1 0
+swap-io 7 0 0
+swap-audit applied 0
+
+# Another account's newer parked copy may not be overwritten.
+swapfixture namespace foreign-adopted-newer
+undo-setup
+undo-blob $UNDO_ITEM incoming-session $INCOMING 1h
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing-parked $OWNER 2h
+cp $UNDO_ITEM newer-before-item
+cp $UNDO_OWNER_DIR/.credentials.adopted.json newer-before-adopted
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+stdout '"refusal": "F"'
+stdout 'the adopted copy beside the store belongs to another account'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM newer-before-item
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json newer-before-adopted
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 0 0 0
+swap-audit none 0
+
+# Identity also protects an older parked copy belonging to another account.
+swapfixture namespace foreign-adopted-older
+undo-setup
+undo-blob $UNDO_ITEM incoming-session $INCOMING 1h
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing-parked $OWNER -30m
+cp $UNDO_ITEM older-before-item
+cp $UNDO_OWNER_DIR/.credentials.adopted.json older-before-adopted
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+stdout '"refusal": "F"'
+stdout 'the adopted copy beside the store belongs to another account'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM older-before-item
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json older-before-adopted
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 0 0 0
+swap-audit none 0
+
+# An equal unrecorded live recovery copy needs no parking lineage.
+swapfixture live live-equal-unrecorded
+undo-setup
+cp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
+cp $UNDO_ITEM equal-before-item
+! exists $SWAP_AUDIT
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"adopted_to": null'
+stdout '"refusal": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json equal-before-item
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 1 0 2
+swap-io 3 0 0
+swap-audit applied 1
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 

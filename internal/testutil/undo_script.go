@@ -224,7 +224,7 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 	ts.Setenv("AGENTCTL_CLAUDE_PROFILE_URL", server.URL+"/profile")
 	ts.SetCmd("undo-blob", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) < 3 || len(args) > 4 {
-			ts.Fatalf("usage: undo-blob <path> <name> <account|-> [expired|newer]")
+			ts.Fatalf("usage: undo-blob <path> <name> <account|-> [expired|newer|expiry-offset]")
 		}
 		expiry := FreshAt()
 		if len(args) == 4 {
@@ -234,7 +234,9 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 			case "newer":
 				expiry += 3_600_000
 			default:
-				ts.Fatalf("unknown expiry %q", args[3])
+				offset, err := time.ParseDuration(args[3])
+				ts.Check(err)
+				expiry += offset.Milliseconds()
 			}
 		}
 		write(args[0], blob(args[1], args[2], expiry))
