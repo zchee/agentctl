@@ -1112,6 +1112,66 @@ swap-io 1 0 0
 [darwin] swap-audit applied 0
 [darwin] swap-tree
 
+[darwin] cp stdout cleanup-json-report
+[darwin] swap-hold-json cleanup-json-report 3000
+
+# A stale break is audited even when writing the held record then refuses.
+swapfixture namespace break-then-acquire-fails
+undo-setup
+mkdir $SWAP_STORE/.oauth_refresh.lock
+undo-age $SWAP_STORE/.oauth_refresh.lock
+mkdir $SWAP_ROOT/decoy
+symlink $AGENTCTL_CONFIG_DIR/claude/held-locks -> $SWAP_ROOT/decoy
+env AGENTCTL_FAULT=lock_stale
+! exec agentctl claude use $INCOMING --live --yes --json
+! stdout SENTINEL
+! stderr SENTINEL
+! exists $SWAP_STORE/.oauth_refresh.lock
+! exists $SWAP_STORE/.credentials.json
+undo-credential $SWAP_STORE/.credentials.adopted.json outgoing
+grep -count=1 '"event":"lock_break"' $SWAP_AUDIT
+grep -count=1 '"outcome":"broken"' $SWAP_AUDIT
+grep -count=1 '"tree":"agctl"' $SWAP_AUDIT
+swap-audit none 0
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# A fresh peer refresh lock is waited out before taking any other peer artifact.
+swapfixture namespace fresh-refresh-wait
+undo-setup
+swap-peer-wait
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+cp stdout fresh-wait-report
+swap-peer-wait-check
+swap-hold-json fresh-wait-report 1000
+! grep '"event":"lock_break"' $SWAP_AUDIT
+! exists $SWAP_STORE/.credentials.json
+swap-check 1 0 0
+swap-io 3 0 0
+swap-audit applied 0
+swap-tree
+
+# Native CPU workers run arithmetic while the real CLI holds the store.
+swapfixture namespace machine-busy-hold
+undo-setup
+swap-load
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+cp stdout busy-hold-report
+swap-load-check
+swap-hold-json busy-hold-report 3000
+! exists $SWAP_STORE/.credentials.json
+swap-check 1 0 0
+swap-io 3 0 0
+swap-audit applied 0
+swap-tree
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
