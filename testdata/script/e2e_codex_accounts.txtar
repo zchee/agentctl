@@ -1,4 +1,4 @@
-# Provenance: tests/e2e_codex_accounts.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; registry-only cases compare actual namespace bytes, modes and modification times.
+# Provenance: tests/e2e_codex_accounts.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; destructive cases compare real namespace manifests, including permissions and modification times.
 
 # list_and_show_report_the_codex_rows
 codex-status-fixture accounts
@@ -36,6 +36,80 @@ stdout $C_ACCOUNT
 ! stdout '\(forgotten\)'
 codex-manifest check $C_NAMESPACE
 
+# remove_delete_secret_unlinks_exactly_its_own_files
+codex-status-fixture accounts
+codex-account-setup seed
+exec agentctl codex accounts remove $C_EMAIL --delete-secret --yes
+! exists $C_NAMESPACE
+! exists $C_CONFIG/codex/$C_USER
+exists $C_CONFIG/codex/.locks
+! exists $C_MARKER
+exec agentctl codex accounts list
+stdout 'no Codex accounts;'
+grep '"delete"' $C_AUDIT
+codex-status-check audit $C_AUDIT
+
+# a_namespace_holding_foreign_entries_is_refused_and_nothing_is_removed
+codex-status-fixture accounts
+codex-account-setup seed
+mkdir $C_NAMESPACE/sessions
+cp foreign-config $C_NAMESPACE/config.toml
+codex-manifest save $C_NAMESPACE
+cp $C_MARKER marker-before
+cp $C_CONFIG/config.json registry-before-foreign
+exec expectexit 2 agentctl codex accounts remove $C_EMAIL --delete-secret --yes
+stderr 'sessions'
+stderr 'config.toml'
+stderr 'nothing was removed'
+codex-manifest check $C_NAMESPACE
+cmp marker-before $C_MARKER
+cmp registry-before-foreign $C_CONFIG/config.json
+
+# remove_of_a_record_without_a_credential_succeeds_and_creates_no_namespace
+codex-status-fixture accounts
+codex-account-setup no-namespace
+exec agentctl codex accounts remove $C_EMAIL --delete-secret --yes
+stdout 'no stored credential'
+! exists $C_NAMESPACE
+exec agentctl codex accounts list
+stdout 'no Codex accounts;'
+! exists $C_AUDIT
+
+# delete_secret_is_refused_on_a_row_whose_home_agctl_did_not_create
+codex-status-fixture accounts
+codex-account-setup readonly-rows
+cp $C_CONFIG/config.json registry-before-readonly
+cp $C_LIVE/auth.json foreign-before
+exec expectexit 2 agentctl codex accounts remove live@example.invalid --delete-secret --yes
+stderr 'did not create'
+stderr 'accounts forget'
+exec expectexit 2 agentctl codex accounts remove imported@example.invalid --delete-secret --yes
+stderr 'did not create'
+stderr 'accounts forget'
+cmp registry-before-readonly $C_CONFIG/config.json
+cmp foreign-before $C_LIVE/auth.json
+
+# remove_without_delete_secret_keeps_the_credential
+codex-status-fixture accounts
+codex-account-setup seed
+codex-manifest save $C_NAMESPACE
+exec agentctl codex accounts remove $C_EMAIL
+exec agentctl codex accounts list
+stdout 'no Codex accounts;'
+codex-manifest check $C_NAMESPACE
+exists $C_MARKER
+
+# an_unknown_id_is_refused_and_changes_nothing
+codex-status-fixture accounts
+cp $C_CONFIG/config.json registry-before-unknown
+exec expectexit 1 agentctl codex accounts show nobody@example.invalid
+stderr 'no account matches'
+exec expectexit 1 agentctl codex accounts remove nobody@example.invalid
+stderr 'no account matches'
+exec expectexit 1 agentctl codex accounts forget nobody@example.invalid
+stderr 'no account matches'
+cmp registry-before-unknown $C_CONFIG/config.json
+
 # supplemental: policy changes are registry-only and reject read-only rows
 codex-status-fixture accounts
 codex-manifest save $C_NAMESPACE
@@ -56,3 +130,6 @@ exec expectexit 1 agentctl codex accounts set x --refresh never
 stderr 'no account matches `x`'
 ! exists $C_CONFIG/codex
 codex-status-calls 0 0
+
+-- foreign-config --
+# their Codex configuration
