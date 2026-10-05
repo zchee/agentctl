@@ -47,7 +47,9 @@ func LockIsHeld(path string) bool {
 // is what makes "the second waits" assertions mean anything.
 func HoldLock(tb testing.TB, path string) *os.File {
 	tb.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// 0700, the mode the store itself creates lock directories at, so a
+	// test never passes against a laxer tree than production builds.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		tb.Fatalf("create the locks directory: %v", err)
 	}
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)

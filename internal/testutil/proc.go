@@ -28,13 +28,18 @@ import (
 // testContext returns the test's context, so every subprocess the harness
 // starts dies with the test that started it.
 func testContext(tb testing.TB) context.Context {
-	if t, ok := tb.(*testing.T); ok {
+	switch t := tb.(type) {
+	case *testing.T:
 		return t.Context()
+	case *testing.B:
+		return t.Context()
+	default:
+		// Only tests and benchmarks run subprocesses here; anything else
+		// is a harness bug to surface, not to paper over with a context
+		// that outlives the caller.
+		tb.Fatalf("no test context for %T", tb)
+		return nil
 	}
-	if b, ok := tb.(*testing.B); ok {
-		return b.Context()
-	}
-	return context.Background()
 }
 
 // WaitUntil polls ready every 20 ms until it returns true or budget

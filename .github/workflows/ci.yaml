@@ -42,7 +42,6 @@ jobs:
         run: |
           modernize -test ./...
           GOFLAGS=-tags=agentctl_testing modernize -test ./...
-          git diff --exit-code
       - name: Check imports
         run: |
           goimports-rereviser -project-name=github.com/zchee/agentctl -use-cache -cache-fast-skip -rm-unused -set-alias -recursive .

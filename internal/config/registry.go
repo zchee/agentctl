@@ -459,6 +459,11 @@ func NewRecord(accountUUID, organizationUUID string, kind AccountKind) (AccountR
 // LoadRegistry reads the registry, treating an absent file as an empty
 // one.
 //
+// A document with a duplicated object key is refused by the JSON decoder
+// rather than read with the last value winning, so a hand-edited or
+// mis-merged store that names a member twice is reported instead of
+// silently losing one of the two values.
+//
 // It returns a [errs.IOError] when the file exists but cannot be read,
 // and a [errs.ConfigError] when it is not a registry this build
 // understands.
