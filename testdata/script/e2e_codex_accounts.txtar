@@ -1,0 +1,58 @@
+# Provenance: tests/e2e_codex_accounts.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; registry-only cases compare actual namespace bytes, modes and modification times.
+
+# list_and_show_report_the_codex_rows
+codex-status-fixture accounts
+exec agentctl codex accounts list
+stdout $C_USER/$C_ACCOUNT
+stdout $C_EMAIL
+exec agentctl codex accounts show $C_EMAIL
+stdout 'kind:.*owned'
+stdout 'refresh:.*auto'
+stdout $C_ACCOUNT
+cp stdout account-show
+codex-status-check needles account-show
+
+# show_resolves_within_codex_accounts_only
+codex-status-fixture accounts
+codex-account-setup claude-row
+cp $C_CONFIG/config.json registry-before-claude
+exec expectexit 1 agentctl codex accounts show claude-only@example.invalid
+stderr 'no account matches'
+cmp registry-before-claude $C_CONFIG/config.json
+
+# forget_and_unforget_hide_a_row_without_touching_its_credential
+codex-status-fixture accounts
+codex-account-setup seed
+codex-manifest save $C_NAMESPACE
+exec agentctl codex accounts forget $C_EMAIL
+exec agentctl codex accounts list
+! stdout $C_ACCOUNT
+exec agentctl codex accounts list --all
+stdout $C_ACCOUNT
+stdout '\(forgotten\)'
+exec agentctl codex accounts unforget $C_EMAIL
+exec agentctl codex accounts list
+stdout $C_ACCOUNT
+! stdout '\(forgotten\)'
+codex-manifest check $C_NAMESPACE
+
+# supplemental: policy changes are registry-only and reject read-only rows
+codex-status-fixture accounts
+codex-manifest save $C_NAMESPACE
+exec agentctl codex accounts set $C_EMAIL --refresh never
+exec agentctl codex accounts show $C_EMAIL
+stdout 'refresh:.*never'
+exec agentctl codex accounts set $C_EMAIL --refresh auto
+exec agentctl codex accounts show $C_EMAIL
+stdout 'refresh:.*auto'
+codex-manifest check $C_NAMESPACE
+codex-account-setup readonly-rows
+exec expectexit 2 agentctl codex accounts set live@example.invalid --refresh auto
+stderr 'did not create'
+
+# supplemental: unknown registry selectors never create Codex directories
+codex-status-fixture empty
+exec expectexit 1 agentctl codex accounts set x --refresh never
+stderr 'no account matches `x`'
+! exists $C_CONFIG/codex
+codex-status-calls 0 0
