@@ -1,0 +1,222 @@
+# Reference assertions: tests/e2e_doctor.rs, tests/e2e_doctor_stale.rs,
+# tests/e2e_accounts.rs and the hidden-sibling assertion in tests/e2e_status.rs.
+# Expected terminal wording is normalized only from agctl to agentctl.
+
+# e2e_doctor.rs: the_isolation_section_reports_a_minimal_session.
+doctorfixture session
+exec agentctl claude doctor
+stdout 'id=11111111-2222-3333-4444-555555555555'
+stdout 'sha8_match=true'
+stdout 'mcp.json.*linked'
+stdout 'hasCompletedOnboarding'
+stdout 'leaked keys      none'
+stdout 'agentctl claude use --forget'
+stdout 'policySettings.disableSideloadFlags'
+stdout 'secure-storage backend'
+! stdout 'sk-ant-'
+
+# e2e_doctor.rs: the_isolation_section_flags_a_hand_seeded_leak_and_an_occupied_path.
+doctorfixture leaked
+exec agentctl claude doctor
+stdout 'settings.json.*linked'
+stdout 'CLAUDE.md.*occupied'
+stdout 'leaked keys      oauthAccount'
+! stdout 'secret-leaked-value'
+
+# e2e_doctor.rs: the_isolation_section_reports_both_exports_the_unexposed_entries_the_mcp_count_and_the_drift.
+doctorfixture rich
+exec agentctl claude doctor
+stdout 'CLAUDE_SECURESTORAGE_CONFIG_DIR=.*claude/11111111-2222-3333-4444-555555555555/66666666-7777-8888-9999-000000000000 CLAUDE_CONFIG_DIR=.*claude-sessions/'
+stdout 'migrated=false'
+stdout 'unexposed        statsig, todos.json'
+stdout 'credential_entries=2'
+stdout 'changed_since_seed=true'
+! stdout 'secret-one|secret-two'
+
+# e2e_doctor.rs: the_isolation_section_says_the_root_is_empty_with_no_sessions.
+doctorfixture empty
+exec agentctl claude doctor
+stdout 'has no isolated sessions'
+stdout 'no config write recorded'
+
+# e2e_doctor.rs: the_store_block_names_an_audit_log_agctl_refuses_and_leaves_its_mode_alone.
+doctorfixture audit
+exec agentctl claude doctor
+stdout 'audit log.*keychain-writes.jsonl'
+stdout 'its mode is 0644 and not 0600'
+stdout 'will not change it'
+doctor-state mode $AUDIT 644
+exec chmod 600 $AUDIT
+exec agentctl claude doctor
+! stdout 'its mode is'
+
+# e2e_doctor.rs: the_store_block_names_the_config_path_its_lock_and_whether_the_file_agrees.
+doctorfixture empty
+exec agentctl claude doctor
+cp stdout config-empty
+stdout 'claude config.*\.claude.json \(lock .*\.claude.json.lock\); no config write recorded'
+doctor-state store-block config-empty
+doctorfixture config-match
+exec agentctl claude doctor
+stdout 'last config write applied.*its account agrees with the file'
+cp stdout config-match
+doctor-state store-block config-match
+doctorfixture config-mismatch
+exec agentctl claude doctor
+stdout 'last config write applied.*its account differs from the file'
+cp stdout config-mismatch
+doctor-state store-block config-mismatch
+
+# e2e_accounts.rs: doctor_reports_every_part_of_the_store.
+doctorfixture all
+exec agentctl claude doctor
+[darwin] stdout 'preflight        unlocked'
+stdout 'live service     Claude Code-credentials'
+stdout 'pending write'
+stdout 'pending meta'
+stdout 'stray tmp'
+stdout 'no Claude Code lock artefacts'
+stdout 'namespace locks'
+stdout 'held locks'
+stdout '11111111-2222-3333-4444-555555555555/_unknown-org'
+stdout 'accounts relocate'
+[darwin] stdout 'access in '
+stdout 'pid '
+! stdout 'sk-ant-'
+
+# e2e_status.rs: a_keychain_item_naming_the_live_directory_is_a_hidden_sibling.
+# The doctor assertion deferred by e2e_status.txtar is covered here.
+[darwin] statusfixture sibling
+[darwin] exec agentctl claude doctor
+[darwin] stdout 'names the same directory as the live credential but holds different tokens; hidden by default, never merged'
+[darwin] status-check read-only
+
+# e2e_accounts.rs: storage_mutex_legacy_report_and_refusal_account.
+doctorfixture owned
+cp unchanged $NS/.storage-write
+exec agentctl claude doctor
+stdout 'Legacy agentctl artefact.*regular file'
+! stdout 'remove-stale.*\.storage-write '
+exec expectexit 1 agentctl claude doctor --remove-stale $NS/.storage-write --yes
+[darwin] stderr 'removal and migration are unsupported'
+cmp unchanged $NS/.storage-write
+
+# e2e_accounts.rs: doctor_remove_stale_refuses_everything_it_should.
+[darwin] doctorfixture owned
+[darwin] cp unchanged $FLOCK
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $FLOCK --yes
+[darwin] stderr 'never unlinked'
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $NS/.credentials.json --yes
+[darwin] stderr 'not a Claude Code lock artefact'
+[darwin] cp unchanged $NS/.storage-write.lock
+[darwin] doctor-state age $NS/.storage-write.lock
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $NS/.storage-write.lock --yes
+[darwin] stderr 'anomalous \(regular file; Claude Code makes lock directories\)'
+[darwin] exists $NS/.storage-write.lock
+[darwin] mkdir $LOCK
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LOCK --yes
+[darwin] stderr 'staleness threshold'
+[darwin] doctor-state age $LOCK
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LOCK
+[darwin] stderr '`--yes` is required'
+[darwin] stdout 'This is Claude Code.s lock, not agentctl.s'
+[darwin] exists $LOCK
+[darwin] exists $NS/.credentials.json
+
+# e2e_accounts.rs: doctor_remove_stale_removes_a_lapsed_artefact_after_two_samples.
+[darwin] doctorfixture owned
+[darwin] mkdir $LOCK
+[darwin] doctor-state age $LOCK
+[darwin] doctor-state elapsed start
+[darwin] exec agentctl claude doctor --remove-stale $LOCK --yes
+[darwin] stdout 'two samples 12s apart'
+[darwin] stdout 'Removed'
+[darwin] doctor-state elapsed check
+[darwin] ! exists $LOCK
+[darwin] exists $NS/.credentials.json
+[darwin] ! exists $AUDIT
+
+# e2e_doctor_stale.rs: remove_stale_clears_a_leak_a_dead_record_names.
+[darwin] doctorfixture owned
+[darwin] mkdir $LIVE/.oauth_refresh.lock
+[darwin] doctor-state age $LIVE/.oauth_refresh.lock
+[darwin] doctor-state record dead $LIVE/.oauth_refresh.lock
+[darwin] exec agentctl claude doctor
+[darwin] stdout 'held locks'
+[darwin] stdout 'the live store'
+[darwin] stdout 'remove-stale.*\.oauth_refresh.lock --yes'
+[darwin] exec agentctl claude doctor --remove-stale $LIVE/.oauth_refresh.lock --yes
+[darwin] stdout 'is outside'
+[darwin] stdout 'held-locks/.*\.json'
+[darwin] stdout 'Removed'
+[darwin] ! exists $LIVE/.oauth_refresh.lock
+[darwin] exists $LIVE
+[darwin] exists $NS/.credentials.json
+[darwin] exists $RECORD
+[darwin] ! exists $AUDIT
+
+# e2e_doctor_stale.rs: remove_stale_refuses_an_outside_path_without_a_dead_record.
+[darwin] doctorfixture owned
+[darwin] mkdir $LIVE/.oauth_refresh.lock
+[darwin] doctor-state age $LIVE/.oauth_refresh.lock
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.oauth_refresh.lock --yes
+[darwin] stderr 'is not inside'
+[darwin] doctor-state record live $LIVE/.oauth_refresh.lock
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.oauth_refresh.lock --yes
+[darwin] stderr 'is being held, not leaked'
+[darwin] rm $RECORD
+[darwin] mkdir $LIVE/.storage-write
+[darwin] doctor-state age $LIVE/.storage-write
+[darwin] doctor-state record dead $LIVE/.storage-write
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.oauth_refresh.lock --yes
+[darwin] stderr 'is not inside'
+[darwin] exists $LIVE/.oauth_refresh.lock $LIVE/.storage-write
+
+# e2e_doctor_stale.rs: storage_mutex_legacy_report_and_refusal_outside_record.
+[darwin] doctorfixture owned
+[darwin] mkdir $LIVE/.storage-write $LIVE/.storage-write.lock
+[darwin] doctor-state age $LIVE/.storage-write
+[darwin] doctor-state age $LIVE/.storage-write.lock
+[darwin] doctor-state record dead $LIVE/.storage-write
+[darwin] cp $RECORD record-before
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.storage-write.lock --yes
+[darwin] stderr 'is not inside'
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.storage-write --yes
+[darwin] stderr 'removal and migration are unsupported'
+[darwin] exec agentctl claude doctor
+[darwin] stdout 'Legacy agentctl artefact'
+[darwin] ! stdout 'remove-stale.*\.storage-write '
+[darwin] cmp record-before $RECORD
+[darwin] exists $LIVE/.storage-write $LIVE/.storage-write.lock
+
+# e2e_doctor_stale.rs: storage_mutex_record_exact_paths_corrected_sibling.
+[darwin] doctorfixture owned
+[darwin] mkdir $LIVE/.storage-write.lock $LIVE/.oauth_refresh.lock
+[darwin] doctor-state age $LIVE/.storage-write.lock
+[darwin] doctor-state age $LIVE/.oauth_refresh.lock
+[darwin] doctor-state record dead $LIVE/.storage-write.lock
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.oauth_refresh.lock --yes
+[darwin] stderr 'is not inside'
+[darwin] exists $LIVE/.storage-write.lock $LIVE/.oauth_refresh.lock
+
+# e2e_doctor_stale.rs: a_symlinked_held_locks_directory_authorises_no_removal.
+[darwin] doctorfixture owned
+[darwin] mkdir $LIVE/.oauth_refresh.lock
+[darwin] doctor-state age $LIVE/.oauth_refresh.lock
+[darwin] doctor-state record planted $LIVE/.oauth_refresh.lock
+[darwin] exec agentctl claude doctor
+[darwin] stdout 'held locks'
+[darwin] ! stdout 'held-locks/.*\.json'
+[darwin] ! stdout 'remove-stale.*\.oauth_refresh.lock --yes'
+[darwin] exec expectexit 1 agentctl claude doctor --remove-stale $LIVE/.oauth_refresh.lock --yes
+[darwin] stderr 'is not inside'
+[darwin] exists $LIVE/.oauth_refresh.lock $RECORD
+
+# Unsupported platforms refuse before creating a store.
+[!darwin] env AGENTCTL_CONFIG_DIR=$WORK/uncreated
+[!darwin] exec expectexit 1 agentctl claude doctor --remove-stale $WORK/outside.lock --yes
+[!darwin] stderr 'stale lock removal unsupported on this platform: peer visibility is unproved'
+[!darwin] ! exists $WORK/uncreated
+
+-- unchanged --
+unchanged
