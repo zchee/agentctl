@@ -130,7 +130,11 @@ var flock = unix.Flock
 // acquisition retries every [NamespaceLockRetry] until deadline, then
 // reports [ErrLockBusy]; ctx cancellation is noticed immediately rather
 // than at the end of the next interval. A name that is not one plain path
-// component is refused before anything is created.
+// component is refused before anything is created. The acquired lock's
+// body records this holder — pid, start-time identity, acquisition time —
+// so doctor can tell a live holder from a recycled pid; a holder that
+// cannot record itself releases the lock and reports the failure, because
+// a silent lock is exactly what the body exists to prevent.
 func Acquire(ctx context.Context, locksDir, name string, deadline time.Time) (*LockGuard, error) {
 	if !config.IsSingleComponent(name) {
 		return nil, &LockUnavailableError{Reason: fmt.Sprintf("`%s` does not name a lock file", locksDir+string(filepath.Separator)+name)}
@@ -140,7 +144,15 @@ func Acquire(ctx context.Context, locksDir, name string, deadline time.Time) (*L
 		return nil, err
 	}
 	defer func() { _ = unix.Close(dirFD) }()
-	return lockAt(ctx, dirFD, name, filepath.Join(locksDir, name), deadline)
+	guard, err := lockAt(ctx, dirFD, name, filepath.Join(locksDir, name), deadline)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeBody(ctx, guard); err != nil {
+		_ = guard.Release()
+		return nil, err
+	}
+	return guard, nil
 }
 
 // LockFile takes an exclusive flock on path, creating the file if needed,
