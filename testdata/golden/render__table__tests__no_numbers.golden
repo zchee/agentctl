@@ -1,0 +1,3 @@
+ Account           | Org  | Plan | 5h | Weekly | Fable (weekly) | Credits | 5h reset | Weekly reset | State           
+-------------------+------+------+----+--------+----------------+---------+----------+--------------+-----------------
+ alice@example.com | Acme | —    | —  | —      | —              | —       | —        | —            | keychain locked
