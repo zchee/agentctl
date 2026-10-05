@@ -23,6 +23,7 @@ import (
 	"github.com/zchee/agentctl/internal/commands"
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/runtime/signals"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -30,6 +31,8 @@ import (
 type Dependencies struct {
 	// Stdout receives the reports printed by commands.
 	Stdout io.Writer
+	// Signals coordinates child teardown with process-level cancellation.
+	Signals *signals.Controller
 }
 
 // composer fills the handler fields of one command family. Each family

@@ -21,6 +21,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -71,7 +72,7 @@ func run() int {
 	_, controller := signals.Install(context.Background())
 	defer controller.Stop()
 
-	c := cli.New(app.Handlers(app.Dependencies{Stdout: os.Stdout}))
+	c := cli.New(app.Handlers(app.Dependencies{Stdout: os.Stdout, Signals: controller}))
 	err := controller.Execute(c.Root().ExecuteContext, func(sig os.Signal) {
 		os.Exit(cli.SignalExitCode(sig))
 	})
@@ -87,7 +88,9 @@ func run() int {
 		return errs.ExitOK
 	}
 
-	fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
+	if _, silent := errors.AsType[*errs.ChildExit](err); !silent {
+		fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
+	}
 	if !c.Dispatched() {
 		// The command line itself was refused, which is the usage-error
 		// contract: exit 2, no stack, nothing ran.

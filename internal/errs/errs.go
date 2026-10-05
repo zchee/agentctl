@@ -285,8 +285,11 @@ func ExitCode(err error) int {
 		authErr     *AuthError
 		refusedErr  *RefusedError
 		partialErr  *PartialError
+		childExit   *ChildExit
 	)
 	switch {
+	case errors.As(err, &childExit):
+		return childExit.Code
 	case errors.As(err, &configErr), errors.As(err, &ioErr):
 		return ExitFatal
 	case errors.As(err, &refusedErr):
