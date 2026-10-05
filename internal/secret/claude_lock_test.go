@@ -30,17 +30,22 @@ func TestPeerLockConstants(t *testing.T) {
 		got  any
 		want any
 	}{
-		"success: the peer heartbeat is 5s":         {got: PeerHeartbeat, want: 5 * time.Second},
-		"success: five contention rounds":           {got: ContentionRounds, want: 5},
-		"success: a round's fixed part is 1s":       {got: ContentionRoundBase, want: 1 * time.Second},
-		"success: a round's jitter span is 1s":      {got: ContentionRoundJitter, want: 1 * time.Second},
-		"success: the contention floor is 7.5s":     {got: ContentionFloor, want: 7500 * time.Millisecond},
-		"success: the stale sample interval is 12s": {got: StaleSampleInterval, want: 12 * time.Second},
-		"success: the clock skew tolerance is 1s":   {got: ClockSkewTolerance, want: 1 * time.Second},
-		"success: the hold budget is 3s":            {got: HoldBudget, want: 3000 * time.Millisecond},
-		"success: the config hold budget is 1.2s":   {got: ConfigHoldBudget, want: 1200 * time.Millisecond},
-		"success: three restarts":                   {got: MaxRestarts, want: 3},
-		"success: the legacy lock suffix is .lock":  {got: LegacyLockSuffix, want: ".lock"},
+		"success: the peer heartbeat is 5s":             {got: PeerHeartbeat, want: 5 * time.Second},
+		"success: five contention rounds":               {got: ContentionRounds, want: 5},
+		"success: a round's fixed part is 1s":           {got: ContentionRoundBase, want: 1 * time.Second},
+		"success: a round's jitter span is 1s":          {got: ContentionRoundJitter, want: 1 * time.Second},
+		"success: the contention floor is 7.5s":         {got: ContentionFloor, want: 7500 * time.Millisecond},
+		"success: the stale sample interval is 12s":     {got: StaleSampleInterval, want: 12 * time.Second},
+		"success: the clock skew tolerance is 1s":       {got: ClockSkewTolerance, want: 1 * time.Second},
+		"success: the hold budget is 3s":                {got: HoldBudget, want: 3000 * time.Millisecond},
+		"success: the config hold budget is 1.2s":       {got: ConfigHoldBudget, want: 1200 * time.Millisecond},
+		"success: three restarts":                       {got: MaxRestarts, want: 3},
+		"success: the legacy lock suffix is .lock":      {got: LegacyLockSuffix, want: ".lock"},
+		"success: the refresh lock name":                {got: RefreshLockName, want: ".oauth_refresh.lock"},
+		"success: the storage-write lock name":          {got: StorageWriteLockName, want: ".storage-write.lock"},
+		"success: the legacy storage-write artefact":    {got: LegacyStorageWriteArtefact, want: ".storage-write"},
+		"success: eight held-lock record name attempts": {got: recordNameAttempts, want: 8},
+		"success: held-lock records parse up to 4096B":  {got: MaxHeldLockRecordBytes, want: 4096},
 	}
 
 	for name, tt := range tests {
