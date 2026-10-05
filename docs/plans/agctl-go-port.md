@@ -414,7 +414,7 @@ Current point: **P1 / W1 and P2 / W2 running together (eight lanes); next bounda
 
 | Wave | Lanes (parallel) | Depends on | Exit gate |
 |---|---|---|---|
-| W1 | `foundation-cli` (cobra tree, flags, duration grammar, exit constants, completions), `foundation-errs-config` (errs, paths, registry, modes, `.config.lock`, namespace lock), `foundation-testutil` (fixtures/schemas/goldens copy + header-strip script, temp tree, fake-bin install, golden/schema helpers), `foundation-ci` (`.github/workflows/ci.yaml`) | — | section 12 gates green; `agentctl --help` and `completions` goldens match `tests/cli_smoke.rs` modulo binary name |
+| W1 | `foundation-cli` (cobra tree, flags, duration grammar, exit constants, completions), `foundation-errs-config` (errs, paths, registry, modes, `.config.lock`, namespace lock), `foundation-testutil` (fixtures/schemas/goldens copy + header-strip script, temp tree, fake-bin install, golden/schema helpers), `foundation-ci` (`.github/workflows/ci.yaml`) | — | section 12 gates green; `agentctl --help` and `completions` goldens match `tests/cli_smoke.rs` modulo binary name. **Lanes done 2026-10-05** (cli `1992cca` `c1e0c04` `bd8b9de` `cd81e64` `06fe00f` `e870694`; errs-config `670e226` `0e67fe1` `e75b7ff` `f88a166`; testutil `727ca91` `d2ba9ee` `19dcadc` `4b2393d` `53b62a5` `a9275e5`, helpers rode in `cd81e64`; ci `6aa7acb` `a9aa959`); `verify-w1` and `review-w1` lanes running |
 | W2 | `spike-httptrace`, `spike-jsontext`, `spike-darwin-proc`, `spike-memguard` | W1 for the gate; started in parallel with W1 on 2026-10-05 by the user's decision (eight lanes at once) | table tests green; one verdict file per spike, `docs/research/agctl-spike-{httptrace,jsontext,darwin-proc,memguard}.md`; no-go stops the dependent waves and goes back to the user |
 | W3 | `claude-secret-read` (security_cli, location, reader), `claude-credentials-namespace` (credentials, namespace NFC+SHA-256, claims), `claude-usage` (usage HTTP + model + cache), `render-table` (table, reset, row) | W1 | unit + golden tests; `fake-security.sh` argv log equals Rust e2e expectations |
 | W4 | `claude-status` (discovery, status pass, JSON v1, partial exit), `claude-accounts-read` | W3 | e2e goldens (normalised + exact-byte); `status.v1.json` validation |
@@ -715,6 +715,15 @@ go test -tags agentctl_testing -race -count=1 ./...
   `TestMain` per package (the root package's belongs to the e2e harness).
 - Shut each lane down in the turn its report is accepted; check for stray `.omc`
   directories (`fd -H -I -t d '^\.omc$'`) before every commit.
+- Lanes share ONE working tree and ONE git index. Learned 2026-10-05 when `cd81e64`
+  (a cli commit) swallowed fourteen staged testutil files: every lane commits with
+  `git commit --gpg-sign -F "$MSG" --only -- <its own paths>` so the index contents of other
+  lanes never ride along, and runs `gofumpt -w -extra` and `goimports-rereviser` on its own
+  paths only (`gofumpt -w -extra <files>`; `goimports-rereviser ... <dir>`), never `.`,
+  because the repo-wide run reformats other lanes' in-flight files.
+- Model self-identity: two foundation lanes reported `claude-fable-5` as their self-identity
+  while the environment named `claude-gpt-6-astra-fast[1m]`; the user chose to continue
+  with the frontmatter as authoritative and have every lane keep self-reporting on line 1.
 - Deliver reports via SendMessage to the lead's teammate name (`team-lead`), not `main`.
 
 ## 18. Confidence scores
@@ -743,6 +752,8 @@ go test -tags agentctl_testing -race -count=1 ./...
 | Worker model after the 15:30 frontmatter change | restore `astra-ultrafast` vs keep `astra-fast` | keep `astra-fast` as the files say |
 | Codex trailer on lane commits | add `Co-Authored-By: Codex` vs Fable + session only | add it |
 | W2 start | run the spikes now alongside W1 (eight lanes) vs wait for the W1 gate | run now; the W1 gate still bounds W3+ |
+| Two lanes self-identifying as Fable | continue with the frontmatter as authoritative vs investigate the gateway routing first | continue; report any lane that names Fable |
+| Golden file names (lane question, answered by the naming rule) | keep `agctl__` prefix vs strip it vs re-slug | strip the crate prefix only; `testdata/golden/MAPPING.md` records the correspondence |
 
 Lead decisions (not asked, recorded for review): Rust implementation normative over its
 comments; testing endpoints fail closed for both providers; `time` with the system zone
@@ -781,3 +792,5 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
   commits; package-layout facts for embed, build tags and `TestMain` recorded in 17.
 - 2026-10-05 17:37:20 JST: W2 spikes started alongside W1 on the user's instruction to maximise
   parallelism (eight lanes); one verdict file per spike instead of a shared one.
+- 2026-10-05 17:53:23 JST: foundation lanes finished and shut down; verify/review lanes started;
+  shared-index commit rule and the Fable self-identity note added to section 17.
