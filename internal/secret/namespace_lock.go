@@ -67,6 +67,9 @@ func Acquire(ctx context.Context, locksDir, name string, deadline time.Time) (*L
 	if !config.IsSingleComponent(name) {
 		return nil, &LockUnavailableError{Reason: fmt.Sprintf("`%s` does not name a lock file", locksDir+string(filepath.Separator)+name)}
 	}
+	if err := namespaceLockFault(filepath.Join(locksDir, name)); err != nil {
+		return nil, err
+	}
 	guard, err := lockfile.LockIn(ctx, locksDir, name, deadline)
 	if err != nil {
 		return nil, err
