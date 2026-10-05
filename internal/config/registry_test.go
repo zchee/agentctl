@@ -799,3 +799,40 @@ func TestUpdatePersistsTheChange(t *testing.T) {
 		t.Errorf("the change should persist")
 	}
 }
+
+func TestARegistryTheReferenceBinaryWroteRoundTripsByteForByte(t *testing.T) {
+	t.Parallel()
+
+	// The fixtures under testdata were written by another binary that
+	// shares this store format, running against a sandboxed store, so this
+	// round trip proves byte compatibility with what real stores hold, not
+	// merely with this package's own output.
+	tests := map[string]struct {
+		fixture string
+	}{
+		"success: a store hiding one unclaimed service":  {fixture: "registry-forgotten-service.json"},
+		"success: a store with everything emptied again": {fixture: "registry-empty.json"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			want, err := os.ReadFile(filepath.Join("testdata", tt.fixture))
+			if err != nil {
+				t.Fatalf("ReadFile(%q) = %v", tt.fixture, err)
+			}
+			var registry Registry
+			if err := json.Unmarshal(want, &registry); err != nil {
+				t.Fatalf("Unmarshal() = %v", err)
+			}
+			got, err := registry.document()
+			if err != nil {
+				t.Fatalf("document() = %v", err)
+			}
+			if diff := gocmp.Diff(string(want), string(got)); diff != "" {
+				t.Errorf("on-disk bytes mismatch (-reference +got):\n%s", diff)
+			}
+		})
+	}
+}
