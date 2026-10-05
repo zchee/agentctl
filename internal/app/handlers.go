@@ -70,11 +70,17 @@ func readHandlers(deps Dependencies, handlers *cli.Handlers) {
 			timeout = cli.HTTPTimeoutDefault
 		}
 		env := claude.EnvFromProcess()
+		oauth, err := claude.NewOAuthClientFromEnv()
+		if err != nil {
+			return err
+		}
 		status := &commands.Status{
-			Reader: secret.NewReader(),
-			Client: claude.NewUsageClientFromEnv(timeout),
-			Env:    &env,
-			Stdout: deps.Stdout,
+			Reader:    secret.NewReader(),
+			Client:    claude.NewUsageClientFromEnv(timeout),
+			Refresher: oauth,
+			Profiles:  oauth,
+			Env:       &env,
+			Stdout:    deps.Stdout,
 		}
 		return status.Run(ctx, globals, opts)
 	}

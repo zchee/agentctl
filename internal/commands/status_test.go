@@ -253,13 +253,13 @@ func TestStatusHonoursARateLimitPastTheEndOfTheProcess(t *testing.T) {
 	}
 }
 
-func TestStatusReportsWhyAnExpiredOwnedCredentialWasLeftAlone(t *testing.T) {
+func TestStatusRefusesAnUnwiredRefresherBeforeSpendingTheGrant(t *testing.T) {
 	world := newStatusWorld(t, serveBody(http.StatusOK, usageBody(t)))
 	world.seedOwned(t, world.fixture.Blob("access-stale", "refresh-stale", testutil.ExpiredAt()))
 
 	stdout, err := world.run(t, cli.ClaudeStatusOptions{Refresh: true, Accounts: ownedOnly})
 	assertPartial(t, err, 1)
-	if !strings.Contains(stdout, "expired ("+refreshUnavailableNote+")") {
+	if !strings.Contains(stdout, "token refresher is not wired") {
 		t.Errorf("stdout is missing the expired state and its reason:\n%s", stdout)
 	}
 	if got := world.calls.Load(); got != 0 {
@@ -275,11 +275,11 @@ func TestStatusMapsFetchFailuresOntoRowStates(t *testing.T) {
 		wantState string
 		wantCalls int64
 	}{
-		"error: a rejected token on an owned row reports the refresh gap": {
+		"error: a rejected token is retried once then requires login": {
 			status:    http.StatusUnauthorized,
 			body:      "{}",
-			wantState: "expired (" + refreshUnavailableNote + ")",
-			wantCalls: 1,
+			wantState: "needs login",
+			wantCalls: 2,
 		},
 		"success: a transient failure shows the cached value as stale": {
 			fill:      true,

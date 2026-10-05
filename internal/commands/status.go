@@ -64,9 +64,12 @@ type Status struct {
 	// Client is the usage endpoint client, already carrying the
 	// per-request timeout.
 	Client provider.UsageProvider[*usage.UsageSnapshot]
-	// Refresher mints new access tokens; nil while refreshing is not
-	// wired, which the refresh barrier reports per row.
+	// Refresher exchanges stored refresh grants.
 	Refresher TokenRefresher
+	// Profiles supplies missing plan metadata after a refresh, best effort.
+	Profiles claude.ProfileSource
+	// Writer persists refreshed keychain items after peer-lock admission.
+	Writer KeychainWriter
 	// Runner bounds the fan-out; nil means the bounded default.
 	Runner PassRunner
 	// Env is the environment view every naming decision of the pass
@@ -90,6 +93,8 @@ type statusOptions struct {
 	refresh bool
 	// noCache ignores the on-disk usage cache for this pass.
 	noCache bool
+	// listing is the pass-wide keychain listing used for refresh rechecks.
+	listing []secret.ServiceEntry
 }
 
 // mayServeCache reports whether a cached value may be served instead of
@@ -176,7 +181,7 @@ func (s *Status) Run(ctx context.Context, globals cli.Globals, opts cli.ClaudeSt
 		return err
 	}
 
-	outcomes := s.collect(passCtx, paths, selected, statusOptions{refresh: opts.Refresh, noCache: opts.NoCache})
+	outcomes := s.collect(passCtx, paths, selected, statusOptions{refresh: opts.Refresh, noCache: opts.NoCache, listing: discovery.Listing})
 	markSameIdentity(outcomes)
 
 	failed := 0
@@ -338,7 +343,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 	expired := credentials.AccessExpired(nowMillis, claude.RefreshMarginMillis)
 	switch {
 	case expired && refreshable:
-		result := s.refreshExpired(ctx, &row.Record, credentials)
+		result := s.refreshExpired(ctx, paths, &row.Record, options.listing)
 		applyRefresh(&outcome, result)
 		if result.credentials == nil {
 			outcome.usage = cachedUsage()
@@ -386,7 +391,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 			// Routine: the two use different clocks.
 			if refreshable && !refreshedOnce {
 				refreshedOnce = true
-				result := s.refreshExpired(ctx, &row.Record, credentials)
+				result := s.refreshExpired(ctx, paths, &row.Record, options.listing)
 				applyRefresh(&outcome, result)
 				if result.credentials == nil {
 					if outcome.state == carried {
