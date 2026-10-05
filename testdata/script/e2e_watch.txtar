@@ -1,0 +1,41 @@
+# Watch arguments are rejected before terminal setup or account discovery.
+exec expectexit 2 agentctl claude watch --interval 30s
+stderr 'below the 60s floor'
+! stdout .
+! stderr '(panic:|sk-ant)'
+
+exec expectexit 2 agentctl claude watch --interval 0
+stderr 'below the 60s floor'
+
+exec expectexit 2 agentctl claude watch --interval 1.5m
+stderr 'unknown duration unit'
+
+exec expectexit 2 agentctl claude watch --interval 10ms
+stderr 'unknown duration unit'
+
+exec expectexit 2 agentctl claude watch --interval 18446744073709551616s
+stderr 'too large to represent'
+
+# The watch request budget is fixed, not a separate command-line flag.
+exec expectexit 2 agentctl claude watch --timeout 10s
+stderr 'unknown flag: --timeout'
+
+# A parsed command reaches terminal setup, which refuses redirected streams.
+exec expectexit 1 agentctl claude watch
+stderr 'watch display requires a terminal on stdin and stdout'
+! stdout .
+! stderr '(not implemented|panic:|sk-ant)'
+
+exec expectexit 1 agentctl claude watch --interval 60
+stderr 'watch display requires a terminal'
+
+exec expectexit 1 agentctl claude watch --interval 1m
+stderr 'watch display requires a terminal'
+
+exec expectexit 1 agentctl claude watch --interval 2h
+stderr 'watch display requires a terminal'
+
+exec agentctl claude watch --help
+stdout 'interval'
+stdout '300'
+! stderr .
