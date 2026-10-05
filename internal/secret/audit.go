@@ -17,6 +17,7 @@ package secret
 import (
 	"bufio"
 	"context"
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -896,6 +897,37 @@ func decodeAuditLine(line []byte) (AuditEntry, error) {
 		var record LockBreakRecord
 		if err := json.Unmarshal(line, &record); err != nil {
 			return AuditEntry{}, err
+		}
+		// Value fields cannot distinguish an omitted member from a valid
+		// zero. Check presence separately, including each supplied sample.
+		var members map[string]jsontext.Value
+		if err := json.Unmarshal(line, &members); err != nil {
+			return AuditEntry{}, err
+		}
+		require := func(members map[string]jsontext.Value, names ...string) error {
+			for _, name := range names {
+				value := strings.TrimSpace(string(members[name]))
+				if value == "" || value == "null" {
+					return fmt.Errorf("a lock_break entry is missing required member `%s`", name)
+				}
+			}
+			return nil
+		}
+		if err := require(members, "path", "store_dir", "tree", "service", "target", "sample_a", "interval_wall_ms", "interval_monotonic_ms", "holder_evidence", "outcome"); err != nil {
+			return AuditEntry{}, err
+		}
+		for _, name := range []string{"sample_a", "sample_b", "sample_c"} {
+			raw := members[name]
+			if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+				continue
+			}
+			var sample map[string]jsontext.Value
+			if err := json.Unmarshal(raw, &sample); err != nil {
+				return AuditEntry{}, err
+			}
+			if err := require(sample, "at", "mtime_ns", "age_ms"); err != nil {
+				return AuditEntry{}, fmt.Errorf("%s: %w", name, err)
+			}
 		}
 		if _, err := parseTarget(string(record.Target)); err != nil {
 			return AuditEntry{}, err
