@@ -1,0 +1,278 @@
+# Account inspection must preserve the store and never expose token material.
+# empty-list.stdout was captured from the testing reference binary at
+# /Users/zchee/rust/src/github.com/zchee/agctl/target/debug/agctl, in the checkout
+# frozen at dbf6aeab84dfbe2465de496316d7bf6780940a60, using:
+# with $oracle an empty temporary directory holding home/, config/, items/ and
+# bin/security (an executable copy of fixtures/fake-security.sh):
+# env -i HOME="$oracle/home" USER=tester LOGNAME=tester PATH=/usr/bin:/bin:/usr/sbin:/sbin AGCTL_CONFIG_DIR="$oracle/config" AGCTL_SECURITY_BIN="$oracle/bin/security" AGCTL_FAKE_SECURITY_ITEMS="$oracle/items" AGCTL_FAKE_SECURITY_LOG="$oracle/security.log" AGCTL_CLAUDE_USAGE_URL=http://127.0.0.1:9 AGCTL_CLAUDE_TOKEN_URL=http://127.0.0.1:9 AGCTL_CLAUDE_PROFILE_URL=http://127.0.0.1:9 /Users/zchee/rust/src/github.com/zchee/agctl/target/debug/agctl claude accounts list
+# Padding and LF are exact.
+# The perl seeders exist because the registry records carry the export
+# spelling of the namespace path and its SHA-256 prefix, which depend on the
+# temporary store directory and so cannot be prepared as static files.
+env AGENTCTL_LOG=debug
+env CLAUDE_CONFIG_DIR=
+env CLAUDE_SECURESTORAGE_CONFIG_DIR=
+env CLAUDE_CODE_OAUTH_TOKEN=
+env NS=$AGENTCTL_CONFIG_DIR/claude/11111111-2222-3333-4444-555555555555/66666666-7777-8888-9999-000000000000
+env LOCK=$AGENTCTL_CONFIG_DIR/claude/.locks/11111111-2222-3333-4444-555555555555.66666666-7777-8888-9999-000000000000.lock
+
+# An empty store still lists its degraded live row successfully.
+exec expectexit 0 agentctl claude accounts list
+! stdout sk-ant
+! stderr sk-ant
+cmp stdout empty-list.stdout
+
+# Listing names the kind, source, and original namespace spelling.
+exec perl seed-registry.pl owned.json
+cp stdout $AGENTCTL_CONFIG_DIR/config.json
+cp $AGENTCTL_CONFIG_DIR/config.json registry.before
+mkdir $NS
+cp credentials.json $NS/.credentials.json
+chmod 0600 $NS/.credentials.json
+exec expectexit 0 agentctl claude accounts list
+stdout 'owner@example.com'
+stdout 'owned +\| file +\| ok'
+stdout ${NS@R}
+! stdout sk-ant
+! stderr sk-ant
+cmp $AGENTCTL_CONFIG_DIR/config.json registry.before
+cmp $NS/.credentials.json credentials.json
+
+# Showing an owned row reports pending files, stray files, and a live lock holder.
+cp credentials.json $NS/.credentials.json.pending
+cp pending.json $NS/.pending.meta
+cp credentials.json $NS/.credentials.json.tmp.0123abcd
+mkdir $AGENTCTL_CONFIG_DIR/claude/.locks
+! exec sh hold-lock.sh &holder&
+exec waitfor $LOCK
+exec expectexit 0 agentctl claude accounts show 11111111-2222-3333-4444-555555555555
+stdout '^id                 11111111-2222-3333-4444-555555555555$'
+stdout '^email              owner@example.com$'
+stdout '^kind               owned$'
+stdout '^source             file$'
+stdout '^state              ok$'
+stdout '^plan               max$'
+stdout '^scopes             user:inference user:profile$'
+stdout '^access expires     1970-01-01T00:00:00Z \(expired\)$'
+stdout '^refresh expires    — \(not recorded\)$'
+stdout '^pending write      .*\.credentials.json.pending \(present\)$'
+stdout '^pending metadata   .*\.pending.meta \(present\)$'
+stdout '^stray temporaries  .*\.credentials.json.tmp.0123abcd$'
+stdout '^lock holder        pid [0-9]+ \(alive\), taken 2026-09-08T00:00:00Z$'
+stdout ${LOCK@R}
+! stdout sk-ant
+! stderr sk-ant
+kill holder
+wait holder
+cmp $NS/.credentials.json credentials.json
+cmp $NS/.credentials.json.pending credentials.json
+cmp $NS/.pending.meta pending.json
+cmp $NS/.credentials.json.tmp.0123abcd credentials.json
+cmp $AGENTCTL_CONFIG_DIR/config.json registry.before
+
+# Email and label resolve the same owned record as its UUID.
+exec expectexit 0 agentctl claude accounts show owner@example.com
+stdout '^account            11111111-2222-3333-4444-555555555555$'
+! stdout sk-ant
+! stderr sk-ant
+exec expectexit 0 agentctl claude accounts show work
+stdout '^account            11111111-2222-3333-4444-555555555555$'
+! stdout sk-ant
+! stderr sk-ant
+
+# A shared UUID or email is fatal and names both unambiguous spellings.
+exec perl seed-registry.pl ambiguous.json
+cp stdout $AGENTCTL_CONFIG_DIR/config.json
+cp $AGENTCTL_CONFIG_DIR/config.json registry.before
+exec expectexit 1 agentctl claude accounts show 11111111-2222-3333-4444-555555555555
+stderr 'matches 2 rows; use one of:'
+stderr '11111111-2222-3333-4444-555555555555/66666666-7777-8888-9999-000000000000'
+stderr '11111111-2222-3333-4444-555555555555/_unknown-org'
+! stdout .
+! stderr sk-ant
+exec expectexit 1 agentctl claude accounts show owner@example.com
+stderr 'matches 2 rows; use one of:'
+! stdout .
+! stderr sk-ant
+exec expectexit 0 agentctl claude accounts show 11111111-2222-3333-4444-555555555555/_unknown-org
+stdout '^organization       _unknown-org$'
+! stdout sk-ant
+! stderr sk-ant
+cmp $AGENTCTL_CONFIG_DIR/config.json registry.before
+
+# A missing identifier is fatal, not the partial status of a degraded table.
+exec expectexit 1 agentctl claude accounts show nobody@example.invalid
+stderr 'no account matches `nobody@example.invalid`'
+stderr '`agentctl claude accounts list --all` shows every row'
+! stdout .
+! stderr sk-ant
+
+# An unidentified read-only row names its service without inventing an account UUID.
+cp service-keyed.json $AGENTCTL_CONFIG_DIR/config.json
+exec expectexit 0 agentctl claude accounts show 'Claude Code-credentials-6cdd6b98'
+stdout '^service            Claude Code-credentials-6cdd6b98$'
+stdout '^kind               config_dir$'
+stdout '^account            — \(the keychain item names no account, so this record is keyed by its service name\)$'
+! stdout '^account            Claude Code-credentials-6cdd6b98$'
+! stdout sk-ant
+! stderr sk-ant
+cmp $AGENTCTL_CONFIG_DIR/config.json service-keyed.json
+
+# An identified read-only row keeps its account UUID and a separate service line.
+cp identified.json $AGENTCTL_CONFIG_DIR/config.json
+exec expectexit 0 agentctl claude accounts show other@example.com
+stdout '^account            99999999-8888-7777-6666-555555555555$'
+stdout '^service            Claude Code-credentials-6cdd6b98$'
+! stdout 'keyed by its service name'
+! stdout sk-ant
+! stderr sk-ant
+cmp $AGENTCTL_CONFIG_DIR/config.json identified.json
+
+# Siblings and forgotten services remain hidden until --all, without reading forgotten items.
+env AGCTL_FAKE_SECURITY_LOG=$WORK/hidden-security.log
+cp forgotten.json $AGENTCTL_CONFIG_DIR/config.json
+exec perl seed-siblings.pl
+exec expectexit 0 agentctl claude accounts list
+stdout '^2 entries hidden \(--all\)$'
+! stdout 'stale sibling of live'
+! stdout 'Claude Code-credentials-[0-9a-f]{8}'
+! stdout sk-ant
+! stderr sk-ant
+exec expectexit 0 agentctl claude accounts list --all
+stdout 'stale sibling of live'
+stdout 'Claude Code-credentials-6cdd6b98'
+stdout 'forgotten'
+! stdout 'hidden \(--all\)'
+! stdout sk-ant
+! stderr sk-ant
+! grep 'find-generic-password .*6cdd6b98' $AGCTL_FAKE_SECURITY_LOG
+cmp $AGENTCTL_CONFIG_DIR/config.json forgotten.json
+
+# Display commands never issue keychain writes or delete requests.
+! grep '(^-i$|add-generic-password|delete-generic-password)' $AGCTL_FAKE_SECURITY_LOG
+! grep '(^-i$|add-generic-password|delete-generic-password)' $WORK/.harness/security-argv.log
+! grep sk-ant $AGCTL_FAKE_SECURITY_LOG
+! grep sk-ant $WORK/.harness/security-argv.log
+
+-- seed-registry.pl --
+use strict;
+use warnings;
+use JSON::PP;
+use Digest::SHA qw(sha256_hex);
+my $text = do { local $/; <> };
+my $registry = decode_json($text);
+for my $record (@{$registry->{accounts}}) {
+    my $path = "$ENV{AGENTCTL_CONFIG_DIR}/claude/$record->{account_uuid}/$record->{organization_uuid}";
+    $record->{kind}{export_spelling} = $path;
+    $record->{kind}{export_sha8} = substr(sha256_hex($path), 0, 8);
+}
+print encode_json($registry), "\n";
+-- seed-siblings.pl --
+use strict;
+use warnings;
+use Digest::SHA qw(sha256_hex);
+my $sha = substr(sha256_hex("$ENV{HOME}/.claude"), 0, 8);
+my $service = "Claude Code-credentials-$sha";
+open my $dump, '>', $ENV{AGCTL_FAKE_SECURITY_DUMP} or die $!;
+for my $name ($service, 'Claude Code-credentials-6cdd6b98') {
+    print {$dump} "class: \"genp\"\nattributes:\n    \"acct\"<blob>=\"$ENV{USER}\"\n    \"svce\"<blob>=\"$name\"\n";
+}
+close $dump or die $!;
+mkdir "$ENV{AGCTL_FAKE_SECURITY_ITEMS}/$ENV{USER}" or die $!;
+open my $item, '>', "$ENV{AGCTL_FAKE_SECURITY_ITEMS}/$ENV{USER}/Claude_Code-credentials-$sha" or die $!;
+open my $source, '<', 'credentials.json' or die $!;
+print {$item} do { local $/; <$source> };
+close $item or die $!;
+close $source or die $!;
+-- hold-lock.sh --
+set -eu
+printf '{"pid":%s,"pid_start_time":null,"acquired_at":"2026-09-08T00:00:00Z"}\n' "$$" >| "$LOCK"
+exec flockhold "$LOCK" 1m
+-- owned.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "owner@example.com",
+    "org_name": "Acme",
+    "label": "work",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- ambiguous.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "owner@example.com",
+    "org_name": "Acme",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "created_at": "2026-09-08T00:00:00Z"
+  }, {
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "_unknown-org",
+    "email": "owner@example.com",
+    "org_name": "Acme",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- service-keyed.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "Claude Code-credentials-6cdd6b98",
+    "organization_uuid": "_unknown-org",
+    "kind": {
+      "kind": "config_dir_read_only",
+      "dir": "/elsewhere/.claude",
+      "service": "Claude Code-credentials-6cdd6b98",
+      "shares_live_dir": false
+    },
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- identified.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "99999999-8888-7777-6666-555555555555",
+    "organization_uuid": "cccccccc-dddd-eeee-ffff-000000000000",
+    "email": "other@example.com",
+    "kind": {
+      "kind": "config_dir_read_only",
+      "dir": "/elsewhere/.claude",
+      "service": "Claude Code-credentials-6cdd6b98",
+      "shares_live_dir": false
+    },
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- forgotten.json --
+{"version":1,"accounts":[],"forgotten_services":["Claude Code-credentials-6cdd6b98"]}
+-- credentials.json --
+{
+  "claudeAiOauth": {
+    "accessToken": "sk-ant-oat01-owned",
+    "refreshToken": "sk-ant-ort01-owned",
+    "expiresAt": 0,
+    "scopes": ["user:inference", "user:profile"],
+    "subscriptionType": "max",
+    "tokenAccount": {
+      "uuid": "11111111-2222-3333-4444-555555555555",
+      "emailAddress": "owner@example.com",
+      "organizationUuid": "66666666-7777-8888-9999-000000000000",
+      "organizationName": "Acme"
+    }
+  }
+}
+-- pending.json --
+{}
+-- empty-list.stdout --
+ Id   | Account | Org          | Kind | Source | State       | Location                
+------+---------+--------------+------+--------+-------------+-------------------------
+ live | —       | _unknown-org | live | none   | needs login | Claude Code-credentials 
