@@ -1,0 +1,94 @@
+# Destructive account operations require ownership and explicit consent.
+env AGENTCTL_LOG=debug
+
+# Removing only a record retains the credential and pending files.
+importfixture owned
+cp $NAMESPACE/.credentials.json credential.before
+exec expectexit 0 agentctl claude accounts remove $EMAIL
+stdout '--delete-secret'
+! stderr sk-ant
+exists $NAMESPACE/.credentials.json
+cmp $NAMESPACE/.credentials.json credential.before
+write-check empty
+
+# Non-terminal input cannot authorize deletion; --yes can. The lock remains.
+importfixture owned
+exec expectexit 2 agentctl claude accounts remove $EMAIL --delete-secret
+stderr 'standard input is not a terminal'
+! stderr sk-ant
+exists $NAMESPACE/.credentials.json
+exec expectexit 0 agentctl claude accounts remove $EMAIL --delete-secret --yes
+stdout 'deleted its stored credentials'
+! stderr sk-ant
+! exists $NAMESPACE
+exists $NAMESPACE_LOCK
+write-check empty
+
+# A keychain-backed row cannot be removed, with or without --yes.
+importfixture readonly
+cp $AGENTCTL_CONFIG_DIR/config.json readonly.before
+exec expectexit 1 agentctl claude accounts remove $ACCT --delete-secret --yes
+stderr 'never writes or deletes'
+stderr 'accounts forget'
+! stderr sk-ant
+cmp $AGENTCTL_CONFIG_DIR/config.json readonly.before
+write-check unchanged
+
+# A contended namespace lock is waited on, then refused without mutation.
+importfixture owned
+namespace-lock hold
+cp $AGENTCTL_CONFIG_DIR/config.json contended.before
+exec expectexit 2 agentctl claude accounts remove $EMAIL --delete-secret --yes
+stderr 'could not take the namespace lock'
+! stderr sk-ant
+lock-waited
+exists $NAMESPACE/.credentials.json
+cmp $AGENTCTL_CONFIG_DIR/config.json contended.before
+write-check unchanged
+
+# Relocation moves the credential and removes the unknown namespace and pending files.
+importfixture relocate
+exec expectexit 0 agentctl claude accounts relocate $ACCT --yes
+stdout Relocated
+! stderr sk-ant
+! exists $NAMESPACE
+exists $TARGET/.credentials.json
+write-check relocated
+
+# An occupied target remains byte-identical and the source remains available.
+importfixture occupied
+cp $TARGET/.credentials.json occupant.before
+cp $AGENTCTL_CONFIG_DIR/config.json occupied.before
+exec expectexit 1 agentctl claude accounts relocate $ACCT --yes
+stderr 'already exists'
+! stderr sk-ant
+cmp $TARGET/.credentials.json occupant.before
+cmp $AGENTCTL_CONFIG_DIR/config.json occupied.before
+exists $NAMESPACE/.credentials.json
+exists $NAMESPACE/.credentials.json.pending
+write-check unchanged
+
+# Forgetting a service suppresses further reads; unforget restores reporting.
+importfixture hidden
+exec expectexit 2 agentctl claude status
+stdout 'unclaimed'
+! stderr sk-ant
+exec expectexit 0 agentctl claude accounts forget $SERVICE
+stdout 'hidden'
+! stderr sk-ant
+log-reset
+exec expectexit 2 agentctl claude status
+! stdout unclaimed
+! stderr sk-ant
+no-service-read
+exec expectexit 0 agentctl claude accounts list --all
+stdout forgotten
+! stderr sk-ant
+no-service-read
+exec expectexit 0 agentctl claude accounts unforget $SERVICE
+stdout 'reported again'
+! stderr sk-ant
+exec expectexit 2 agentctl claude status
+stdout unclaimed
+! stderr sk-ant
+write-check read-only

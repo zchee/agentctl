@@ -1,0 +1,49 @@
+# Import is a registry-only operation, including repeated runs and aliases.
+env AGENTCTL_LOG=debug
+
+# A dry run reports the planned records without creating the registry.
+importfixture keychain
+exec expectexit 0 agentctl claude import --from keychain --dry-run
+stdout 'import config-dir-read-only'
+stdout 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
+stdout 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb'
+stdout 'imported 2'
+stdout '--dry-run: nothing was written'
+! stderr sk-ant
+! exists $AGENTCTL_CONFIG_DIR/config.json
+write-check read-only
+
+# Import records credentials in place; a second import is byte-identical.
+exec expectexit 0 agentctl claude import --from keychain
+stdout 'imported 2'
+! stderr sk-ant
+write-check readonly
+! exists $AGENTCTL_CONFIG_DIR/claude/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa
+cp $AGENTCTL_CONFIG_DIR/config.json registry.before
+exec expectexit 0 agentctl claude import --from keychain
+cmp stdout noop.stdout
+! stderr sk-ant
+cmp $AGENTCTL_CONFIG_DIR/config.json registry.before
+write-check read-only
+
+# An existing owned identity must never be downgraded to read-only.
+importfixture owned-import
+cp $AGENTCTL_CONFIG_DIR/config.json owned.before
+exec expectexit 0 agentctl claude import --from keychain --claude-config-dir $IMPORT_DIR
+stdout 'already known as owned'
+stdout 'imported 0'
+! stderr sk-ant
+write-check owned
+cmp $AGENTCTL_CONFIG_DIR/config.json owned.before
+
+# An alias keeps the given spelling and warns about sharing the live store.
+importfixture alias
+exec expectexit 0 agentctl claude import --from keychain --claude-config-dir $IMPORT_DIR
+stdout 'warning:'
+stdout 'alias of the live config dir'
+stdout 'stale sibling'
+! stderr sk-ant
+write-check alias
+
+-- noop.stdout --
+imported 0, skipped 0, already known 0
