@@ -8,19 +8,31 @@
   `internal/secret/secret_test.go`, `internal/secret/purge_test.go`
   (`TestLockedBufferBudget` prints the measurements with `t.Logf`)
 
-## Verdict: GO
+## Verdict: GO, conditional on the mlock budget
 
 The enclave model holds on this platform: tokens stay encrypted at rest in
 process memory, plaintext exists only inside a guarded, mlocked, read-only
 buffer opened around one operation and destroyed on return, error and panic
 alike, and every formatting and serialization hook Go 1.27 consults returns
-`[REDACTED]`. The mlock budget is a non-issue at the swap path's scale. Two
-conditions attach to the GO, both bounded by design rather than by code we
-can change: keep the number of simultaneously open plaintext buffers small
-(the swap path needs 8; hundreds are available), and never treat an mlock
-allocation failure as recoverable (memguard panics through a purge, and that
-path has been observed to deadlock — see "Failure mode under memlock
-exhaustion").
+`[REDACTED]`. On the default macOS limits the mlock budget is a non-issue at
+the swap path's scale.
+
+The condition: memguard has **no recoverable path** when `mlock` fails — it
+panics through a purge that has been observed to deadlock (measured below:
+under a 256 KiB limit the fifth simultaneous open fails, and the process
+dies messily or hangs). The design must therefore (a) keep the number of
+simultaneously open plaintext buffers small — the swap path needs 8, one at
+a time in practice — and (b) treat a finite, small `RLIMIT_MEMLOCK` as a
+fail-fast startup condition, not a runtime branch: a `Getrlimit` check at
+process start that refuses to proceed (or at minimum warns) when the limit
+is finite and below a safety floor (1 MiB covers 64 open buffers at 16 KiB
+pages, an order of magnitude above need). Whether that check ships, and
+whether its failure is fatal or a warning, is an acceptance decision raised
+with the lead; the alternative reading of these numbers is a NO-GO until
+exhaustion handling is replaced or patched upstream. This document's
+recommendation is the conditional GO with the startup check, because the
+deadlock is unreachable under the platform's default (unlimited) limit and
+the check turns the one dangerous configuration into a clean refusal.
 
 ## Measured numbers
 
@@ -34,25 +46,28 @@ From `TestLockedBufferBudget` on this machine (fresh run, `-race`):
 | Simultaneous buffers the swap path needs | 8 (incoming access+refresh, displaced access+refresh, keychain stdin line, adopted-copy occupant access+refresh, staged reversal copy), tested at 16 for a 2x margin |
 | Buffers opened simultaneously without failure | 1024 (probe cap; no failure observed) |
 | First N at which opening fails, default limits | not reached at cap 1024 (~16 MiB locked) |
-| First N at which opening fails, `RLIMIT_MEMLOCK` lowered to 256 KiB in a child | the kernel enforces the limit; memguard panics through its purge path instead of returning an error (see below) |
+| First N at which opening fails, `RLIMIT_MEMLOCK` lowered to 256 KiB in a child | **5** — four buffers opened, the fifth open failed (race-instrumented child; the limit's 16 pages are shared with memguard's session-key buffers and the per-open transient key view, so the ceiling is below the naive 16-page count) |
 
 ## Failure mode under memlock exhaustion
 
 When `mlock` fails, `memguard` does not return an error: `core.NewBuffer`
 calls `core.Panic`, which runs a session purge and then panics. Observed
-twice with `RLIMIT_MEMLOCK` lowered to 256 KiB:
+with `RLIMIT_MEMLOCK` lowered to 256 KiB, where the fifth simultaneous open
+fails (per-open progress printed unbuffered by the child proves the count):
 
 - under `-race`, the child process died with a goroutine dump (exit status 2);
 - in a plain build, the purge-under-panic path **deadlocked** on the session
   key's mutex and the process had to be killed (the upstream repository ships
   `examples/deadlock/` reproducing this class of hang).
 
-Consequence: an mlock failure is a process-fatal event, not a branch. The
-mitigation is sizing, not handling — at 8 needed buffers x 16 KiB = 128 KiB
-locked, against an unlimited default on macOS, exhaustion requires an
-operator-imposed limit below 256 KiB. The constrained probe in the test is
-deadline-bounded and its outcome is logged, not asserted, so the suite cannot
-hang on this path.
+Consequence: an mlock failure is a process-fatal event, not a branch, and on
+the hang path not even a clean fatal one — which is why the verdict above
+asks for the fail-fast `Getrlimit` startup check instead of claiming sizing
+alone suffices. Sizing bounds the demand (8 buffers x 16 KiB = 128 KiB, one
+at a time in practice); the check refuses the configurations in which that
+demand could still cross a finite limit. The constrained probe in the test
+is deadline-bounded, kills its child on timeout, and logs rather than
+asserts, so the suite cannot hang on this path.
 
 ## API facts confirmed with the vendored source
 
@@ -103,6 +118,12 @@ before the process exits:
 3. **Signal exit**: in the signal goroutine, after child teardown and
    emergency cleanup, immediately before the `128+signal` exit. Purge is
    idempotent, so the signal path and the normal path may both run it.
+
+4. **Startup budget check** (the verdict's condition): read
+   `RLIMIT_MEMLOCK` with `unix.Getrlimit` during bring-up and refuse to
+   proceed — or at minimum warn — when the limit is finite and below the
+   1 MiB floor, because an mlock failure later is a panic that can deadlock,
+   not an error a command can report.
 
 Not wired by this change: `main.go` is owned elsewhere; the only exported
 surface is `secret.Purge`.

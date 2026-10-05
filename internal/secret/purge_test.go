@@ -17,6 +17,7 @@ package secret
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -39,7 +40,11 @@ func TestPurge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	open := memguard.NewBufferFromBytes([]byte("open-purge-test-token"))
 	Purge()
+	if open.IsAlive() {
+		t.Fatal("purge left an open plaintext buffer alive")
+	}
 	if err := s.WithPlaintext(func([]byte) error { return nil }); err == nil {
 		t.Fatal("a purged secret must not decrypt")
 	}
@@ -98,8 +103,10 @@ func TestPackageKeepsDefaultSignalDisposition(t *testing.T) {
 // openUntilFailure opens one locked plaintext buffer per sealed secret until
 // an open fails or the cap is reached, and reports how many were open at once
 // together with the failure that stopped it. memguard converts an mlock
-// failure into a panic, so the probe recovers to observe it.
-func openUntilFailure(maxOpen int) (opened int, failure any) {
+// failure into a panic, so the probe recovers to observe it. When progress
+// is non-nil every successful open is reported through it immediately, so a
+// child whose failure path aborts the process still leaves the count behind.
+func openUntilFailure(maxOpen int, progress func(opened int)) (opened int, failure any) {
 	buffers := make([]*memguard.LockedBuffer, 0, maxOpen)
 	defer func() {
 		for _, b := range buffers {
@@ -121,6 +128,9 @@ func openUntilFailure(maxOpen int) (opened int, failure any) {
 			return len(buffers), err
 		}
 		buffers = append(buffers, b)
+		if progress != nil {
+			progress(len(buffers))
+		}
 	}
 	return len(buffers), nil
 }
@@ -131,11 +141,12 @@ func TestLockedBufferBudget(t *testing.T) {
 		if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &limit); err != nil {
 			t.Fatalf("lowering RLIMIT_MEMLOCK: %v", err)
 		}
-		opened, failure := openUntilFailure(1024)
-		t.Logf("constrained: RLIMIT_MEMLOCK=%d bytes, page size %d, opened %d buffers, failure: %v", limit.Cur, unix.Getpagesize(), opened, failure)
-		if failure == nil {
-			t.Log("constrained: no failure before the cap; the kernel did not enforce the lowered limit")
-		}
+		// Progress goes to stdout unbuffered: the failure path can abort or
+		// hang the process, and a t.Logf line would die with it.
+		opened, failure := openUntilFailure(1024, func(opened int) {
+			fmt.Printf("constrained: %d buffers open under RLIMIT_MEMLOCK=%d, page size %d\n", opened, limit.Cur, unix.Getpagesize())
+		})
+		fmt.Printf("constrained: stopped at %d buffers, failure: %v\n", opened, failure)
 		return
 	}
 
@@ -146,7 +157,7 @@ func TestLockedBufferBudget(t *testing.T) {
 	pageSize := unix.Getpagesize()
 	need := swapSecretsHeldAtOnce * 2
 
-	opened, failure := openUntilFailure(need)
+	opened, failure := openUntilFailure(need, nil)
 	t.Logf("measurement: RLIMIT_MEMLOCK cur=%d max=%d (%#x means unlimited), page size %d bytes", limit.Cur, limit.Max, uint64(unix.RLIM_INFINITY), pageSize)
 	t.Logf("measurement: need %d simultaneous buffers (%d swap-path secrets with a 2x margin), opened %d, failure: %v", need, swapSecretsHeldAtOnce, opened, failure)
 	if failure != nil || opened < need {
@@ -154,17 +165,19 @@ func TestLockedBufferBudget(t *testing.T) {
 	}
 
 	const probeCap = 1024
-	probed, probeFailure := openUntilFailure(probeCap)
+	probed, probeFailure := openUntilFailure(probeCap, nil)
 	t.Logf("measurement: headroom probe opened %d buffers (cap %d), failure: %v", probed, probeCap, probeFailure)
 
-	// The constrained probe is bounded by a deadline because an enforced
-	// mlock failure makes memguard panic through its purge path, which has
-	// been observed to deadlock instead of exiting. Its outcome is recorded,
-	// not asserted: the budget claim above is what must hold.
+	// The constrained probe runs in a deadline-bounded child because an
+	// enforced mlock failure makes memguard panic through its purge path,
+	// which has been observed to deadlock instead of exiting. Its output is
+	// recorded, not asserted: the budget claim above is what must hold, and
+	// the child's last progress line is the measured failure point.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLockedBufferBudget$", "-test.v")
 	cmd.Env = append(os.Environ(), "AGENTCTL_TEST_MEMLOCK_CONSTRAINED=1")
+	cmd.Cancel = func() error { return cmd.Process.Kill() }
 	output, err := cmd.CombinedOutput()
 	t.Logf("constrained child (err=%v):\n%s", err, output)
 }
