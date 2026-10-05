@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zchee/agentctl/internal/runtime/cleanup"
 	"github.com/zchee/agentctl/internal/runtime/proc"
 )
 
@@ -123,16 +124,27 @@ type Seams struct {
 	Holders HolderSightings
 	// Clock is both clocks, the sleeper and the jitter draw.
 	Clock Clock
-	// Cleanup is the emergency-release registry, or nil before the
-	// signal runtime wires one.
+	// Cleanup is the emergency-release registry. RealSeams installs the
+	// process-wide registry; isolated callers may supply their own.
 	Cleanup CleanupRegistry
 	// Fault is the injected fault hook, or nil for none.
 	Fault func(name string) bool
+	// Pause is an optional named pause hook for the caller. Acquisition
+	// itself has no pause points.
+	Pause func(name string)
 }
 
-// RealSeams returns the production seams over the given clock.
+// RealSeams returns the production seams over the given clock, including
+// the process-wide emergency cleanup registry.
 func RealSeams(clock Clock) *Seams {
-	return &Seams{FS: RealFS{}, Holders: ProcHolders{}, Clock: clock}
+	return &Seams{FS: RealFS{}, Holders: ProcHolders{}, Clock: clock, Cleanup: processLockCleanup{}}
+}
+
+type processLockCleanup struct{}
+
+func (processLockCleanup) Register(release func()) func() bool {
+	token := cleanup.Register(release)
+	return func() bool { return cleanup.Unregister(token) }
 }
 
 // fault reports whether the named fault is injected.
