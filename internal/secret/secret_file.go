@@ -637,6 +637,25 @@ func unlinkAt(dir int, name string) error {
 	return unix.Unlinkat(dir, name, 0)
 }
 
+// chmod0600At sets one file's mode to 0600 without following a link at
+// name. The link is refused by the open and the mode set on the
+// descriptor, so there is no second lookup between the two.
+func chmod0600At(dir int, name, shown string) error {
+	fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	switch {
+	case err == nil:
+	case isSymlinkErrno(err):
+		return &SymlinkRefusedError{Path: shown}
+	default:
+		return errs.NewIO(fmt.Sprintf("could not open `%s`", shown), err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	if err := unix.Fchmod(fd, uint32(config.FileMode)); err != nil {
+		return errs.NewIO(fmt.Sprintf("could not set the mode of `%s`", shown), err)
+	}
+	return nil
+}
+
 // createNewFileAt creates a file at 0600 with O_EXCL inside an
 // already-opened directory, writes it, and fsyncs it.
 //
