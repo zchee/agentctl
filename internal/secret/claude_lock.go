@@ -117,29 +117,35 @@ type LockProfile struct {
 	HoldBudget time.Duration
 }
 
-// RefreshProfile is the primary and legacy refresh locks' profile.
-var RefreshProfile = LockProfile{
-	Stale:      60 * time.Second,
-	Update:     PeerHeartbeat,
-	Retries:    0,
-	HoldBudget: HoldBudget,
+// RefreshProfile returns the primary and legacy refresh locks' profile.
+func RefreshProfile() LockProfile {
+	return LockProfile{
+		Stale:      60 * time.Second,
+		Update:     PeerHeartbeat,
+		Retries:    0,
+		HoldBudget: HoldBudget,
+	}
 }
 
-// StorageWriteProfile is the storage-write mutex's profile, taken with a
-// single non-blocking mkdir.
-var StorageWriteProfile = LockProfile{
-	Stale:      15 * time.Second,
-	Update:     PeerHeartbeat,
-	Retries:    0,
-	HoldBudget: HoldBudget,
+// StorageWriteProfile returns the storage-write mutex's profile, taken with
+// a single non-blocking mkdir.
+func StorageWriteProfile() LockProfile {
+	return LockProfile{
+		Stale:      15 * time.Second,
+		Update:     PeerHeartbeat,
+		Retries:    0,
+		HoldBudget: HoldBudget,
+	}
 }
 
-// ConfigProfile is the configuration lock's profile.
-var ConfigProfile = LockProfile{
-	Stale:      10 * time.Second,
-	Update:     PeerHeartbeat,
-	Retries:    0,
-	HoldBudget: ConfigHoldBudget,
+// ConfigProfile returns the configuration lock's profile.
+func ConfigProfile() LockProfile {
+	return LockProfile{
+		Stale:      10 * time.Second,
+		Update:     PeerHeartbeat,
+		Retries:    0,
+		HoldBudget: ConfigHoldBudget,
+	}
 }
 
 // LockSubject is what one hold is about: the store directory, and which

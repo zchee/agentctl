@@ -67,9 +67,9 @@ func TestStaleProfiles(t *testing.T) {
 		stale   time.Duration
 		budget  time.Duration
 	}{
-		"success: refresh and legacy locks go stale at 60s":  {profile: RefreshProfile, stale: 60 * time.Second, budget: HoldBudget},
-		"success: the storage-write mutex goes stale at 15s": {profile: StorageWriteProfile, stale: 15 * time.Second, budget: HoldBudget},
-		"success: the configuration lock goes stale at 10s":  {profile: ConfigProfile, stale: 10 * time.Second, budget: ConfigHoldBudget},
+		"success: refresh and legacy locks go stale at 60s":  {profile: RefreshProfile(), stale: 60 * time.Second, budget: HoldBudget},
+		"success: the storage-write mutex goes stale at 15s": {profile: StorageWriteProfile(), stale: 15 * time.Second, budget: HoldBudget},
+		"success: the configuration lock goes stale at 10s":  {profile: ConfigProfile(), stale: 10 * time.Second, budget: ConfigHoldBudget},
 	}
 
 	for name, tt := range tests {
@@ -87,6 +87,30 @@ func TestStaleProfiles(t *testing.T) {
 			}
 			if tt.profile.HoldBudget != tt.budget {
 				t.Errorf("HoldBudget = %v, want %v", tt.profile.HoldBudget, tt.budget)
+			}
+		})
+	}
+}
+
+func TestLockProfilesReturnIndependentValues(t *testing.T) {
+	tests := map[string]struct{ profile func() LockProfile }{
+		"success: refresh profile is immutable":       {profile: RefreshProfile},
+		"success: storage-write profile is immutable": {profile: StorageWriteProfile},
+		"success: configuration profile is immutable": {profile: ConfigProfile},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			want := tt.profile()
+			changed := tt.profile()
+			changed.Stale = 0
+			changed.Update = 0
+			changed.Retries = 1
+			changed.HoldBudget = 0
+			if diff := gocmp.Diff(want, tt.profile()); diff != "" {
+				t.Errorf("profile changed globally (-want +got):\n%s", diff)
+			}
+			if gocmp.Equal(changed, want) {
+				t.Fatal("test did not mutate its profile copy")
 			}
 		})
 	}
@@ -116,8 +140,8 @@ func TestEveryBudgetStaysUnderTheFloorItIsDerivedFrom(t *testing.T) {
 	if ConfigHoldBudget >= 1500*time.Millisecond {
 		t.Errorf("ConfigHoldBudget = %v, must stay under the peer's 1500 ms give-up", ConfigHoldBudget)
 	}
-	if ConfigProfile.HoldBudget != ConfigHoldBudget {
-		t.Errorf("ConfigProfile.HoldBudget = %v, want %v", ConfigProfile.HoldBudget, ConfigHoldBudget)
+	if ConfigProfile().HoldBudget != ConfigHoldBudget {
+		t.Errorf("ConfigProfile.HoldBudget = %v, want %v", ConfigProfile().HoldBudget, ConfigHoldBudget)
 	}
 }
 

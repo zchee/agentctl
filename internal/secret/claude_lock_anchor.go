@@ -260,15 +260,15 @@ func peerLockPlan(anchor *LockAnchor) [3]lockPlan {
 	return [3]lockPlan{
 		{
 			artefact: lockArtefact{name: RefreshLockName, path: filepath.Join(anchor.storeDir, RefreshLockName)},
-			profile:  RefreshProfile,
+			profile:  RefreshProfile(),
 		},
 		{
 			artefact: lockArtefact{inParent: true, name: legacyName, path: legacyPath},
-			profile:  RefreshProfile,
+			profile:  RefreshProfile(),
 		},
 		{
 			artefact: lockArtefact{name: StorageWriteLockName, path: filepath.Join(anchor.storeDir, StorageWriteLockName)},
-			profile:  StorageWriteProfile,
+			profile:  StorageWriteProfile(),
 		},
 	}
 }

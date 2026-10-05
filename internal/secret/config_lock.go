@@ -218,7 +218,7 @@ func acquireConfigLock(ctx context.Context, configPath string, seams *Seams, wai
 			mtime, present := seams.FS.Mtime(at)
 			if present {
 				age := elapsedSince(seams.Clock.Wall(), mtime)
-				if age >= ConfigProfile.Stale {
+				if age >= ConfigProfile().Stale {
 					return nil, &ConfigLockError{Kind: ConfigLockStale, Age: age}
 				}
 			} else if wait && !retriedVanished {

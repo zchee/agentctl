@@ -143,7 +143,7 @@ func TestADeadHoldersLockIsBrokenWithThreeAgreeingSamples(t *testing.T) {
 	fs.script(theSlot.Name, mtimeStep{at: old, present: true})
 	holders := &fakeHolders{evidence: EvidenceNoStoppedClaude}
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, holders))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, holders))
 
 	if got.Decision != DecisionBroken {
 		t.Fatalf("Decision = %v, want broken; reason %q message %q", got.Decision, got.Reason, got.FailureMessage)
@@ -200,7 +200,7 @@ func TestAHeartbeatAnywhereInsideTheWindowAbandonsTheBreak(t *testing.T) {
 				mtimeStep{at: old, present: true},
 				mtimeStep{at: old.Add(tt.beat), present: true})
 
-			got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+			got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 			if got.Decision != DecisionAbandoned || got.Reason != ReasonHeartbeatObserved {
 				t.Fatalf("got %v/%q, want abandoned for an observed heartbeat", got.Decision, got.Reason)
@@ -226,7 +226,7 @@ func TestAHeartbeatBetweenSampleBAndSampleCAbandonsAtSampleC(t *testing.T) {
 		mtimeStep{at: old, present: true},
 		mtimeStep{at: old.Add(time.Nanosecond), present: true})
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonHeartbeatObserved {
 		t.Fatalf("got %v/%q, want abandoned at sample C", got.Decision, got.Reason)
@@ -247,7 +247,7 @@ func TestALockYoungerThanItsProfileIsTooYoung(t *testing.T) {
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-30 * time.Second), present: true})
 	holders := &fakeHolders{evidence: EvidenceNoStoppedClaude}
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, holders))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, holders))
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonTooYoung {
 		t.Fatalf("got %v/%q, want too young", got.Decision, got.Reason)
@@ -270,14 +270,14 @@ func TestEachProfileIsJudgedByItsOwnStalenessWindow(t *testing.T) {
 	old := clock.Wall().Add(-30 * time.Second)
 	fs.script(theSlot.Name, mtimeStep{at: old, present: true})
 
-	byRefresh := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	byRefresh := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 	if byRefresh.Reason != ReasonTooYoung {
 		t.Errorf("the refresh profile at 30s = %q, want too young", byRefresh.Reason)
 	}
 
 	fs = newFakeLockFS()
 	fs.script(theSlot.Name, mtimeStep{at: old, present: true})
-	byStorage := ResolveStale(t.Context(), aSubject, theSlot, &StorageWriteProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	byStorage := ResolveStale(t.Context(), aSubject, theSlot, new(StorageWriteProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 	if byStorage.Decision != DecisionBroken {
 		t.Errorf("the storage-write profile at 30s = %v/%q, want broken", byStorage.Decision, byStorage.Reason)
 	}
@@ -290,7 +290,7 @@ func TestAStoppedSameUserClaudeAbandonsTheBreakBeforeAnyWait(t *testing.T) {
 	fs := newFakeLockFS()
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceStoppedClaudePresent}))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceStoppedClaudePresent}))
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonHolderStopped {
 		t.Fatalf("got %v/%q, want abandoned for a stopped holder", got.Decision, got.Reason)
@@ -310,7 +310,7 @@ func TestUnprovablePeerVisibilityRefusesRemoval(t *testing.T) {
 	fs := newFakeLockFS()
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceUnreadable}))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceUnreadable}))
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonHolderUnreadable {
 		t.Fatalf("got %v/%q, want abandoned for unprovable visibility", got.Decision, got.Reason)
@@ -329,7 +329,7 @@ func TestUnavailableEvidenceContinuesOnModificationTimesAlone(t *testing.T) {
 	fs := newFakeLockFS()
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNone}))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNone}))
 
 	if got.Decision != DecisionBroken {
 		t.Fatalf("got %v/%q, want broken on the samples alone", got.Decision, got.Reason)
@@ -364,7 +364,7 @@ func TestAClockStepInEitherDirectionAbandonsTheBreak(t *testing.T) {
 			fs := newFakeLockFS()
 			fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 
-			got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+			got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 			if got.Decision != DecisionAbandoned || got.Reason != ReasonClockJump {
 				t.Fatalf("got %v/%q, want abandoned for a clock jump", got.Decision, got.Reason)
@@ -387,7 +387,7 @@ func TestAClockWithinToleranceDoesNotAbandonTheBreak(t *testing.T) {
 	fs := newFakeLockFS()
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 	if got.Decision != DecisionBroken {
 		t.Fatalf("got %v/%q, want broken: half a second is inside the tolerance", got.Decision, got.Reason)
@@ -413,7 +413,7 @@ func TestALockThatVanishesAtAnySampleRecordsNothing(t *testing.T) {
 			fs := newFakeLockFS()
 			fs.script(theSlot.Name, tt.steps...)
 
-			got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+			got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 			if got.Decision != DecisionAbandoned || got.Reason != ReasonVanished {
 				t.Fatalf("got %v/%q, want vanished", got.Decision, got.Reason)
@@ -434,7 +434,7 @@ func TestACancelledSamplingWaitDecidesNothingAndRecordsNothing(t *testing.T) {
 	fs := newFakeLockFS()
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 
-	got := ResolveStale(ctx, aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	got := ResolveStale(ctx, aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 	if got.Decision != DecisionCancelled {
 		t.Fatalf("got %v, want cancelled", got.Decision)
@@ -455,7 +455,7 @@ func TestARemovalFailureIsReportedAndNothingIsClaimed(t *testing.T) {
 	fs.script(theSlot.Name, mtimeStep{at: clock.Wall().Add(-2 * time.Minute), present: true})
 	fs.rmdirErr[theSlot.Name] = &LockIOError{Context: "could not remove", Message: "it is not empty"}
 
-	got := ResolveStale(t.Context(), aSubject, theSlot, &RefreshProfile, staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	got := ResolveStale(t.Context(), aSubject, theSlot, new(RefreshProfile()), staleSeams(fs, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 	if got.Decision != DecisionFailed || got.FailureMessage == "" {
 		t.Fatalf("got %v/%q, want a named failure", got.Decision, got.FailureMessage)
@@ -485,7 +485,7 @@ func TestTheInjectedResumeReachesTheWindowSampleCCloses(t *testing.T) {
 	seams.Fault = func(name string) bool { return name == FaultLockResumeAfterSampleB }
 	at := LockSlot{Dir: openTestDir(t, dir), Name: RefreshLockName, Shown: lock}
 
-	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, &RefreshProfile, seams)
+	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, new(RefreshProfile()), seams)
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonHeartbeatObserved {
 		t.Fatalf("got %v/%q, want the resume caught at sample C", got.Decision, got.Reason)
@@ -503,7 +503,7 @@ func TestThePublicRuleRunsAgainstTheRealClockAndFilesystem(t *testing.T) {
 	dir := t.TempDir()
 	at := LockSlot{Dir: openTestDir(t, dir), Name: RefreshLockName, Shown: filepath.Join(dir, RefreshLockName)}
 
-	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, &RefreshProfile, RealSeams(SystemClock()))
+	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, new(RefreshProfile()), RealSeams(SystemClock()))
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonVanished {
 		t.Fatalf("got %v/%q, want vanished", got.Decision, got.Reason)
@@ -740,7 +740,7 @@ func TestALiveHoldersLockIsNeverBroken(t *testing.T) {
 	}
 	at := LockSlot{Dir: openTestDir(t, dir), Name: RefreshLockName, Shown: lock}
 
-	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, &RefreshProfile, staleSeams(RealFS{}, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, new(RefreshProfile()), staleSeams(RealFS{}, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 	if got.Decision != DecisionAbandoned || got.Reason != ReasonHeartbeatObserved {
 		t.Fatalf("got %v/%q, want the live holder's heartbeat observed", got.Decision, got.Reason)
@@ -770,7 +770,7 @@ func TestADeadHoldersLockIsBrokenOnTheRealFilesystem(t *testing.T) {
 	clock := newFakeClockAt(time.Now())
 	at := LockSlot{Dir: openTestDir(t, dir), Name: RefreshLockName, Shown: lock}
 
-	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, &RefreshProfile, staleSeams(RealFS{}, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
+	got := ResolveStale(t.Context(), LockSubject{StoreDir: dir, Tree: TreeOwn}, at, new(RefreshProfile()), staleSeams(RealFS{}, clock, &fakeHolders{evidence: EvidenceNoStoppedClaude}))
 
 	if got.Decision != DecisionBroken {
 		t.Fatalf("got %v/%q, want broken", got.Decision, got.Reason)
