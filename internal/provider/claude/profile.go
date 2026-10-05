@@ -91,11 +91,13 @@ func (e *ProfileParseError) Error() string {
 // the order the reference readers define it. These four words are the only
 // subscriptionType values those readers accept, so anything else maps to
 // nothing rather than to a guess.
-var organizationPlans = [4][2]string{
-	{"claude_max", "max"},
-	{"claude_pro", "pro"},
-	{"claude_enterprise", "enterprise"},
-	{"claude_team", "team"},
+func organizationPlans() [4][2]string {
+	return [4][2]string{
+		{"claude_max", "max"},
+		{"claude_pro", "pro"},
+		{"claude_enterprise", "enterprise"},
+		{"claude_team", "team"},
+	}
 }
 
 // ProfileOf fetches the profile with credentials' access token and holds
@@ -266,7 +268,7 @@ func PlanOf(profile *Profile) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	for _, pair := range organizationPlans {
+	for _, pair := range organizationPlans() {
 		if pair[0] == kind {
 			return pair[1], true
 		}

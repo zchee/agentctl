@@ -654,6 +654,28 @@ type TokenResponse struct {
 	Workspace jsontext.Value
 }
 
+// String never exposes token-response fields, which may contain credentials.
+func (TokenResponse) String() string { return "TokenResponse{[REDACTED]}" }
+
+// GoString returns the redacted diagnostic representation.
+func (r TokenResponse) GoString() string { return r.String() }
+
+// Format redacts every formatting verb, including structured formatting.
+func (r TokenResponse) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, r.String())
+}
+
+// LogValue prevents structured loggers from traversing response members.
+func (r TokenResponse) LogValue() slog.Value { return slog.StringValue(r.String()) }
+
+// MarshalJSON redacts the response rather than serializing its secrets.
+func (TokenResponse) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
+
+// MarshalJSONTo redacts the streaming JSON representation.
+func (TokenResponse) MarshalJSONTo(encoder *jsontext.Encoder) error {
+	return encoder.WriteToken(jsontext.String("[REDACTED]"))
+}
+
 // ExchangeAccount is the account block of a token-endpoint response.
 type ExchangeAccount struct {
 	// UUID is the Anthropic account UUID.

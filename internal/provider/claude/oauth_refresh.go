@@ -298,7 +298,7 @@ func bodySaysInvalidGrant(body []byte) bool {
 func parseTokenResponse(blob []byte) (*TokenResponse, error) {
 	root, err := readWholeValue(blob)
 	if err != nil {
-		return nil, fmt.Errorf("the token response is not valid JSON: %w", err)
+		return nil, errors.New("the token response is not valid JSON")
 	}
 	defer memguard.WipeBytes(root)
 	if root.Kind() != '{' {
@@ -306,7 +306,7 @@ func parseTokenResponse(blob []byte) (*TokenResponse, error) {
 	}
 	members, err := collapseObject(root)
 	if err != nil {
-		return nil, fmt.Errorf("the token response is not valid JSON: %w", err)
+		return nil, errors.New("the token response is not valid JSON")
 	}
 	defer wipeMembers(members)
 
