@@ -29,6 +29,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/runtime/logbuf"
 	"github.com/zchee/agentctl/internal/runtime/signals"
 	"github.com/zchee/agentctl/internal/secret"
 )
@@ -100,7 +101,10 @@ func run() int {
 //
 // stderr, not stdout: the JSON-emitting commands write a machine-readable
 // document to stdout and log lines interleaved into it would corrupt it.
+// The writer is terminal-aware: while the watch display holds the
+// terminal, log lines are buffered and flushed to stderr after the
+// terminal is restored, instead of being painted over inside a frame.
 func initLogging() {
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cli.LogLevel(os.Getenv("AGENTCTL_LOG"))})
+	handler := slog.NewTextHandler(logbuf.Writer{}, &slog.HandlerOptions{Level: cli.LogLevel(os.Getenv("AGENTCTL_LOG"))})
 	slog.SetDefault(slog.New(handler))
 }
