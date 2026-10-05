@@ -32,15 +32,12 @@ import (
 	"github.com/zchee/agentctl/fixtures"
 )
 
-// ScriptCmds returns in-process commands whose resources live for one script.
 // statusfixture creates an isolated account store and a loopback usage server;
 // usage-status selects its HTTP response, usage-calls checks request counts,
 // and status-check checks reports, reset cells, and read-only keychain access.
 // No helper reads the user's home, keychain, or network credentials.
-func ScriptCmds() map[string]func(ts *testscript.TestScript, neg bool, args []string) {
-	return map[string]func(*testscript.TestScript, bool, []string){
-		"statusfixture": statusFixture,
-	}
+func init() {
+	registerScriptCmd("statusfixture", statusFixture)
 }
 
 func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
