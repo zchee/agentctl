@@ -34,10 +34,6 @@ import (
 	"github.com/zchee/agentctl/internal/usage"
 )
 
-// AccountsHeadings is the column headings of `claude accounts list`, in
-// order.
-var AccountsHeadings = [7]string{"Id", "Account", "Org", "Kind", "Source", "State", "Location"}
-
 // Accounts is the store one `claude accounts` invocation works on. The
 // read-only subcommands run the same discovery pass `status` does, so a
 // row here is the same row there, with the registry's own fields and the
@@ -112,7 +108,8 @@ func listTable(rows []claude.AccountRow, liveService string, all bool) string {
 		}
 		records = append(records, listRecord(row, liveService))
 	}
-	out := render.Table(AccountsHeadings[:], records)
+	headings := []string{"Id", "Account", "Org", "Kind", "Source", "State", "Location"}
+	out := render.Table(headings, records)
 	if hidden > 0 {
 		out += "\n" + render.Footer(hidden)
 	}
