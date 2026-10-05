@@ -25,29 +25,36 @@ import (
 	"github.com/zchee/agentctl/fixtures"
 )
 
-// installScript writes one embedded fixture script to path with the
+// installScriptFile writes one embedded fixture script to path with the
 // executable bit set, because embedding drops file modes.
-func (f *Fixture) installScript(name, path string) {
-	f.tb.Helper()
+func installScriptFile(name, path string) error {
 	data, err := fixtures.FS.ReadFile(name)
 	if err != nil {
-		f.tb.Fatalf("read embedded script %q: %v", name, err)
+		return fmt.Errorf("read embedded script %q: %w", name, err)
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
 	if err != nil {
-		f.tb.Fatalf("create %q: %v", path, err)
+		return err
 	}
 	if _, err := file.Write(data); err != nil {
-		f.tb.Fatalf("write %q: %v", path, err)
+		_ = file.Close()
+		return err
 	}
 	if err := file.Sync(); err != nil {
-		f.tb.Fatalf("flush %q: %v", path, err)
+		_ = file.Close()
+		return err
 	}
 	if err := file.Close(); err != nil {
-		f.tb.Fatalf("close %q: %v", path, err)
+		return err
 	}
-	if err := os.Chmod(path, 0o755); err != nil {
-		f.tb.Fatalf("set mode on %q: %v", path, err)
+	return os.Chmod(path, 0o755)
+}
+
+// installScript is installScriptFile failing the test on error.
+func (f *Fixture) installScript(name, path string) {
+	f.tb.Helper()
+	if err := installScriptFile(name, path); err != nil {
+		f.tb.Fatalf("install %q: %v", name, err)
 	}
 }
 
@@ -189,9 +196,9 @@ func (f *Fixture) AllowWrite(service string) *Fixture {
 	return f
 }
 
-// Dump sets what dump-keychain lists, in security(1)'s own format.
-func (f *Fixture) Dump(services ...string) *Fixture {
-	f.tb.Helper()
+// dumpListing renders what dump-keychain lists, in security(1)'s own
+// format.
+func dumpListing(services ...string) string {
 	var text strings.Builder
 	text.WriteString("keychain: \"/Users/example/Library/Keychains/login.keychain-db\"\nversion: 512\n")
 	for _, service := range services {
@@ -203,7 +210,13 @@ func (f *Fixture) Dump(services ...string) *Fixture {
 		fmt.Fprintf(&text, "    \"svce\"<blob>=%q\n", service)
 		text.WriteString("    \"type\"<uint32>=<NULL>\n")
 	}
-	if err := os.WriteFile(f.KeychainDumpPath(), []byte(text.String()), 0o644); err != nil {
+	return text.String()
+}
+
+// Dump sets what dump-keychain lists, in security(1)'s own format.
+func (f *Fixture) Dump(services ...string) *Fixture {
+	f.tb.Helper()
+	if err := os.WriteFile(f.KeychainDumpPath(), []byte(dumpListing(services...)), 0o644); err != nil {
 		f.tb.Fatalf("write keychain listing: %v", err)
 	}
 	return f
