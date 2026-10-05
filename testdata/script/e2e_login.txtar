@@ -1,0 +1,100 @@
+# Manual authorization persists the minted session and private namespace.
+loginfixture manual
+login-run manual 0
+stdout 'Logged in as user@example.com'
+! stderr sk-ant
+login-check stored 1
+
+# An exchange without an organization uses the unknown-organization directory.
+loginfixture unknown-org
+login-run manual 0
+! stderr sk-ant
+exists $LOGIN_STORE/claude/$LOGIN_ACCT/_unknown-org/.credentials.json
+login-check stored 1
+
+# A wrong state neither exchanges the code nor creates the store.
+loginfixture wrong-state
+login-run manual 1
+stderr 'state'
+! stderr sk-ant
+login-check untouched 0
+
+# Different organizations of one account are independent namespaces.
+loginfixture siblings
+login-run manual 0
+login-org 77777777-7777-4777-8777-777777777777
+login-run manual 0
+! stderr sk-ant
+login-check siblings 2
+exists $LOGIN_STORE/claude/$LOGIN_ACCT/$LOGIN_ORG/.credentials.json
+exists $LOGIN_STORE/claude/$LOGIN_ACCT/77777777-7777-4777-8777-777777777777/.credentials.json
+
+# A second login may exchange but cannot overwrite through piped consent.
+loginfixture overwrite
+login-run manual 0
+login-run manual 1
+stderr 'not a terminal'
+! stderr --yes
+! stderr sk-ant
+login-check unchanged 2
+
+# A staged credential is removed and its namespace lock released on SIGTERM.
+loginfixture signal
+login-run signal 143
+! stderr sk-ant
+login-check signal 1
+
+# The live-account notice belongs on stderr and does not refuse the login.
+loginfixture live
+login-run manual 0
+stdout 'Logged in as user@example.com'
+! stdout 'Claude Code is signed in as'
+stderr 'Claude Code is signed in as'
+stderr $LOGIN_ACCT
+stderr 'use --live'
+! stderr sk-ant
+login-check stored 1
+
+# A different live account needs no notice.
+loginfixture other-live
+login-run manual 0
+! stderr 'Claude Code is signed in as'
+! stderr sk-ant
+login-check stored 1
+
+# Explicit duplicate refusal names its evidence and escape, without mutation.
+loginfixture no-duplicate
+login-run manual 1 --no-duplicate
+stderr $LOGIN_ACCT
+stderr '.claude.json'
+stderr 'use --live'
+stderr 'without `--no-duplicate`'
+! stderr 'both stay valid'
+! stderr sk-ant
+login-check untouched 1
+
+# The duplicate flag still admits a different account.
+loginfixture other-no-duplicate
+login-run manual 0 --no-duplicate
+! stderr sk-ant
+login-check stored 1
+
+# A matching profile supplies the plan without replacing exchange identity.
+loginfixture plan
+login-run manual 0
+! stderr sk-ant
+login-check plan 1
+
+# Profile failure is not a failed login when the exchange names the account.
+loginfixture profile-down
+login-run manual 0
+! stderr 'could not read the account profile'
+! stderr sk-ant
+login-check no-plan 1
+
+# Browser navigation can also return through the real loopback socket.
+loginfixture loopback
+login-run loopback 0
+stdout 'Logged in as user@example.com'
+! stderr sk-ant
+login-check stored 1
