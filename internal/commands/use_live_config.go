@@ -49,6 +49,7 @@ type useCatchUp struct {
 	profile   *claude.Profile
 	direction secret.WriteDirection
 	opts      cli.ClaudeUseOptions
+	hints     useSessionHints
 }
 
 func (p SessionProcess) catchUpUse(ctx context.Context, input useCatchUp, report *useReport) *useReport {
@@ -80,7 +81,7 @@ func (p SessionProcess) catchUpUse(ctx context.Context, input useCatchUp, report
 						who = *input.record.Email
 					}
 					in, _ := p.In.(*os.File)
-					confirmed, _ = (TerminalPrompt{In: in, Out: p.Out}).Confirm(ctx, claude.ConfigCatchUpQuestion(who, shown))
+					confirmed, _ = (TerminalPrompt{In: in, Out: p.Out}).Confirm(ctx, claude.ConfigCatchUpQuestion(who, shown)+input.hints.consent())
 				}
 				if confirmed {
 					configuration = claude.WriteConfigCatchUp(ctx, checked, input.env, input.profile, nil)
@@ -100,6 +101,9 @@ func (p SessionProcess) catchUpUse(ctx context.Context, input useCatchUp, report
 	recovery := claude.ConfigRecovery{ID: input.record.AccountUUID, SameAgain: input.direction == secret.DirectionForward, AfterMessage: input.profile == nil}
 	p.tellUseConfig(ctx, input.env, &configuration, recovery, report)
 	report.config = &configuration
+	if configuration.NotUpdated() == nil {
+		p.tellUseSessions(ctx, input.hints, report)
+	}
 	return report
 }
 

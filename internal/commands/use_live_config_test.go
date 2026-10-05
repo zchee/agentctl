@@ -81,7 +81,7 @@ func TestUseCatchUpOrdering(t *testing.T) {
 			var out, diagnostic bytes.Buffer
 			process := SessionProcess{Out: &out, Err: &diagnostic}
 			report := &useReport{outcome: claude.SwapOutcome{Kind: claude.SwapAlreadyActive}, note: new("already active")}
-			process.catchUpUse(t.Context(), useCatchUp{paths: paths, env: &env, record: &config.AccountRecord{AccountUUID: "account", OrganizationUUID: "org"}, profile: profile, direction: secret.DirectionForward, opts: cli.ClaudeUseOptions{JSON: true, Yes: test.yes}}, report)
+			process.catchUpUse(t.Context(), useCatchUp{paths: paths, env: &env, record: &config.AccountRecord{AccountUUID: "account", OrganizationUUID: "org"}, profile: profile, direction: secret.DirectionForward, opts: cli.ClaudeUseOptions{JSON: true, Yes: test.yes}, hints: useSessionHints{names: []string{"private-session"}}}, report)
 			if report.config == nil {
 				t.Fatal("missing configuration report")
 			}
@@ -97,6 +97,15 @@ func TestUseCatchUpOrdering(t *testing.T) {
 			}
 			if report.outcome.Kind != claude.SwapAlreadyActive {
 				t.Fatal("catch-up changed credential outcome")
+			}
+			warned := strings.Contains(diagnostic.String(), "Remote Control stops")
+			if want := report.config.NotUpdated() == nil; warned != want {
+				t.Fatalf("session completion warning=%v, want=%v", warned, want)
+			}
+			for _, warning := range report.warnings {
+				if strings.Contains(warning, "private-session") {
+					t.Fatal("session label entered the JSON warning")
+				}
 			}
 			if strings.Contains(out.String(), `"direction": "config"`) != test.plan {
 				t.Fatalf("unexpected plan: %s", out.String())
