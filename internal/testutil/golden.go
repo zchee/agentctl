@@ -22,11 +22,29 @@ import (
 	"testing"
 
 	gocmp "github.com/google/go-cmp/cmp"
+
+	// The -update flag has exactly one owner: the shared golden package
+	// registers it at initialisation, the TUI test library registers it
+	// through the same package, and a second flag.Bool("update", ...)
+	// here would panic any test binary that links both. Imported for the
+	// registration; the value is read back through the flag set.
+	_ "github.com/charmbracelet/x/exp/golden"
 )
 
-// update rewrites golden files with the bytes they are compared against:
-// go test ./... -args -update.
-var update = flag.Bool("update", false, "rewrite golden files with the compared output")
+// updating reports whether this test run was asked to rewrite golden
+// files: go test ./... -args -update.
+func updating() bool {
+	f := flag.Lookup("update")
+	if f == nil {
+		return false
+	}
+	getter, ok := f.Value.(flag.Getter)
+	if !ok {
+		return false
+	}
+	value, _ := getter.Get().(bool)
+	return value
+}
 
 // GoldenPath returns the golden file for name under testdata/golden.
 func GoldenPath(tb testing.TB, name string) string {
@@ -66,7 +84,7 @@ func GoldenTrimmed(tb testing.TB, name string, got []byte) {
 // tests can run against scratch files instead of the tracked oracles.
 func goldenCompare(tb testing.TB, path string, got []byte, trim bool) {
 	tb.Helper()
-	if *update {
+	if updating() {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			tb.Fatalf("create the golden directory: %v", err)
 		}
