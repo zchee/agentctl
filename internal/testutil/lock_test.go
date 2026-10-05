@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLockIsHeldFollowsTheHolder(t *testing.T) {
@@ -37,7 +38,12 @@ func TestLockIsHeldFollowsTheHolder(t *testing.T) {
 	if err := holder.Close(); err != nil {
 		t.Fatalf("release the lock: %v", err)
 	}
-	if LockIsHeld(path) {
+	// A flock belongs to the open file description, and a concurrent
+	// fork+exec elsewhere in this test binary briefly inherits a duplicate
+	// of the lock's descriptor until exec closes it (close-on-exec). The
+	// release is therefore guaranteed only once that transient duplicate is
+	// gone, so the free state is observed within a bound, not instantly.
+	if !WaitUntil(5*time.Second, func() bool { return !LockIsHeld(path) }) {
 		t.Fatalf("the lock was released and must report free")
 	}
 }

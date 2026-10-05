@@ -63,7 +63,10 @@ func TestFlockholdMain(t *testing.T) {
 		if stdout != "held\n" {
 			t.Fatalf("flockhold printed %q, want the readiness line", stdout)
 		}
-		if LockIsHeld(path) {
+		// Observed within a bound for the same reason as the lock tests: a
+		// concurrent fork+exec in this binary can briefly inherit the lock's
+		// descriptor, delaying when the release becomes visible.
+		if !WaitUntil(5*time.Second, func() bool { return !LockIsHeld(path) }) {
 			t.Fatalf("the lock is still held after the bounded hold returned")
 		}
 	})
