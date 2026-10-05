@@ -467,3 +467,20 @@ func TestNeedsPlanAsksUntilBothHalvesAreStored(t *testing.T) {
 		t.Error("a credential with both halves must never ask again")
 	}
 }
+
+// seamDouble substitutes both OAuth seams in a pass test, proving the
+// interfaces stay satisfiable without the real client.
+type seamDouble struct{}
+
+func (seamDouble) RefreshAccess(_ context.Context, credentials *Credentials) (*Credentials, error) {
+	return credentials, nil
+}
+
+func (seamDouble) ProfileOf(_ context.Context, _ *Credentials) (*Profile, error) {
+	return nil, provider.NewFetchCancelled()
+}
+
+var (
+	_ TokenRefresher = seamDouble{}
+	_ ProfileSource  = seamDouble{}
+)

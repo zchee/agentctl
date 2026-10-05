@@ -60,6 +60,22 @@ type Profile struct {
 	Document jsontext.Value
 }
 
+// ProfileSource asks the server whose credential this is.
+//
+// What [TokenRefresher] is for the refresh POST, this is for the profile
+// GET: the production implementation is [OAuthClient], and pass tests
+// substitute doubles so no unit test can reach the real endpoint. The
+// error keeps its HTTP status where there is one, because a 401 or a 403
+// means the token is no longer honoured, which is not the same answer as
+// "the server could not be asked".
+type ProfileSource interface {
+	// ProfileOf performs one profile GET with credentials' access token,
+	// held to the required schema.
+	ProfileOf(ctx context.Context, credentials *Credentials) (*Profile, error)
+}
+
+var _ ProfileSource = (*OAuthClient)(nil)
+
 // ProfileParseError reports which required member a profile document
 // lacked. The member's value is never quoted.
 type ProfileParseError struct {
