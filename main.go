@@ -30,6 +30,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/secret"
 )
 
 func main() {
@@ -41,6 +42,20 @@ func main() {
 // of scattered os.Exit calls.
 func run() int {
 	initLogging()
+
+	// Refuse to start under a locked-memory limit the secret store cannot
+	// live within: an allocation failure later would be a deadlock in the
+	// middle of credential handling, where this is a one-line refusal
+	// before anything was read.
+	if err := secret.EnsureLockedMemoryBudget(); err != nil {
+		fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
+		return errs.ExitFatal
+	}
+	// One purge on the one way out of run, so no exit path — the normal
+	// return, the error return, or the deferred signal exit below — can
+	// leave a decryptable secret behind. It runs after the command tree
+	// has returned, so every plaintext user has stopped by then.
+	defer secret.Purge()
 
 	// A write to a closed stdout must come back as an error the writer
 	// can classify — a completion script piped into a pager that quits is

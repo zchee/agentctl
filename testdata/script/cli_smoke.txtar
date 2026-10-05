@@ -62,3 +62,9 @@ exec expectexit 2 agentctl claude bogus
 exec expectexit 2 agentctl claude status --timeout nonsense
 exec expectexit 1 agentctl claude status
 exec expectexit 0 agentctl --version
+
+# The startup locked-memory check and the exit-path purge leave the
+# ordinary statuses untouched: a clean run still exits 0 and a fatal
+# one still exits 1.
+exec expectexit 0 agentctl completions zsh
+exec expectexit 1 agentctl codex status
