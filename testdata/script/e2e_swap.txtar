@@ -1,0 +1,322 @@
+# A namespaced forward swap parks the displaced pair beside its own store.
+swapfixture namespace
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"config": null'
+stdout '"budget_ms": 3000'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+# A first item write records no keychain baseline and removes only the shadow.
+swapfixture first-write
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"digest8": null'
+! exists $SWAP_STORE/.credentials.json
+exists $SWAP_STORE/.credentials.adopted.json
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+# A duplicate in unmigrated plaintext does not implicitly migrate the store.
+swapfixture unmigrated-duplicate
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+exists $SWAP_STORE/.credentials.json
+! exists $SWAP_STORE/.credentials.adopted.json
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# JSON is a plan, never consent; declining never rotates or adopts a pair.
+swapfixture json-inspect
+exec expectexit 20 agentctl claude use $INCOMING --live --json
+stdout '"kind": "plan"'
+stdout '"outcome": "cancelled"'
+exists $SWAP_STORE/.credentials.json
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# Refresh occurs after consent and preserves the minted pair in its own home.
+swapfixture refresh
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 1 0
+
+# An expired migrated incoming item is not rotated by this swap.
+swapfixture migrated-expired
+exec expectexit 21 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "needs_refresh"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# A fresh migrated incoming grant needs no refresh and remains admissible.
+swapfixture migrated-fresh
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+# The missing plaintext source is correctly distinguished from a missing login.
+swapfixture incoming-keychain-only
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout 'credential lives in its keychain item'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# Definite failure has its own status and retains the parked outgoing grant.
+swapfixture failed-write
+exec expectexit 19 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "failed"'
+exists $SWAP_STORE/.credentials.adopted.json
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+# Empty securestorage scope selects the unsuffixed live item and config step.
+swapfixture live
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"target": "live"'
+stdout '"service": "Claude Code-credentials"'
+stdout '"config": {'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+# Live plaintext is never a fallback and remains byte-identical.
+swapfixture live-absent
+exec expectexit 24 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "live_item_absent"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# The token override gate runs before keychain or profile reads.
+swapfixture live-env-token
+exec expectexit 11 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "C"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# A live audit refusal precedes consent, adoption and token rotation.
+swapfixture live-audit-refused
+exec expectexit 22 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "audit_refused"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+
+# Namespace writes keep the optional audit append policy.
+swapfixture namespace-audit-refused
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+# Incoming server identity contradictions are refused before any adoption.
+swapfixture live-wrong-profile
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout 'wrong account'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 2
+
+# An owned incoming credential may apply without an available second profile.
+swapfixture live-profile-unavailable
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "profile_unavailable"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+# A live refresh of the incoming account is never replaced by its stale copy.
+swapfixture live-newer
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+
+# The duplicate live return catches up config without reinstalling credentials.
+swapfixture live-duplicate
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+
+# Non-reproducible config bytes are refused independently of the item swap.
+swapfixture live-compact-config
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+# A busy peer does not consume an owned recovery grant or enter live plaintext.
+swapfixture live-busy
+exec expectexit 16 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "busy"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 2
+
+# Remote-control restart remains a typed not-implemented refusal.
+exec expectexit 1 agentctl claude use $INCOMING --live --restart-remote-control
+stderr 'not implemented'
+
+# Line sizing rejects the stored source before refresh or credential writes.
+swapfixture line-too-long
+exec expectexit 12 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "D"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+
+# A newly minted oversized pair is saved before transport sizing refuses it.
+swapfixture refresh-too-long
+exec expectexit 12 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "D"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 1 0
+
+# Timeouts release the hold and retain recovery copies with an unknown audit.
+swapfixture namespace-timeout
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "unknown"'
+exists $SWAP_STORE/.credentials.adopted.json
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+swapfixture first-write-timeout
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "unknown"'
+exists $SWAP_STORE/.credentials.json
+stdout 'was kept'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+
+swapfixture live-timeout
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "unknown"'
+stdout '"reason": "swap_unknown"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+# A peer winning after refresh discards the swap but not the saved minted pair.
+swapfixture refresh-peer-change
+exec expectexit 17 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "discarded"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 1 0
+
+swapfixture live-peer-change
+exec expectexit 17 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "discarded"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 2
+
+# Outgoing identity failures refuse before adoption and quote no response body.
+swapfixture live-outgoing-unavailable
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+
+swapfixture live-outgoing-malformed
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+! stdout 'SENTINEL-profile-body'
+! stderr 'SENTINEL-profile-body'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+
+swapfixture live-unclaimed
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "F"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+
+# Read-only session labels stay on stderr; JSON carries counts only.
+swapfixture live-session-hints
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '1 Claude Code session'
+! stdout 'private-session-name'
+stderr 'private-session-name'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+swapfixture live-catch-up-hints
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '1 Claude Code session'
+! stdout 'private-session-name'
+stderr 'private-session-name'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 1
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "already_current"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 2
+
+# Config locks never nest in credential holds or get broken by a live swap.
+swapfixture live-config-busy
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "lock_busy"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+swapfixture live-config-stale
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "lock_stale"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+# Config rewrites follow a symlink without replacing it.
+swapfixture live-config-link
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"backup": "'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 2
+
+# A concurrent incoming-store writer survives guarded refreshed persistence.
+swapfixture refresh-save-race
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout 'refreshed credential was not saved back'
+stderr 'refreshed credential was not saved back'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 1 0
+
+# Undo and forget.

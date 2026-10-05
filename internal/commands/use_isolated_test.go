@@ -114,14 +114,53 @@ func TestRunUseForgetsBeforeOtherModes(t *testing.T) {
 	}
 }
 
+func TestRunUseLiveDispatch(t *testing.T) {
+	tests := map[string]struct {
+		id   string
+		want string
+	}{
+		"error: live missing id": {want: "give it an id"},
+		"error: live unknown id": {id: "missing", want: "missing"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := testutil.New(t)
+			fixture.WriteRegistry([]any{})
+			var out, diagnostic bytes.Buffer
+			err := (SessionProcess{Out: &out, Err: &diagnostic}).RunUse(t.Context(), cli.Globals{ConfigDir: fixture.ConfigDir()}, cli.ClaudeUseOptions{Live: true, ID: test.id})
+			if err == nil || strings.Contains(err.Error(), "not implemented") || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected live dispatch error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunUseUndoDispatch(t *testing.T) {
+	tests := map[string]struct {
+		live bool
+	}{
+		"success: undo with no entry": {},
+		"success: undo before live":   {live: true},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := testutil.New(t)
+			fixture.WriteRegistry([]any{})
+			var out, diagnostic bytes.Buffer
+			err := (SessionProcess{Out: &out, Err: &diagnostic}).RunUse(t.Context(), cli.Globals{ConfigDir: fixture.ConfigDir()}, cli.ClaudeUseOptions{Undo: true, Live: test.live})
+			if err != nil || !strings.Contains(out.String(), "there is no swap to undo") {
+				t.Fatalf("undo was not dispatched: %v; output=%s", err, out.String())
+			}
+		})
+	}
+}
+
 func TestRunUseUnavailableModes(t *testing.T) {
 	tests := map[string]struct {
 		opts cli.ClaudeUseOptions
 		want string
 	}{
 		"error: missing id":                     {want: "an account id is required"},
-		"error: live not implemented":           {opts: cli.ClaudeUseOptions{Live: true}, want: "not implemented"},
-		"error: undo not implemented":           {opts: cli.ClaudeUseOptions{Undo: true}, want: "not implemented"},
 		"error: remote control not implemented": {opts: cli.ClaudeUseOptions{RestartRemoteControl: true}, want: "not implemented"},
 	}
 	for name, tt := range tests {

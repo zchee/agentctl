@@ -24,14 +24,19 @@ import (
 	"github.com/zchee/agentctl/internal/render"
 )
 
-// RunUse starts an isolated Claude session or removes one when requested.
-// Live swaps and undo are separate operations and are not implemented here.
+// RunUse dispatches isolated sessions, live swaps, and removal requests.
 func (p SessionProcess) RunUse(ctx context.Context, globals cli.Globals, opts cli.ClaudeUseOptions) error {
 	if opts.Forget != "" {
 		return p.RunForget(ctx, globals, opts)
 	}
-	if opts.Live || opts.Undo || opts.RestartRemoteControl {
-		return errs.NewNotImplemented("claude use live or session management")
+	if opts.RestartRemoteControl {
+		return errs.NewNotImplemented("claude use remote-control restart")
+	}
+	if opts.Undo {
+		return p.RunUndo(ctx, globals, opts)
+	}
+	if opts.Live {
+		return p.RunLive(ctx, globals, opts)
 	}
 	if opts.ID == "" {
 		return errs.NewConfig("an account id is required unless one of --undo or --forget is given")
