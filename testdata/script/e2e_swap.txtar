@@ -320,3 +320,696 @@ stderr 'refreshed credential was not saved back'
 swap-check 1 1 0
 
 # Undo and forget.
+# Provenance: tests/e2e_swap.rs.
+
+# Namespace reversal restores the displaced pair and parks the incoming pair.
+swapfixture namespace undo-namespace
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM outgoing
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-audit-check forward:- undo:-
+undo-check 2 0 0
+
+# A failed forward write leaves recovery intact and is not selectable.
+swapfixture namespace undo-failed-forward
+undo-setup
+env AGENTCTL_FAULT=swap_write_fail
+exec expectexit 19 agentctl claude use $INCOMING --live --yes --json
+env AGENTCTL_FAULT=
+exec agentctl claude use --undo --yes
+stdout 'no swap to undo'
+undo-credential $UNDO_ITEM outgoing
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+undo-check 0 0 0
+
+# An empty log is a successful no-op with no child, write, or profile request.
+swapfixture namespace undo-empty
+undo-setup
+exec agentctl claude use --undo --yes
+stdout 'no swap to undo'
+undo-check 0 0 0
+
+# A live entry naming no retained credential refuses without a keychain read.
+swapfixture live undo-missing-copy
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-audit missing-copy
+cp $SWAP_AUDIT before-audit
+exec expectexit 1 agentctl claude use --undo --yes
+stderr 'deadbeef'
+stderr 'nothing to put back'
+cmp $SWAP_AUDIT before-audit
+undo-check 1 0 2
+
+# A namespaced recovery copy must match the displaced audit digest.
+swapfixture namespace undo-wrong-copy
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json stranger $OWNER
+cp $SWAP_AUDIT before-audit
+exec expectexit 1 agentctl claude use --undo --yes
+stderr 'will not put back'
+cmp $SWAP_AUDIT before-audit
+undo-credential $UNDO_ITEM incoming
+undo-check 1 0 0
+
+# Reversing a first keychain write does not resurrect a plaintext store.
+swapfixture first-write undo-first-write
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+! exists $UNDO_OWNER_DIR/.credentials.json
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM outgoing
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 2 0 0
+
+# A moved export spelling refuses before any additional keychain operation.
+swapfixture namespace undo-moved-store
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-move-record
+exec expectexit 15 agentctl claude use --undo --yes
+stdout 'the store moved'
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+undo-check 1 0 0
+
+# A peer change after the initial read discards the reversal and keeps its source.
+swapfixture namespace undo-peer-write
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-security peer
+exec expectexit 17 agentctl claude use --undo --yes --json &
+exec waitfor $UNDO_RESUME.reached
+undo-blob $UNDO_ITEM incoming-peer $INCOMING
+exec /usr/bin/touch $UNDO_RESUME
+wait
+stdout '"outcome": "discarded"'
+undo-credential $UNDO_ITEM incoming-peer
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+undo-check 1 0 0
+
+# A changed lock inside the hold refuses without replacing the retained source.
+swapfixture namespace undo-compromised-hold
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+env AGENTCTL_FAULT=swap_pause_in_locks
+env AGENTCTL_FAULT_RESUME=$UNDO_RESUME
+exec expectexit 10 agentctl claude use --undo --yes --json &
+exec waitfor $UNDO_OWNER_DIR/.oauth_refresh.lock
+undo-age $UNDO_OWNER_DIR/.oauth_refresh.lock
+exec /usr/bin/touch $UNDO_RESUME
+wait
+env AGENTCTL_FAULT=
+env AGENTCTL_FAULT_RESUME=
+stdout '"refusal": "A"'
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+undo-check 1 0 0
+
+# A busy store leaves the rollback source intact.
+swapfixture namespace undo-busy
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+mkdir $UNDO_OWNER_DIR/.oauth_refresh.lock
+exec expectexit 16 agentctl claude use --undo --yes --json
+stdout '"outcome": "busy"'
+rm $UNDO_OWNER_DIR/.oauth_refresh.lock
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+undo-check 1 0 0
+
+# A failed reverse write retains the restoring pair and gives reverse-specific recovery.
+swapfixture namespace undo-write-failed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+env AGENTCTL_FAULT=swap_write_fail
+exec expectexit 19 agentctl claude use --undo --yes --json
+stdout 'untouched in the adopted copy'
+! stdout 'recoverable with.*use --undo'
+env AGENTCTL_FAULT=
+undo-credential $UNDO_ITEM incoming
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+undo-check 1 0 0
+
+# An unknown reverse write does not commit the staged occupant over its source.
+swapfixture namespace undo-write-unknown
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-security hang
+exec expectexit 18 agentctl claude use --undo --yes --json
+stdout '"outcome": "unknown"'
+stdout 'cannot itself be undone'
+undo-credential $UNDO_ITEM incoming
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+exec expectexit 1 agentctl claude use --undo --yes
+stderr 'will not put back'
+undo-check 2 0 0
+
+# A newer displaced grant survives and can be restored without a refresh POST.
+swapfixture namespace undo-newer-copy
+undo-setup
+undo-blob $UNDO_ITEM incoming-session $INCOMING newer
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM incoming-session
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
+undo-check 2 0 0
+
+# Live identity comes from the profile again after the installed grant is refreshed.
+swapfixture live-compact-config undo-profile-identity
+undo-setup
+undo-blob $UNDO_ITEM outgoing -
+cp $UNDO_CONFIG before-config
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_OWNER_DIR/.credentials.adopted.json parked-owner
+undo-blob $UNDO_ITEM incoming-refreshed - newer
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_ITEM parked-owner
+cmp $UNDO_CONFIG before-config
+undo-credential $UNDO_INCOMING_DIR/.credentials.json incoming-refreshed
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_INCOMING_DIR/.credentials.adopted.json
+undo-check 2 0 4
+
+# Every live write records the account it installed, in both directions.
+swapfixture live undo-installed-identity
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+undo-audit-check forward:$INCOMING undo:$OWNER
+undo-check 2 0 4
+
+# Two successive live swaps and two reversals install the matching account each time.
+swapfixture live-compact-config undo-two-live-swaps
+undo-setup
+cp $UNDO_CONFIG before-config
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_ITEM incoming-refreshed - newer
+cp $UNDO_ITEM first-incoming
+exec agentctl claude use $THIRD --live --yes --json
+undo-credential $UNDO_ITEM third
+cp $UNDO_ITEM second-incoming
+exec agentctl claude use --undo --yes --json
+cmp $UNDO_ITEM first-incoming
+exec agentctl claude use --undo --yes --json
+cmp $UNDO_ITEM second-incoming
+cmp $UNDO_INCOMING_DIR/.credentials.json first-incoming
+cmp $UNDO_CONFIG before-config
+undo-audit-check forward:$INCOMING forward:$THIRD undo:$INCOMING undo:$THIRD
+undo-check 4 0 8
+
+# Undo-of-undo puts back the original incoming grant and resolves later equal copies.
+swapfixture live undo-of-undo
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_ITEM incoming-in-item
+exec agentctl claude use --undo --yes --json
+cp $UNDO_ITEM owner-in-item
+exec agentctl claude use --undo --yes --json
+cmp $UNDO_ITEM incoming-in-item
+undo-audit-check forward:$INCOMING undo:$OWNER undo:$INCOMING
+exec agentctl claude use --undo --yes --json
+cmp $UNDO_ITEM owner-in-item
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+undo-check 4 0 8
+
+# Namespace refreshes beyond a 256-line window do not hide a reversible live swap.
+swapfixture live undo-whole-log
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_OWNER_DIR/.credentials.adopted.json parked-owner
+undo-audit tail
+exec agentctl claude use --undo --yes --json
+stdout '"target": "live"'
+cmp $UNDO_ITEM parked-owner
+undo-check 2 0 4
+
+# An unknown undo that did not land retries the outstanding forward swap.
+swapfixture live undo-unknown-not-landed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-audit unknown-undo
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM outgoing
+undo-check 2 0 4
+
+# An unknown undo that already landed sees the restored identity and does not rewrite it.
+swapfixture live undo-unknown-landed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-audit unknown-undo
+cp $UNDO_OWNER_DIR/.credentials.adopted.json $UNDO_ITEM
+cp $UNDO_ITEM before-item
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "already_active"'
+cmp $UNDO_ITEM before-item
+undo-check 1 0 3
+
+# A stranger after an unknown undo refuses on identity, not on a stale digest.
+swapfixture live undo-unknown-stranger
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-audit unknown-undo
+undo-blob $UNDO_ITEM stranger -
+cp $UNDO_ITEM before-item
+cp $SWAP_AUDIT before-audit
+exec expectexit 27 agentctl claude use --undo --yes --json
+stdout '"reason": "live_undo_foreign_login"'
+stdout '"config": null'
+cmp $UNDO_ITEM before-item
+cmp $SWAP_AUDIT before-audit
+undo-check 1 0 3
+
+# A foreign login after an applied live swap changes no recovery or config bytes.
+swapfixture live undo-foreign-login
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_ITEM stranger -
+cp $UNDO_ITEM before-item
+cp $UNDO_CONFIG before-config
+cp $UNDO_INCOMING_DIR/.credentials.json before-incoming
+cp $SWAP_AUDIT before-audit
+exec expectexit 27 agentctl claude use --undo --yes --json
+stdout '"reason": "live_undo_foreign_login"'
+stdout '"config": null'
+cmp $UNDO_ITEM before-item
+cmp $UNDO_CONFIG before-config
+cmp $UNDO_INCOMING_DIR/.credentials.json before-incoming
+cmp $SWAP_AUDIT before-audit
+undo-check 1 0 3
+
+# A forward outcome recorded as unknown can be reversed after the installed account refreshes.
+swapfixture live undo-unknown-forward
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-audit unknown-forward
+undo-blob $UNDO_ITEM incoming-refreshed - newer
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM outgoing
+undo-credential $UNDO_INCOMING_DIR/.credentials.json incoming-refreshed
+undo-check 2 0 4
+
+# A new login as the displaced account is already active and is never misfiled as incoming.
+swapfixture live undo-owner-relogin
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_ITEM outgoing-relogin -
+cp $UNDO_ITEM before-item
+cp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
+cp $UNDO_INCOMING_DIR/.credentials.json before-incoming
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "already_active"'
+stdout 'nothing to put back'
+cmp $UNDO_ITEM before-item
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
+cmp $UNDO_INCOMING_DIR/.credentials.json before-incoming
+undo-check 1 0 3
+
+# A status refresh of the owner's own store leaves the independently parked undo source usable.
+swapfixture live undo-status-refreshed-owner
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_OWNER_DIR/.credentials.adopted.json parked-owner
+undo-blob $UNDO_OWNER_DIR/.credentials.json outgoing-status-refreshed $OWNER newer
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_ITEM parked-owner
+undo-credential $UNDO_OWNER_DIR/.credentials.json outgoing-status-refreshed
+undo-check 2 0 4
+
+# Equal copies retained by an undo permit a subsequent live swap.
+swapfixture live undo-forward-equal
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+cp $UNDO_ITEM before-item
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-item
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 3 0 6
+
+# A refreshed incoming grant is filed by undo and reused by a subsequent live swap.
+swapfixture live undo-forward-incoming-refreshed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_ITEM incoming-refreshed - newer
+exec agentctl claude use --undo --yes --json
+undo-credential $UNDO_INCOMING_DIR/.credentials.json incoming-refreshed
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM incoming-refreshed
+undo-check 3 0 6
+
+# A newer owner grant after undo supersedes the recorded adopted copy without creating plaintext.
+swapfixture live undo-forward-owner-refreshed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+undo-blob $UNDO_ITEM outgoing-refreshed - newer
+cp $UNDO_ITEM before-item
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-item
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 3 0 6
+
+# An unrecorded duplicate may not be replaced merely because the live owner grant is newer.
+swapfixture live undo-unrecorded-duplicate
+undo-setup own
+cp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
+cp $UNDO_OWNER_DIR/.credentials.json before-owner
+undo-blob $UNDO_ITEM outgoing-refreshed - newer
+cp $UNDO_ITEM before-item
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"refusal": "F"'
+stdout 'was not parked by a live swap'
+cmp $UNDO_ITEM before-item
+cmp $UNDO_OWNER_DIR/.credentials.json before-owner
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-owner
+undo-check 0 0 1
+
+# A recorded sole adopted copy is retained even with an independent older owner store.
+swapfixture live undo-sole-copy-reuse
+undo-setup own
+cp $UNDO_OWNER_DIR/.credentials.json independent-owner
+undo-blob $UNDO_ITEM outgoing-first-refresh - newer
+cp $UNDO_ITEM first-refresh
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+cmp $UNDO_ITEM first-refresh
+cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json first-refresh
+cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
+undo-check 3 0 6
+
+# A recorded sole adopted copy can be superseded after another owner refresh.
+swapfixture live undo-sole-copy-supersede
+undo-setup own
+cp $UNDO_OWNER_DIR/.credentials.json independent-owner
+undo-blob $UNDO_ITEM outgoing-first-refresh - newer
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+undo-blob $UNDO_ITEM outgoing-second-refresh - newer
+cp $UNDO_ITEM second-refresh
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json second-refresh
+cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
+undo-check 3 0 6
+
+# Recorded duplicates written by undo-of-undo do not block a later owner refresh.
+swapfixture live undo-recorded-duplicates
+undo-setup own
+undo-blob $UNDO_ITEM outgoing-first-refresh - newer
+exec agentctl claude use $INCOMING --live --yes --json
+exec agentctl claude use --undo --yes --json
+exec agentctl claude use --undo --yes --json
+exec agentctl claude use $OWNER --live --yes --json
+cp $UNDO_OWNER_DIR/.credentials.json before-owner
+undo-blob $UNDO_ITEM outgoing-second-refresh - newer
+cp $UNDO_ITEM second-refresh
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json second-refresh
+cmp $UNDO_OWNER_DIR/.credentials.json before-owner
+undo-check 5 0 10
+
+# Identical own and adopted candidates count as one and remove only the redundant copy.
+swapfixture live undo-identical-candidates
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_OWNER_DIR/.credentials.adopted.json $UNDO_OWNER_DIR/.credentials.json
+cp $UNDO_OWNER_DIR/.credentials.json parked-owner
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_ITEM parked-owner
+cmp $UNDO_OWNER_DIR/.credentials.json parked-owner
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+undo-check 2 0 4
+
+# A live reversal restores both tokens byte-for-byte without adopting into the live tree.
+swapfixture live undo-live-byte-identical
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_OWNER_DIR/.credentials.adopted.json parked-owner
+exec agentctl claude use --undo --yes --json
+cmp $UNDO_ITEM parked-owner
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json parked-owner
+! exists $SWAP_STORE/.credentials.adopted.json
+undo-audit-check forward:$INCOMING undo:$OWNER
+undo-check 2 0 4
+
+# A live audit target from a namespaced shell refuses before keychain, profile, or config work.
+swapfixture live undo-namespace-override
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp $SWAP_AUDIT before-audit
+cp $UNDO_ITEM before-item
+env CLAUDE_SECURESTORAGE_CONFIG_DIR=$UNDO_OWNER_DIR
+exec expectexit 13 agentctl claude use --undo --yes
+stdout 'CLAUDE_SECURESTORAGE_CONFIG_DIR'
+stdout 'run without it'
+! stdout 'compromised'
+exec expectexit 13 agentctl claude use --undo --yes --json
+stdout '"refusal": "E"'
+stdout '"config": null'
+cmp $SWAP_AUDIT before-audit
+cmp $UNDO_ITEM before-item
+undo-check 1 0 2
+
+# An expired adopted source is refreshed and persisted before the live reversal writes.
+swapfixture live undo-refresh-adopted
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing $OWNER expired
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout 'was not saved back'
+undo-credential $UNDO_ITEM outgoing-rotated
+cmp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
+undo-check 2 1 4
+
+# The own-store source also persists a refresh instead of discarding the rotated pair.
+swapfixture live undo-refresh-own
+undo-setup own
+exec agentctl claude use $INCOMING --live --yes --json
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+undo-blob $UNDO_OWNER_DIR/.credentials.json outgoing $OWNER expired
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout 'was not saved back'
+undo-credential $UNDO_ITEM outgoing-rotated
+cmp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.json
+undo-check 2 1 4
+
+# A post-refresh adopted writeback failure warns in both streams but still installs the usable pair.
+swapfixture live undo-refresh-adopted-save-failed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing $OWNER expired
+cp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
+exec /bin/chmod 500 $UNDO_OWNER_DIR
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stdout 'was not saved back'
+stderr 'note: .*was not saved back'
+exec /bin/chmod 700 $UNDO_OWNER_DIR
+undo-credential $UNDO_ITEM outgoing-rotated
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
+undo-check 2 1 4
+
+# A pending write beside an adopted source refuses before rotating its refresh token.
+swapfixture live undo-refresh-pending
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing $OWNER expired
+undo-blob $UNDO_OWNER_DIR/.credentials.json outgoing-namespace-login $OWNER newer
+undo-blob $UNDO_OWNER_DIR/.credentials.json.pending outgoing $OWNER
+cp $UNDO_OWNER_DIR/.credentials.json before-owner
+cp $UNDO_OWNER_DIR/.credentials.json.pending before-pending
+cp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
+cp $UNDO_ITEM before-item
+exec expectexit 21 agentctl claude use --undo --yes --json
+stdout '"outcome": "needs_refresh"'
+stdout 'pending write'
+stdout '"config": null'
+! stdout 'was not saved back'
+cmp $UNDO_ITEM before-item
+cmp $UNDO_OWNER_DIR/.credentials.json before-owner
+cmp $UNDO_OWNER_DIR/.credentials.json.pending before-pending
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
+undo-check 1 0 3
+
+# Migration does not shadow an adopted source; it can still be refreshed and persisted.
+swapfixture live undo-refresh-migrated-adopted
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing $OWNER expired
+undo-blob $UNDO_OWNER_ITEM outgoing-migrated $OWNER
+undo-blob $UNDO_CANONICAL_ITEM outgoing-migrated $OWNER
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout 'was not saved back'
+undo-credential $UNDO_ITEM outgoing-rotated
+cmp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
+undo-check 2 1 4
+
+# Canonical migration forbids an own-store refresh writeback, but the live item receives the pair.
+swapfixture live undo-refresh-own-migrated
+undo-setup own-alias
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.json outgoing $OWNER expired
+cp $UNDO_OWNER_DIR/.credentials.json before-owner
+undo-blob $UNDO_CANONICAL_ITEM outgoing-migrated $OWNER
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stdout 'was not saved back to its own store'
+stderr 'note: .*was not saved back to its own store'
+undo-credential $UNDO_ITEM outgoing-rotated
+cmp $UNDO_OWNER_DIR/.credentials.json before-owner
+undo-check 2 1 4
+
+# A later live parking supersedes the adopted pair that a refreshing undo wrote back.
+swapfixture live undo-refreshed-parking-superseded
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing $OWNER expired
+undo-blob $UNDO_OWNER_DIR/.credentials.json outgoing-independent $OWNER newer
+cp $UNDO_OWNER_DIR/.credentials.json independent-owner
+exec agentctl claude use --undo --yes --json
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing-rotated
+undo-blob $UNDO_ITEM outgoing-descendant - newer
+cp $UNDO_ITEM descendant
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json descendant
+cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
+undo-check 3 1 6
+
+# An unavailable restored-account profile cannot block a reversal already authorized by item identity.
+swapfixture live undo-restored-profile-down
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+cp profile-down $UNDO_PROFILE_CONTROL
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "profile_unavailable"'
+undo-credential $UNDO_ITEM outgoing
+undo-check 2 0 4
+
+# The reverse config rewrite uses the restored profile, preserves a symlink, and backs up both inputs.
+swapfixture live undo-config-profile
+undo-setup
+undo-config $OWNER link
+cp $UNDO_CONFIG initial-config
+exec agentctl claude use $INCOMING --live --yes --json
+cp $UNDO_CONFIG forward-config
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+undo-config-check $OWNER initial-config forward-config
+undo-check 2 0 4
+
+# A skipped reverse config write names a forward catch-up that updates config without another swap.
+swapfixture live undo-config-catch-up
+undo-setup own
+undo-config $OWNER link
+exec agentctl claude use $INCOMING --live --yes --json
+mkdir $UNDO_CONFIG.lock
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "lock_busy"'
+stderr 'run .*claude use --live'
+! stderr 'run .*use --undo'
+rm $UNDO_CONFIG.lock
+exec agentctl claude use $OWNER --live --yes --json
+stdout '"outcome": "already_active"'
+undo-config-check $OWNER
+undo-check 2 0 5
+
+# Remote-control warnings remain human-named on stderr and counts-only in JSON.
+swapfixture live undo-remote-json-config
+undo-setup
+undo-remote seed
+exec agentctl claude use $INCOMING --live --yes --json
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+stdout -count=1 '1 Claude Code session had Remote Control on'
+! stdout 'undo-remote-session|4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+stdout -count=1 '1 Claude Code session had Remote Control on'
+! stdout 'undo-remote-session|4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+undo-check 2 0 4
+
+# Remote-control completion does not depend on a config file being present.
+swapfixture live undo-remote-json-absent
+undo-setup
+rm $UNDO_CONFIG
+undo-remote seed
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "absent"'
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+stdout -count=1 '1 Claude Code session had Remote Control on'
+! stdout 'undo-remote-session|4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "absent"'
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+stdout -count=1 '1 Claude Code session had Remote Control on'
+! stdout 'undo-remote-session|4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+undo-check 2 0 4
+
+# Human forward and reverse output warns once while retaining the registry tree.
+swapfixture live undo-remote-human-config
+undo-setup
+undo-remote seed
+exec agentctl claude use $INCOMING --live --yes
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+! stdout '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+exec agentctl claude use --undo --yes
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+! stdout '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+undo-check 2 0 4
+
+# Human warnings also survive absent config in both directions.
+swapfixture live undo-remote-human-absent
+undo-setup
+rm $UNDO_CONFIG
+undo-remote seed
+exec agentctl claude use $INCOMING --live --yes
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+! stdout '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+exec agentctl claude use --undo --yes
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+! stdout '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+undo-check 2 0 4
+
+-- profile-down --
+down-owner
