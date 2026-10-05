@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,8 +70,14 @@ func TestGoldenComparatorDistinguishesTheTwoModes(t *testing.T) {
 func TestGoldenUpdateRewritesTheFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "case.golden")
 
-	*update = true
-	defer func() { *update = false }()
+	if err := flag.Set("update", "true"); err != nil {
+		t.Fatalf("arm the update flag: %v", err)
+	}
+	defer func() {
+		if err := flag.Set("update", "false"); err != nil {
+			t.Fatalf("disarm the update flag: %v", err)
+		}
+	}()
 
 	goldenCompare(t, path, []byte("fresh bytes\n"), false)
 
