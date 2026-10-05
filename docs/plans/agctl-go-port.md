@@ -184,6 +184,19 @@ Not used: `gofrs/flock` (x/sys suffices), `go-runewidth`/`x/text/width` (lipglos
 first; revisit only if the width corpus in W3 fails), `x/exp/slog`, `x/net/http2` (no typed
 HTTP/2 classification; unknown stream errors stay "outcome unknown").
 
+Remaining crate mappings with a stdlib answer (`docs/research/agctl-inventory-modules.md`
+part (b)): `open` → `exec.CommandContext(ctx, "open", url)` detached on macOS
+(`src/commands/login.rs:170`); `base64`/`hex`/`sha2`/`rand`/`url` → `encoding/base64`
+(raw URL), `encoding/hex`, `crypto/sha256`, `crypto/rand` (PKCE, temp names) and
+`math/rand/v2` (jitter only), `net/url`; `etcetera` → explicit XDG lookup in
+`internal/config`; `jiff` → `time`; `signal-hook` → `os/signal.NotifyContext`;
+`thiserror`/`anyhow` → typed errors + `errors.Is/As`; `tracing` → `log/slog`. Test-only:
+`flate2` → `compress/gzip`; `rcgen` → `httptest.NewTLSServer`; `httpmock` →
+`httptest.Server` on real sockets; `rustix pty` → `github.com/creack/pty` (version
+pinned by the W1 lane from the module proxy) for the tty-readiness tests
+(`src/runtime/tty_tests.rs:14-25`); `assert_cmd`/`predicates`/`tempfile` →
+`testscript`, `cmp`, `t.TempDir()`.
+
 ## 5. RALPLAN-DR summary
 
 ### Principles
@@ -446,11 +459,14 @@ gate is green, `shutdown_request` on acceptance. Shared packages (`render`, `tes
    Insta-style end-of-file trim comparator, frame-dump adapter for `teatest` output,
    schema validator over embedded `schemas/*.json` (`jsonschema.UnmarshalJSON` →
    `AddResource` → `Compile`). `scripts/strip-insta.sh` converts the 14 `.snap` files to
-   `testdata/*.golden` and records the mapping. E2E harness: `testscript.Main` in
-   `TestMain` registers the fake `security`/`codex` entry points and helper commands
-   (`flockhold`, `sigterm`, `drainpipes`, `mtime`, `waitfor`); `Params.Setup` creates the
-   owned `bin/` dir, sets `AGENTCTL_CONFIG_DIR`, `AGENTCTL_SECURITY_BIN`,
-   `AGENTCTL_CODEX_BIN`, `HOME`, `USER`, the loopback endpoint overrides, and puts the
+   `testdata/*.golden` and records the mapping. E2E harness: the fake `security`,
+   `codex` and (later) `tmux` executables are the **shell scripts copied verbatim from
+   `fixtures/`**, installed by `Params.Setup` into an owned `bin/` dir and pointed at by
+   `AGENTCTL_SECURITY_BIN` / `AGENTCTL_CODEX_BIN` (the Rust contract,
+   `tests/common/mod.rs:529-553`); they are never reimplemented in Go. `testscript.Main`
+   in `TestMain` registers only Go **helper** commands (`flockhold`, `sigterm`,
+   `drainpipes`, `mtime`, `waitfor`, `schema`, `golden`). `Setup` also sets
+   `AGENTCTL_CONFIG_DIR`, `HOME`, `USER`, the loopback endpoint overrides, and puts the
    built `agentctl` (tagged) first on `PATH`; scripts live in `testdata/script/*.txtar`,
    one per Rust e2e file.
 6. `.github/workflows/ci.yaml`: `runs-on: xcode-27` (full suite, both build tags) and
@@ -484,10 +500,17 @@ gate is green, `shutdown_request` on acceptance. Shared packages (`render`, `tes
    escapes, duplicate keys, CRLF, trailing newline, symlinked target).
 9. `internal/runtime/proc` Darwin spike: same-UID `claude` process observation and
    own-writer-gone proof (`src/runtime/proc/macos.rs:350,382,416-463`) via
-   `unix.SysctlKinfoProcSlice("kern.proc.all")` / `kern.proc.pid.<pid>`; map
-   `kinfo_proc` fields (`Proc.P_pid`, `Proc.P_starttime`, `Eproc.Ucred.Uid`,
-   `Proc.P_comm`, `Proc.P_stat`) onto the Rust identity (pid, start time, real UID,
-   name, zombie detection); table-test against the Rust expectations in
+   `unix.SysctlKinfoProcSlice("kern.proc.all")` / `kern.proc.pid.<pid>`. Field map
+   (Rust `proc_bsdinfo` → `unix.KinfoProc`): `pbi_status` → `Proc.P_stat` (holder
+   state, `src/runtime/proc/macos.rs:91-119`); `pbi_pgid`/`pbi_ppid` → `Eproc.Pgid`/
+   `Eproc.Ppid` (`:120-140`); `pbi_start_tvsec`/`tvusec` → `Proc.P_starttime`
+   (`:161-187`); `pbi_uid` (effective) → `Eproc.Ucred.Uid`, and the Rust comparison
+   against the caller's `getuid()` (`:242-250`) is reproduced with `Eproc.Pcred.P_ruid`
+   vs `os.Getuid()` so the real UID is what is compared; name: `proc_name` returns
+   `pbi_name` (32 bytes) with `pbi_comm` (16) as fallback (`:454-463`), whereas sysctl
+   only exposes `Proc.P_comm` (16 bytes + NUL). The exact match is `claude` (6 bytes), so
+   `P_comm` is sufficient; the spike records this limit and tests a 17+ byte process
+   name to show the behaviour is a documented non-match, not a crash. Table-test against
    `src/runtime/proc/macos_tests.rs` and a spawned child; `ps` is not acceptable
    (`src/runtime/proc/macos.rs:10-16`). A field that cannot be matched is reported, not
    approximated.
@@ -736,3 +759,6 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
   rewrote the `~/.claude.json` step as a span splice, Darwin proc via `sysctl`, memguard
   secret model and spike, testscript/teatest test plan, `AGENTCTL_LOG` grammar; section 19
   now records the answers instead of the questions.
+- 2026-10-05 (after `3a35bd7`): fake executables are the verbatim fixture scripts, Go
+  registers only helper commands; sysctl field map spelled out (real UID via
+  `Eproc.Pcred.P_ruid`, 16-byte `P_comm` limit); remaining crate mappings listed in 4.1.
