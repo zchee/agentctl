@@ -23,6 +23,8 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/colorprofile"
+
+	"github.com/zchee/agentctl/internal/usage"
 )
 
 // The status table: a fixed column list per provider, one row per
@@ -151,15 +153,15 @@ func Render(report *Report) string {
 	var sessionColumn, weeklyColumn []resetSlot
 
 	for _, row := range report.Shown() {
-		usage := row.Usage
-		sessionColumn = append(sessionColumn, resetSlotFor(windowOf(usage, SessionWindow()), report.Now, report.Zone))
-		weeklyColumn = append(weeklyColumn, resetSlotFor(windowOf(usage, WeeklyAllWindow()), report.Now, report.Zone))
+		snapshot := row.Usage
+		sessionColumn = append(sessionColumn, resetSlotFor(windowOf(snapshot, sessionKind), report.Now, report.Zone))
+		weeklyColumn = append(weeklyColumn, resetSlotFor(windowOf(snapshot, weeklyAllKind), report.Now, report.Zone))
 		records = append(records, withKind(accountRecord(row), report, row.Kind))
 
-		if usage == nil {
+		if snapshot == nil {
 			continue
 		}
-		for _, window := range usage.ExtraWindows(HeadlineScope) {
+		for _, window := range snapshot.ExtraWindows(HeadlineScope) {
 			// Never the five-hour window, so that cell is left blank
 			// rather than justified — see continuationRecord.
 			sessionColumn = append(sessionColumn, resetSlot{})
@@ -215,7 +217,7 @@ func RenderCodex(report *CodexReport) string {
 			sessionColumn = append(sessionColumn, resetSlot{})
 			weeklyColumn = append(weeklyColumn, resetSlotFor(window, report.Now, report.Zone))
 			records = append(records, []string{
-				"  " + ContinuationMarker + " " + window.Kind.Label(),
+				"  " + ContinuationMarker + " " + window.Label(),
 				"", "", "",
 				percentCell(window),
 				"", "", "", "",
@@ -257,12 +259,19 @@ func CodexAccountsLine(id, kind, email string, forgotten bool) string {
 	return line
 }
 
-// windowOf is usage.Window, lifted over a row that has no numbers.
-func windowOf(usage *UsageSnapshot, kind WindowKind) *LimitWindow {
-	if usage == nil {
+// The two kinds the fixed columns name.
+var (
+	sessionKind   = usage.WindowKind{Class: usage.WindowSession}
+	weeklyAllKind = usage.WindowKind{Class: usage.WindowWeeklyAll}
+)
+
+// windowOf is the snapshot's window lookup, lifted over a row that has
+// no numbers.
+func windowOf(snapshot *usage.UsageSnapshot, kind usage.WindowKind) *usage.LimitWindow {
+	if snapshot == nil {
 		return nil
 	}
-	return usage.Window(kind)
+	return snapshot.Window(kind)
 }
 
 // withKind returns a ten-cell record with kind spliced in at KindIndex
@@ -297,11 +306,11 @@ func accountRecord(row *StatusRow) []string {
 		"",
 		row.StateCell(),
 	}
-	if usage := row.Usage; usage != nil {
-		cells[3] = percentCell(usage.Window(SessionWindow()))
-		cells[4] = percentCell(usage.Window(WeeklyAllWindow()))
-		cells[5] = percentCell(usage.ScopedWindow(HeadlineScope))
-		cells[6] = creditsCell(usage.Credits)
+	if snapshot := row.Usage; snapshot != nil {
+		cells[3] = percentCell(snapshot.Window(sessionKind))
+		cells[4] = percentCell(snapshot.Window(weeklyAllKind))
+		cells[5] = percentCell(snapshot.ScopedWindow(HeadlineScope))
+		cells[6] = creditsCell(snapshot.Credits)
 	}
 	return cells
 }
@@ -311,9 +320,9 @@ func accountRecord(row *StatusRow) []string {
 // accountRecord's; its 5h reset cell is left blank for good, because
 // such a window is never the five-hour one — not an em dash, which
 // would claim a figure was unavailable.
-func continuationRecord(window *LimitWindow) []string {
+func continuationRecord(window *usage.LimitWindow) []string {
 	return []string{
-		"  " + ContinuationMarker + " " + window.Kind.Label(),
+		"  " + ContinuationMarker + " " + window.Label(),
 		"", "", "",
 		percentCell(window),
 		"", "", "", "", "",
@@ -322,11 +331,11 @@ func continuationRecord(window *LimitWindow) []string {
 
 // percentCell renders a floored percentage, or an em dash when the
 // window is absent or carried no usable figure.
-func percentCell(window *LimitWindow) string {
-	if window == nil || window.PercentFloor < 0 {
+func percentCell(window *usage.LimitWindow) string {
+	if window == nil || window.PercentFloor == nil {
 		return EmptyCell
 	}
-	return fmt.Sprintf("%d%%", window.PercentFloor)
+	return fmt.Sprintf("%d%%", *window.PercentFloor)
 }
 
 // creditsCell renders the credits column. Four shapes, and the
@@ -334,18 +343,18 @@ func percentCell(window *LimitWindow) string {
 // has credits and switched them off, "n/a" means the response said
 // nothing about credits at all. Collapsing them would tell a user with
 // credits enabled that they are disabled.
-func creditsCell(credits CreditsState) string {
-	switch credits.class {
-	case creditsUnavailable:
+func creditsCell(credits usage.CreditsState) string {
+	switch credits.Class {
+	case usage.CreditsUnavailable:
 		return "n/a"
-	case creditsOff:
+	case usage.CreditsOff:
 		return "off"
 	default:
 	}
 	// Credits are switched on but the server sent no used figure.
 	// Rendering "— / Unlimited" would put a ceiling next to a figure
 	// that does not exist; the whole cell is unavailable.
-	on := credits.credits
+	on := credits.Credits
 	if on.Used == nil {
 		return EmptyCell
 	}
@@ -353,10 +362,10 @@ func creditsCell(credits CreditsState) string {
 	if on.Limit != nil {
 		limit = on.Limit.String()
 	}
-	if on.Percent < 0 {
+	if on.Percent == nil {
 		return fmt.Sprintf("%s / %s", on.Used, limit)
 	}
-	return fmt.Sprintf("%s / %s (%d%%)", on.Used, limit, on.Percent)
+	return fmt.Sprintf("%s / %s (%d%%)", on.Used, limit, *on.Percent)
 }
 
 // resetSlot is one reset column's cell before its column's width is
@@ -399,7 +408,7 @@ func (s resetSlot) finalize(width int) string {
 
 // resetSlotFor returns the slot for one window: a pair to justify when
 // it carries a reset, an em dash otherwise.
-func resetSlotFor(window *LimitWindow, now time.Time, zone *time.Location) resetSlot {
+func resetSlotFor(window *usage.LimitWindow, now time.Time, zone *time.Location) resetSlot {
 	if window == nil || window.ResetsAt.IsZero() {
 		return resetSlot{text: EmptyCell}
 	}

@@ -171,45 +171,6 @@ func TestAbsoluteLocalNamedZoneAgreesWithItsFixedOffset(t *testing.T) {
 	}
 }
 
-func TestCountdown(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		now    string
-		target string
-		want   string
-	}{
-		"success: days lead with the remaining hours": {
-			now: testNow, target: "2026-09-13T05:00:00Z", want: "4d4h",
-		},
-		"success: hours lead with the remaining minutes": {
-			now: testNow, target: "2026-09-09T03:13:40Z", want: "2h13m",
-		},
-		"success: bare minutes under an hour": {
-			now: testNow, target: "2026-09-09T01:45:00Z", want: "45m",
-		},
-		"success: bare seconds under a minute": {
-			now: testNow, target: "2026-09-09T01:00:45Z", want: "45s",
-		},
-		"success: a reset that has already passed prints now": {
-			now: testNow, target: "2026-09-09T00:30:00Z", want: "now",
-		},
-		"success: a reset at this very instant prints now": {
-			now: testNow, target: testNow, want: "now",
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			got := Countdown(ts(t, tt.now), ts(t, tt.target))
-			if diff := gocmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("Countdown(%s, %s) mismatch (-want +got):\n%s", tt.now, tt.target, diff)
-			}
-		})
-	}
-}
-
 func TestResetCell(t *testing.T) {
 	t.Parallel()
 

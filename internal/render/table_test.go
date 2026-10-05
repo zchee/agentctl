@@ -15,13 +15,14 @@
 package render
 
 import (
-	"math"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
+
+	"github.com/zchee/agentctl/internal/usage"
 )
 
 // reportNow is the fixed clock every table here is rendered against, so
@@ -29,18 +30,51 @@ import (
 // Tuesday 2026-09-08 in the +09:00 zone the tables are rendered in.
 const reportNow = "2026-09-08T00:00:00Z"
 
-func window(kind WindowKind, percent int, resetsAt time.Time) LimitWindow {
-	return LimitWindow{Kind: kind, PercentFloor: percent, ResetsAt: resetsAt}
+func window(kind usage.WindowKind, percent int, resetsAt time.Time) usage.LimitWindow {
+	exact := float64(percent)
+	return usage.LimitWindow{Kind: kind, Percent: &exact, PercentFloor: &percent, ResetsAt: resetsAt}
+}
+
+func sessionWindowKind() usage.WindowKind {
+	return usage.WindowKind{Class: usage.WindowSession}
+}
+
+func weeklyAllWindowKind() usage.WindowKind {
+	return usage.WindowKind{Class: usage.WindowWeeklyAll}
+}
+
+func weeklyScopedWindowKind(scope string) usage.WindowKind {
+	return usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: scope}
+}
+
+func unknownWindowKind(kind string) usage.WindowKind {
+	return usage.WindowKind{Class: usage.WindowUnknown, Name: kind}
+}
+
+func creditsUnavailable() usage.CreditsState {
+	return usage.CreditsState{Class: usage.CreditsUnavailable}
+}
+
+func creditsOff() usage.CreditsState {
+	return usage.CreditsState{Class: usage.CreditsOff}
+}
+
+func creditsOn(used, limit *usage.Money, percent int) usage.CreditsState {
+	credits := usage.Credits{Used: used, Limit: limit}
+	if percent >= 0 {
+		credits.Percent = &percent
+	}
+	return usage.CreditsState{Class: usage.CreditsOn, Credits: credits}
 }
 
 // healthyWindows is the three windows a healthy subscription account
 // reports.
-func healthyWindows(tb testing.TB) []LimitWindow {
+func healthyWindows(tb testing.TB) []usage.LimitWindow {
 	tb.Helper()
-	return []LimitWindow{
-		window(SessionWindow(), 21, ts(tb, "2026-09-08T02:13:40Z")),
-		window(WeeklyAllWindow(), 35, ts(tb, "2026-09-10T20:00:00Z")),
-		window(WeeklyScopedWindow("Fable"), 56, ts(tb, "2026-09-10T20:00:00Z")),
+	return []usage.LimitWindow{
+		window(sessionWindowKind(), 21, ts(tb, "2026-09-08T02:13:40Z")),
+		window(weeklyAllWindowKind(), 35, ts(tb, "2026-09-10T20:00:00Z")),
+		window(weeklyScopedWindowKind("Fable"), 56, ts(tb, "2026-09-10T20:00:00Z")),
 	}
 }
 
@@ -51,7 +85,7 @@ func healthyRow(tb testing.TB, account string) StatusRow {
 		Org:              "Acme",
 		Plan:             "max",
 		State:            "ok",
-		Usage:            &UsageSnapshot{Windows: healthyWindows(tb), Credits: CreditsUnavailable()},
+		Usage:            &usage.UsageSnapshot{Windows: healthyWindows(tb), Credits: creditsUnavailable()},
 		VisibleByDefault: true,
 		Kind:             "owned",
 	}
@@ -262,9 +296,9 @@ func TestARowWithOnlyAWeeklyWindowLeavesTheFiveHourResetAnEmDash(t *testing.T) {
 	t.Parallel()
 
 	row := healthyRow(t, "alice@example.com")
-	row.Usage = &UsageSnapshot{
-		Windows: []LimitWindow{window(WeeklyAllWindow(), 35, ts(t, "2026-09-10T20:00:00Z"))},
-		Credits: CreditsUnavailable(),
+	row.Usage = &usage.UsageSnapshot{
+		Windows: []usage.LimitWindow{window(weeklyAllWindowKind(), 35, ts(t, "2026-09-10T20:00:00Z"))},
+		Credits: creditsUnavailable(),
 	}
 
 	rendered := Render(report(t, []StatusRow{row}, false))
@@ -284,12 +318,12 @@ func TestAWindowThatCarriesNoResetIsAnEmDashRatherThanABareCountdown(t *testing.
 	// A window with a percentage and no reset is a real shape, and the
 	// percentage columns must still fill.
 	row := healthyRow(t, "alice@example.com")
-	row.Usage = &UsageSnapshot{
-		Windows: []LimitWindow{
-			window(SessionWindow(), 21, time.Time{}),
-			window(WeeklyAllWindow(), 35, time.Time{}),
+	row.Usage = &usage.UsageSnapshot{
+		Windows: []usage.LimitWindow{
+			window(sessionWindowKind(), 21, time.Time{}),
+			window(weeklyAllWindowKind(), 35, time.Time{}),
 		},
-		Credits: CreditsUnavailable(),
+		Credits: creditsUnavailable(),
 	}
 
 	rendered := Render(report(t, []StatusRow{row}, false))
@@ -311,11 +345,11 @@ func TestAnUnknownWindowGetsAContinuationRowNamingItsKind(t *testing.T) {
 
 	windows := healthyWindows(t)
 	windows = append(windows,
-		window(UnknownWindow("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z")),
-		window(WeeklyScopedWindow("opus"), 12, time.Time{}),
+		window(unknownWindowKind("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z")),
+		window(weeklyScopedWindowKind("opus"), 12, time.Time{}),
 	)
 	row := healthyRow(t, "alice@example.com")
-	row.Usage = &UsageSnapshot{Windows: windows, Credits: CreditsUnavailable()}
+	row.Usage = &usage.UsageSnapshot{Windows: windows, Credits: creditsUnavailable()}
 
 	rendered := Render(report(t, []StatusRow{row}, false))
 	if !strings.Contains(rendered, "↳ monthly_foo (unknown kind)") {
@@ -330,9 +364,9 @@ func TestAContinuationRowsResetSitsInTheWeeklyColumn(t *testing.T) {
 	t.Parallel()
 
 	windows := healthyWindows(t)
-	windows = append(windows, window(UnknownWindow("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z")))
+	windows = append(windows, window(unknownWindowKind("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z")))
 	row := healthyRow(t, "alice@example.com")
-	row.Usage = &UsageSnapshot{Windows: windows, Credits: CreditsUnavailable()}
+	row.Usage = &usage.UsageSnapshot{Windows: windows, Credits: creditsUnavailable()}
 
 	rendered := Render(report(t, []StatusRow{row}, false))
 	cells := cellsOf(t, rendered, "↳ monthly_foo")
@@ -358,14 +392,14 @@ func TestTheWeeklyResetColumnRightAlignsItsClosingParenAcrossRows(t *testing.T) 
 	// shorter row's parenthesis must still land on the same right edge:
 	// "6d5h" gets three extra spaces where "19h32m" gets one.
 	short := healthyRow(t, "alice@example.com")
-	short.Usage = &UsageSnapshot{
-		Windows: []LimitWindow{window(WeeklyAllWindow(), 35, ts(t, "2026-09-14T05:00:00Z"))},
-		Credits: CreditsUnavailable(),
+	short.Usage = &usage.UsageSnapshot{
+		Windows: []usage.LimitWindow{window(weeklyAllWindowKind(), 35, ts(t, "2026-09-14T05:00:00Z"))},
+		Credits: creditsUnavailable(),
 	}
 	long := healthyRow(t, "bob@example.com")
-	long.Usage = &UsageSnapshot{
-		Windows: []LimitWindow{window(WeeklyAllWindow(), 35, ts(t, "2026-09-08T19:32:00Z"))},
-		Credits: CreditsUnavailable(),
+	long.Usage = &usage.UsageSnapshot{
+		Windows: []usage.LimitWindow{window(weeklyAllWindowKind(), 35, ts(t, "2026-09-08T19:32:00Z"))},
+		Credits: creditsUnavailable(),
 	}
 
 	rendered := Render(report(t, []StatusRow{short, long}, false))
@@ -416,10 +450,10 @@ func TestAContinuationRowLeavesTheKindCellBlank(t *testing.T) {
 	// The window belongs to the account named above it, so repeating
 	// that account's kind on it would read as a second account.
 	windows := healthyWindows(t)
-	windows = append(windows, window(WeeklyScopedWindow("opus"), 12, time.Time{}))
+	windows = append(windows, window(weeklyScopedWindowKind("opus"), 12, time.Time{}))
 	row := healthyRow(t, "alice@example.com")
 	row.Kind = LiveAndOwnedKind
-	row.Usage = &UsageSnapshot{Windows: windows, Credits: CreditsUnavailable()}
+	row.Usage = &usage.UsageSnapshot{Windows: windows, Credits: creditsUnavailable()}
 
 	rendered := Render(byIdentity(t, []StatusRow{row}))
 	var continuation string
@@ -455,39 +489,39 @@ func TestAnEmptyReportStillExplainsItself(t *testing.T) {
 	}
 }
 
-func money(amountMinor int64, currency string, exponent uint8) *Money {
-	return &Money{AmountMinor: amountMinor, Currency: currency, Exponent: exponent}
+func money(amountMinor int64, currency string, exponent uint8) *usage.Money {
+	return &usage.Money{AmountMinor: amountMinor, Currency: currency, Exponent: exponent}
 }
 
 func TestTheCreditsCellCoversEveryStateTheColumnCanReach(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		credits CreditsState
+		credits usage.CreditsState
 		want    string
 	}{
 		"success: no credits information at all renders n/a": {
-			credits: CreditsUnavailable(),
+			credits: creditsUnavailable(),
 			want:    "n/a",
 		},
 		"success: credits switched off render off, not n/a": {
-			credits: CreditsOff(),
+			credits: creditsOff(),
 			want:    "off",
 		},
 		"success: capped credits carry the used, the limit and the percent": {
-			credits: CreditsOn(Credits{Used: money(1234, "USD", 2), Limit: money(5000, "USD", 2), Percent: 25}),
+			credits: creditsOn(money(1234, "USD", 2), money(5000, "USD", 2), 25),
 			want:    "$12.34 / $50.00 (25%)",
 		},
 		"success: an uncapped account says Unlimited and drops the percent": {
-			credits: CreditsOn(Credits{Used: money(1234, "USD", 2), Percent: -1}),
+			credits: creditsOn(money(1234, "USD", 2), nil, -1),
 			want:    "$12.34 / Unlimited",
 		},
 		"success: credits on with no used figure are unavailable, not an unlimited nothing": {
-			credits: CreditsOn(Credits{Percent: -1}),
+			credits: creditsOn(nil, nil, -1),
 			want:    EmptyCell,
 		},
 		"success: the real capture's figures render to the cent": {
-			credits: CreditsOn(Credits{Used: money(21956, "USD", 2), Limit: money(500000, "USD", 2), Percent: 4}),
+			credits: creditsOn(money(21956, "USD", 2), money(500000, "USD", 2), 4),
 			want:    "$219.56 / $5000.00 (4%)",
 		},
 	}
@@ -496,62 +530,11 @@ func TestTheCreditsCellCoversEveryStateTheColumnCanReach(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			row := healthyRow(t, "owner@example.com")
-			row.Usage = &UsageSnapshot{Windows: healthyWindows(t), Credits: tt.credits}
+			row.Usage = &usage.UsageSnapshot{Windows: healthyWindows(t), Credits: tt.credits}
 			rendered := Render(report(t, []StatusRow{row}, false))
 			got := cellsOf(t, rendered, "owner@example.com")[column(t, Headings(false), "Credits")]
 			if diff := gocmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("credits cell mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestMoneyString(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		money Money
-		want  string
-	}{
-		"success: USD renders with the dollar sign": {
-			money: Money{AmountMinor: 1234, Currency: "USD", Exponent: 2},
-			want:  "$12.34",
-		},
-		"success: another currency renders with its code": {
-			money: Money{AmountMinor: 1234, Currency: "EUR", Exponent: 2},
-			want:  "EUR 12.34",
-		},
-		"success: an empty currency renders the bare figure": {
-			money: Money{AmountMinor: 1234, Exponent: 2},
-			want:  "12.34",
-		},
-		"success: a zero exponent renders no decimal point": {
-			money: Money{AmountMinor: 1234, Currency: "USD"},
-			want:  "$1234",
-		},
-		"success: a three-decimal currency keeps its leading zeros": {
-			money: Money{AmountMinor: 1005, Currency: "KWD", Exponent: 3},
-			want:  "KWD 1.005",
-		},
-		"success: a negative amount keeps the sign ahead of the symbol": {
-			money: Money{AmountMinor: -1234, Currency: "USD", Exponent: 2},
-			want:  "-$12.34",
-		},
-		"success: the most negative amount still renders": {
-			money: Money{AmountMinor: math.MinInt64, Currency: "USD", Exponent: 2},
-			want:  "-$92233720368547758.08",
-		},
-		"success: a nonsensical exponent is clamped rather than refused": {
-			money: Money{AmountMinor: 1234, Currency: "USD", Exponent: 200},
-			want:  "$0.001234",
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if diff := gocmp.Diff(tt.want, tt.money.String()); diff != "" {
-				t.Errorf("Money.String() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -597,8 +580,8 @@ func TestStateCellJoinsItsNotesWithASemicolon(t *testing.T) {
 
 func codexRow(tb testing.TB, account string) CodexTableRow {
 	tb.Helper()
-	session := window(SessionWindow(), 21, ts(tb, "2026-09-08T02:13:40Z"))
-	weekly := window(WeeklyAllWindow(), 35, ts(tb, "2026-09-10T20:00:00Z"))
+	session := window(sessionWindowKind(), 21, ts(tb, "2026-09-08T02:13:40Z"))
+	weekly := window(weeklyAllWindowKind(), 35, ts(tb, "2026-09-10T20:00:00Z"))
 	return CodexTableRow{
 		Account:          account,
 		Plan:             "plus",
@@ -615,7 +598,7 @@ func TestRenderCodexKeepsItsOwnColumns(t *testing.T) {
 	t.Parallel()
 
 	row := codexRow(t, "dev@example.com")
-	row.Extra = []LimitWindow{window(UnknownWindow("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z"))}
+	row.Extra = []usage.LimitWindow{window(unknownWindowKind("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z"))}
 	hidden := codexRow(t, "forgotten@example.com")
 	hidden.VisibleByDefault = false
 

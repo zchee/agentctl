@@ -18,11 +18,12 @@
 package render
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
+
+	"github.com/zchee/agentctl/internal/usage"
 )
 
 // A reset cell carries a countdown and the absolute local time it names.
@@ -77,33 +78,6 @@ const withWeekdayLayout = "Mon 03:04 PM"
 // only the hour needs the constant width.
 const withDateLayout = "Jan 2 03:04 PM"
 
-// Countdown formats the time until target as a compact countdown:
-// "3d4h", "2h13m", "45m", "30s", and "now" for a reset that has already
-// passed — a stale window rolling over between the fetch and the render
-// is ordinary, not an error worth a negative duration.
-func Countdown(now, target time.Time) string {
-	millis := target.Sub(now).Milliseconds()
-	if millis <= 0 {
-		return "now"
-	}
-
-	seconds := millis / 1000
-	minutes := seconds / 60
-	hours := minutes / 60
-	days := hours / 24
-
-	switch {
-	case days > 0:
-		return fmt.Sprintf("%dd%dh", days, hours%24)
-	case hours > 0:
-		return fmt.Sprintf("%dh%dm", hours, minutes%60)
-	case minutes > 0:
-		return fmt.Sprintf("%dm", minutes)
-	default:
-		return fmt.Sprintf("%ds", seconds)
-	}
-}
-
 // resetParts returns the countdown and the absolute local time for one
 // reset, un-joined. A caller building a whole column needs both halves of
 // every row before it can compute the column's width, so it cannot go
@@ -111,7 +85,7 @@ func Countdown(now, target time.Time) string {
 // justifyReset is the other half, taking what this returns and the width
 // the caller computed.
 func resetParts(now, resetsAt time.Time, loc *time.Location) (countdown, absolute string) {
-	return Countdown(now, resetsAt), absoluteLocal(now, resetsAt, loc)
+	return usage.RenderCountdown(now, resetsAt), absoluteLocal(now, resetsAt, loc)
 }
 
 // justifyReset lays countdown flush left and "(absolute)" flush right
@@ -141,10 +115,10 @@ func justifyReset(countdown, absolute string, width int) string {
 // instead, once per column rather than once per cell, so every row in a
 // column shares the same width.
 //
-// The countdown is Countdown — the same function the watch detail line
-// uses, so the two presentations cannot drift apart — and a reset that
-// has already passed renders as "now", which is what a window rolling
-// over between the fetch and the render looks like.
+// The countdown comes from the usage model — the same function the
+// watch detail line uses, so the two presentations cannot drift apart —
+// and a reset that has already passed renders as "now", which is what a
+// window rolling over between the fetch and the render looks like.
 func ResetCell(now, resetsAt time.Time, loc *time.Location) string {
 	countdown, absolute := resetParts(now, resetsAt, loc)
 	return countdown + " (" + absolute + ")"

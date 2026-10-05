@@ -22,6 +22,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/zchee/agentctl/internal/testutil"
+	"github.com/zchee/agentctl/internal/usage"
 )
 
 // The stored table bodies were recorded by a snapshot tool that trims
@@ -71,11 +72,11 @@ func TestGoldenContinuationRows(t *testing.T) {
 
 	windows := healthyWindows(t)
 	windows = append(windows,
-		window(UnknownWindow("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z")),
-		window(WeeklyScopedWindow("opus"), 12, time.Time{}),
+		window(unknownWindowKind("monthly_foo"), 7, ts(t, "2026-10-01T00:00:00Z")),
+		window(weeklyScopedWindowKind("opus"), 12, time.Time{}),
 	)
 	row := healthyRow(t, "alice@example.com")
-	row.Usage = &UsageSnapshot{Windows: windows, Credits: CreditsUnavailable()}
+	row.Usage = &usage.UsageSnapshot{Windows: windows, Credits: creditsUnavailable()}
 
 	rendered := Render(report(t, []StatusRow{row}, false))
 	testutil.GoldenTrimmed(t, "render__table__tests__continuation_rows", []byte(rendered))
@@ -108,7 +109,7 @@ func TestGoldenDegradedStates(t *testing.T) {
 		Account:          "carol@example.com",
 		Org:              "Acme",
 		State:            "no subscription limits (API/console account?)",
-		Usage:            &UsageSnapshot{Credits: CreditsUnavailable()},
+		Usage:            &usage.UsageSnapshot{Credits: creditsUnavailable()},
 		VisibleByDefault: true,
 		Kind:             "owned",
 	}
@@ -126,19 +127,19 @@ func TestGoldenCreditsCells(t *testing.T) {
 	// same spend against no cap at all.
 	states := []struct {
 		name    string
-		credits CreditsState
+		credits usage.CreditsState
 	}{
-		{"n/a", CreditsUnavailable()},
-		{"off", CreditsOff()},
-		{"capped", CreditsOn(Credits{Used: money(1234, "USD", 2), Limit: money(5000, "USD", 2), Percent: 25})},
-		{"uncapped", CreditsOn(Credits{Used: money(1234, "USD", 2), Percent: -1})},
-		{"unmeasured", CreditsOn(Credits{Percent: -1})},
+		{"n/a", creditsUnavailable()},
+		{"off", creditsOff()},
+		{"capped", creditsOn(money(1234, "USD", 2), money(5000, "USD", 2), 25)},
+		{"uncapped", creditsOn(money(1234, "USD", 2), nil, -1)},
+		{"unmeasured", creditsOn(nil, nil, -1)},
 	}
 
 	rows := make([]StatusRow, 0, len(states))
 	for _, state := range states {
 		row := healthyRow(t, state.name)
-		row.Usage = &UsageSnapshot{Windows: healthyWindows(t), Credits: state.credits}
+		row.Usage = &usage.UsageSnapshot{Windows: healthyWindows(t), Credits: state.credits}
 		rows = append(rows, row)
 	}
 
@@ -232,8 +233,8 @@ func TestColumnsAlignByDisplayWidth(t *testing.T) {
 	combining := healthyRow(t, "café@example.com")
 	emoji := healthyRow(t, "alerts⚠️@example.com")
 	windows := healthyWindows(t)
-	windows = append(windows, window(WeeklyScopedWindow("超大型モデル"), 12, time.Time{}))
-	cjk.Usage = &UsageSnapshot{Windows: windows, Credits: CreditsUnavailable()}
+	windows = append(windows, window(weeklyScopedWindowKind("超大型モデル"), 12, time.Time{}))
+	cjk.Usage = &usage.UsageSnapshot{Windows: windows, Credits: creditsUnavailable()}
 
 	rendered := Render(report(t, []StatusRow{cjk, combining, emoji}, false))
 	lines := strings.Split(rendered, "\n")
