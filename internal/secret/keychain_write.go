@@ -64,7 +64,7 @@ type KeychainWriter struct {
 func NewKeychainWriter() *KeychainWriter {
 	reader, ok := newReader().(*securityCLI)
 	if !ok {
-		return &KeychainWriter{account: currentAccount()}
+		return &KeychainWriter{account: CurrentAccount()}
 	}
 	return &KeychainWriter{bin: reader.bin, account: reader.account, env: reader.env, budget: KeychainWriteTimeout}
 }

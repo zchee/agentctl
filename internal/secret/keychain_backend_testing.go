@@ -49,7 +49,7 @@ func newReader() Reader {
 	if bin == "" {
 		return DisabledReader{}
 	}
-	return newSecurityCLI(bin, currentAccount(), testingChildEnv())
+	return newSecurityCLI(bin, CurrentAccount(), testingChildEnv())
 }
 
 // testingChildEnv is the release child environment plus every stand-in knob

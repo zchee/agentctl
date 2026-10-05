@@ -137,7 +137,7 @@ func TestCurrentAccountFallsBackThroughLogname(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("USER", tt.user)
 			t.Setenv("LOGNAME", tt.logname)
-			if got := currentAccount(); got != tt.want {
+			if got := CurrentAccount(); got != tt.want {
 				t.Errorf("currentAccount() = %q, want %q", got, tt.want)
 			}
 		})

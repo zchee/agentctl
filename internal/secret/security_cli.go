@@ -95,11 +95,11 @@ func minimalChildEnv() []string {
 	return env
 }
 
-// currentAccount is the account attribute the vendor tooling stores its
+// CurrentAccount is the account attribute the vendor tooling stores its
 // items under: $USER, with LOGNAME as the fallback. An empty account still
 // produces a well-formed find-generic-password call, which simply finds
 // nothing.
-func currentAccount() string {
+func CurrentAccount() string {
 	if user := os.Getenv("USER"); user != "" {
 		return user
 	}

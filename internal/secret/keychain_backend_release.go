@@ -29,5 +29,5 @@ func newReader() Reader {
 	if runtime.GOOS != "darwin" {
 		return unsupportedReader{}
 	}
-	return newSecurityCLI(securityBin, currentAccount(), minimalChildEnv())
+	return newSecurityCLI(securityBin, CurrentAccount(), minimalChildEnv())
 }

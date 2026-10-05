@@ -34,6 +34,7 @@ import (
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/runtime/cleanup"
+	"github.com/zchee/agentctl/internal/runtime/fault"
 )
 
 // SymlinkRefusedError reports a symbolic link at a credential path, or at a
@@ -353,6 +354,8 @@ func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec
 		return WriteOutcome{}, errs.NewIO(fmt.Sprintf("could not write `%s`", tmpShown), err)
 	}
 
+	activeFaults := fault.Active()
+	activeFaults.PausePoint("before_rename")
 	if f.faults != nil && f.faults.beforeRename != nil {
 		f.faults.beforeRename()
 	}
@@ -370,6 +373,8 @@ func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec
 	var renameErr error
 	if f.faults != nil && f.faults.renameErr != nil {
 		renameErr = f.faults.renameErr
+	} else if activeFaults.Is("rename_fail") {
+		renameErr = unix.EXDEV
 	} else {
 		renameErr = unix.Renameat(f.dir, tmpName, f.dir, f.name)
 	}
