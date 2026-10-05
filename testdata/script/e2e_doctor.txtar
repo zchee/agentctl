@@ -67,6 +67,28 @@ stdout 'last config write applied.*its account differs from the file'
 cp stdout config-mismatch
 doctor-state store-block config-mismatch
 
+# Identity-valued verdicts must not be confused with UUID-bearing temp paths.
+mkdir tmp-11111111-2222-3333-4444-555555555555@path
+env DOCTOR_ORIGINAL_TMPDIR=$TMPDIR
+env TMPDIR=$WORK/tmp-11111111-2222-3333-4444-555555555555@path
+doctorfixture config-match $TMPDIR
+exec agentctl claude doctor
+stdout 'config dir.*11111111-2222-3333-4444-555555555555@path'
+stdout 'last config write applied.*its account agrees with the file'
+cp stdout uuid-path-match
+doctor-state store-block uuid-path-match
+doctorfixture config-mismatch $TMPDIR
+exec agentctl claude doctor
+stdout 'last config write applied.*its account differs from the file'
+cp stdout uuid-path-mismatch
+doctor-state store-block uuid-path-mismatch
+env TMPDIR=$DOCTOR_ORIGINAL_TMPDIR
+
+# UUID and email leakage in identity-valued fields must still be detected.
+! doctor-state store-block uuid-verdict.txt
+! doctor-state store-block email-verdict.txt
+! doctor-state store-block uuid-state.txt
+
 # e2e_accounts.rs: doctor_reports_every_part_of_the_store.
 doctorfixture all
 exec agentctl claude doctor
@@ -218,5 +240,18 @@ cmp unchanged $NS/.storage-write
 [!darwin] stderr 'stale lock removal unsupported on this platform: peer visibility is unproved'
 [!darwin] ! exists $WORK/uncreated
 
+-- uuid-verdict.txt --
+store
+  audit log        /tmp/audit (present)
+  claude config    /tmp/config (lock /tmp/config.lock); account 11111111-2222-3333-4444-555555555555
+-- email-verdict.txt --
+store
+  audit log        /tmp/audit (present)
+  claude config    /tmp/config (lock /tmp/config.lock); account user@example.invalid
+-- uuid-state.txt --
+store
+  registry         /tmp/registry (account 11111111-2222-3333-4444-555555555555)
+  audit log        /tmp/audit (present)
+  claude config    /tmp/config (lock /tmp/config.lock); no config write recorded
 -- unchanged --
 unchanged

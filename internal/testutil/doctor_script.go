@@ -42,11 +42,15 @@ func doctorScriptWrite(ts *testscript.TestScript, path string, document any) {
 }
 
 func doctorScriptFixture(ts *testscript.TestScript, neg bool, args []string) {
-	if neg || len(args) != 1 {
-		ts.Fatalf("usage: doctorfixture <empty|owned|session|rich|leaked|all|audit|config-match|config-mismatch>")
+	if neg || len(args) < 1 || len(args) > 2 {
+		ts.Fatalf("usage: doctorfixture <empty|owned|session|rich|leaked|all|audit|config-match|config-mismatch> [parent]")
 	}
 	kind := args[0]
-	root, err := os.MkdirTemp(ts.MkAbs("."), "doctor-")
+	parent := ts.MkAbs(".")
+	if len(args) == 2 {
+		parent = ts.MkAbs(args[1])
+	}
+	root, err := os.MkdirTemp(parent, "doctor-")
 	ts.Check(err)
 	config, home := filepath.Join(root, "config"), filepath.Join(root, "home")
 	org := Org
@@ -137,7 +141,7 @@ func doctorScriptFixture(ts *testscript.TestScript, neg bool, args []string) {
 }
 
 func doctorScriptState(ts *testscript.TestScript, neg bool, args []string) {
-	if neg || len(args) < 1 {
+	if len(args) < 1 || neg && args[0] != "store-block" {
 		ts.Fatalf("usage: doctor-state <age|record|mode|store-block|elapsed> [arguments]")
 	}
 	switch args[0] {
@@ -184,10 +188,29 @@ func doctorScriptState(ts *testscript.TestScript, neg bool, args []string) {
 		report := ts.ReadFile(args[1])
 		block, _, _ := strings.Cut(report, "\n\n")
 		uuid := regexp.MustCompile(`[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}`)
-		if strings.Contains(block, "@") || uuid.MatchString(block) {
-			ts.Fatalf("store block exposes an identity: %s", block)
-		}
 		lines := strings.Split(block, "\n")
+		exposesIdentity := false
+		for _, line := range lines {
+			value := line
+			switch {
+			case strings.HasPrefix(line, "  config dir"), strings.HasPrefix(line, "  namespace root"):
+				continue
+			case strings.HasPrefix(line, "  registry"), strings.HasPrefix(line, "  audit log"):
+				if _, state, ok := strings.Cut(line, " ("); ok {
+					value = state
+				}
+			case strings.HasPrefix(line, "  claude config"):
+				if _, verdict, ok := strings.Cut(line, "); "); ok {
+					value = verdict
+				}
+			}
+			if strings.Contains(value, "@") || uuid.MatchString(value) {
+				exposesIdentity = true
+			}
+		}
+		if exposesIdentity != neg {
+			ts.Fatalf("store block identity exposure = %t; want %t", exposesIdentity, neg)
+		}
 		for i, line := range lines {
 			if strings.HasPrefix(line, "  audit log") && (i+1 >= len(lines) || !strings.HasPrefix(lines[i+1], "  claude config")) {
 				ts.Fatalf("configuration row does not follow audit row: %s", block)
