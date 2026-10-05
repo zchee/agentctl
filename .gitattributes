@@ -3,5 +3,9 @@
 
 * text=auto eol=lf
 
+# Deliberately invalid terminal capture: a lone UTF-16 LE byte-order mark.
+# Its bytes are the test input and must never be normalised.
+fixtures/rc-screens/capture_invalid.bin -text
+
 go.sum       linguist-vendored
 go.work.sum  linguist-vendored
