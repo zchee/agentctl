@@ -79,6 +79,7 @@ func readHandlers(deps Dependencies, handlers *cli.Handlers) {
 			Client:    claude.NewUsageClientFromEnv(timeout),
 			Refresher: oauth,
 			Profiles:  oauth,
+			Writer:    secret.NewKeychainWriter(),
 			Env:       &env,
 			Stdout:    deps.Stdout,
 		}

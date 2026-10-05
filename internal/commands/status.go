@@ -40,6 +40,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -301,12 +302,41 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 	}
 
 	owns := row.Record.Kind.Owned != nil
-	// Both questions are asked of the state discovery produced.
-	// Discovery has already looked for a session or a migration; a row
-	// it flagged is one this pass must not write, whoever owns the
-	// record.
+	var migrated *migratedRefreshTarget
+	if outcome.state.Kind == claude.StateMigratedToKeychain {
+		var refusal string
+		migrated, refusal = migratedRefreshItem(paths, &row.Record, outcome.state.Service, options.listing)
+		if migrated != nil {
+			outcome.state = claude.StateOfOK()
+			outcome.note = fmt.Sprintf("keychain service `%s`", migrated.service)
+		} else {
+			outcome.note, outcome.lockState = refusal, "migrated"
+		}
+	}
+	// Pending decisions do not determine whether discovery allowed network I/O.
 	networkAllowed := outcome.state.AllowsNetwork()
 	refreshable := owns && outcome.state.Kind != claude.StateClaudeSessionDetected && outcome.state.Kind != claude.StateMigratedToKeychain
+	if owns {
+		pending := filepath.Join(paths.NamespaceDir(row.Record.AccountUUID, row.Record.OrganizationUUID), secret.PendingFile)
+		if _, err := os.Lstat(pending); err == nil {
+			result := s.underNamespaceLock(ctx, paths, &row.Record, options.listing, false)
+			applyRefresh(&outcome, result)
+			if result.credentials == nil {
+				outcome.usage = cachedUsage()
+				return outcome
+			}
+			credentials, networkAllowed = result.credentials, true
+			if credentials.SubscriptionType != nil {
+				outcome.plan = *credentials.SubscriptionType
+			}
+		}
+	}
+	refresh := func() refreshOutcome {
+		if migrated != nil {
+			return s.refreshMigrated(ctx, paths, migrated, credentials)
+		}
+		return s.refreshExpired(ctx, paths, &row.Record, options.listing)
+	}
 
 	// A server-imposed wait outlives the process that was told about it:
 	// a second run inside the window must not call at all.
@@ -343,7 +373,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 	expired := credentials.AccessExpired(nowMillis, claude.RefreshMarginMillis)
 	switch {
 	case expired && refreshable:
-		result := s.refreshExpired(ctx, paths, &row.Record, options.listing)
+		result := refresh()
 		applyRefresh(&outcome, result)
 		if result.credentials == nil {
 			outcome.usage = cachedUsage()
@@ -391,7 +421,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 			// Routine: the two use different clocks.
 			if refreshable && !refreshedOnce {
 				refreshedOnce = true
-				result := s.refreshExpired(ctx, paths, &row.Record, options.listing)
+				result := refresh()
 				applyRefresh(&outcome, result)
 				if result.credentials == nil {
 					if outcome.state == carried {
