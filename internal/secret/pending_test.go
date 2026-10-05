@@ -416,8 +416,12 @@ func TestPendingAnUnopenableFileKeepsEverythingUnderTheStrictRuleOnly(t *testing
 	// resolution is an error and all three files stay; under the lenient
 	// rule an unopenable target is absent, so a derived pending file is
 	// discarded as file removed.
-	if os.Getuid() == 0 {
-		t.Skip("mode-0000 files are readable by root")
+	if os.Getenv("AGENTCTL_TEST_PENDING_UNPRIVILEGED") != "1" {
+		testPendingWithoutPrivileges(t)
+		return
+	}
+	if os.Geteuid() == 0 {
+		t.Fatal("permission assertions must run without root privileges")
 	}
 	old := tokenDocJSON("at-old", "rt-old")
 	for _, unopenable := range []string{testAuth, testAuthPending, testAuthMeta} {
