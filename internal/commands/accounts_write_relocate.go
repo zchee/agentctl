@@ -145,9 +145,8 @@ func (a *Accounts) Relocate(ctx context.Context, opts cli.ClaudeAccountsRelocate
 		if err != nil {
 			return err
 		}
-		defer memguard.WipeBytes(blob)
 		writeCtx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
-		_, err = secret.WriteCredentials(writeCtx, &secret.WriteRequest{Paths: a.Paths, NSDir: target, BlobJSON: blob, NewExpiresAtMS: current.ExpiresAtMillis})
+		_, err = writeCredentialBlob(writeCtx, &secret.WriteRequest{Paths: a.Paths, NSDir: target, BlobJSON: blob, NewExpiresAtMS: current.ExpiresAtMillis})
 		cancel()
 		if err != nil {
 			return errs.NewConfig(fmt.Sprintf("could not write `%s`: %v", target, err))

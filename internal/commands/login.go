@@ -225,10 +225,9 @@ func (l *Login) Run(ctx context.Context, opts cli.ClaudeLoginOptions) error {
 	if err != nil {
 		return err
 	}
-	defer memguard.WipeBytes(blob)
 	writeCtx, cancel := context.WithTimeout(ctx, claude.TokenTimeout)
 	defer cancel()
-	outcome, err := secret.WriteCredentials(writeCtx, &secret.WriteRequest{Paths: l.Paths, NSDir: nsDir, BlobJSON: blob, Prior: prior, NewExpiresAtMS: credentials.ExpiresAtMillis})
+	outcome, err := writeCredentialBlob(writeCtx, &secret.WriteRequest{Paths: l.Paths, NSDir: nsDir, BlobJSON: blob, Prior: prior, NewExpiresAtMS: credentials.ExpiresAtMillis})
 	if err != nil {
 		return errs.NewConfig(fmt.Sprintf("could not store the credentials: %v", err))
 	}
@@ -263,6 +262,12 @@ func (l *Login) Run(ctx context.Context, opts cli.ClaudeLoginOptions) error {
 		return l.IO.Tell(fmt.Sprintf("Logged in as %s (%s).", *identity.Email, id))
 	}
 	return l.IO.Tell(fmt.Sprintf("Logged in (%s).", id))
+}
+
+// writeCredentialBlob consumes the serialized bytes before any later store I/O.
+func writeCredentialBlob(ctx context.Context, request *secret.WriteRequest) (secret.WriteOutcome, error) {
+	defer memguard.WipeBytes(request.BlobJSON)
+	return secret.WriteCredentials(ctx, request)
 }
 
 func isLoginLiveIdentity(live *claude.Identity, account, organization string) bool {

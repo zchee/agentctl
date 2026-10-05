@@ -242,6 +242,49 @@ func TestLoginRefusesNonterminalOverwrite(t *testing.T) {
 	}
 }
 
+func TestWriteCredentialBlobWipesBeforeReturning(t *testing.T) {
+	tests := map[string]struct {
+		outsideRoot bool
+	}{
+		"success: persisted before wipe":   {},
+		"error: refused write still wipes": {outsideRoot: true},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths := config.NewPaths(filepath.Join(t.TempDir(), "store"))
+			nsDir := paths.NamespaceDir("acct", "org")
+			if test.outsideRoot {
+				nsDir = t.TempDir()
+			}
+			credentials, err := claude.ParseBlob([]byte(`{"claudeAiOauth":{"accessToken":"sk-ant-planted-write","refreshToken":"sk-ant-planted-refresh","expiresAt":1234}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			blob, err := credentials.BlobJSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = writeCredentialBlob(t.Context(), &secret.WriteRequest{Paths: paths, NSDir: nsDir, BlobJSON: blob, NewExpiresAtMS: credentials.ExpiresAtMillis})
+			if (err != nil) != test.outsideRoot {
+				t.Fatalf("write error = %v; want error %v", err, test.outsideRoot)
+			}
+			if diff := gocmp.Diff(true, len(blob) > 0 && bytes.Equal(blob, make([]byte, len(blob)))); diff != "" {
+				t.Fatalf("serialized bytes must be zeroed before subsequent I/O (-want +got):\n%s", diff)
+			}
+			if test.outsideRoot {
+				return
+			}
+			stored, err := secret.ReadCredentials(nsDir)
+			if err != nil || !stored.Present {
+				t.Fatalf("stored credential: present=%v error=%v", stored.Present, err)
+			}
+			if !bytes.Contains(stored.Bytes, []byte("sk-ant-planted-write")) || !bytes.Contains(stored.Bytes, []byte("sk-ant-planted-refresh")) {
+				t.Fatal("credential was wiped before persistence completed")
+			}
+		})
+	}
+}
+
 func TestLoginClearStaleFiles(t *testing.T) {
 	paths := config.NewPaths(filepath.Join(t.TempDir(), "store"))
 	nsDir := paths.NamespaceDir("acct", "org")
