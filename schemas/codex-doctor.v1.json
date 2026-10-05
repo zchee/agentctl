@@ -206,7 +206,7 @@
           "items": { "type": "string" }
         },
         "unknown_member_count": {
-          "description": "How many members the document has that are not in that set. A COUNT: the names are file content (premortem PM22).",
+          "description": "How many members the document has that are not in that set. A COUNT: the names are file content.",
           "type": "integer",
           "minimum": 0
         }
