@@ -49,7 +49,14 @@ func TestDoctorHeartbeatSampling(t *testing.T) {
 			if tt.cancel {
 				cancel()
 			}
-			got := doctorHolderAlive(ctx, path, 250*time.Millisecond)
+			first, ok := doctorSample(path)
+			if ok != tt.create {
+				t.Fatalf("initial sample present = %t, want %t", ok, tt.create)
+			}
+			if !ok {
+				first.path = path
+			}
+			got := doctorHolderAlive(ctx, first, 250*time.Millisecond)
 			if diff := gocmp.Diff(tt.held, got); diff != "" {
 				t.Errorf("holder observation (-want +got):\n%s", diff)
 			}

@@ -85,7 +85,7 @@ func (d *Doctor) RemoveStale(ctx context.Context, path string, yes bool) error {
 	if !yes {
 		return errs.NewConfig(fmt.Sprintf("`--yes` is required to remove `%s`; nothing was removed", path))
 	}
-	if doctorHolderAlive(ctx, path, d.interval()) {
+	if doctorHolderAlive(ctx, first, d.interval()) {
 		return errs.NewConfig(fmt.Sprintf("`%s` was rewritten between the two samples, so something is holding it", path))
 	}
 	if err := secret.RemoveDirUnder(root, path); err != nil {

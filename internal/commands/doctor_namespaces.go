@@ -30,9 +30,10 @@ import (
 const doctorAnomalousFile = "anomalous (regular file; Claude Code makes lock directories)"
 
 type doctorArtefact struct {
-	path string
-	age  time.Duration
-	kind os.FileMode
+	path  string
+	age   time.Duration
+	mtime time.Time
+	kind  os.FileMode
 }
 
 func doctorSample(path string) (doctorArtefact, bool) {
@@ -40,7 +41,7 @@ func doctorSample(path string) (doctorArtefact, bool) {
 	if err != nil {
 		return doctorArtefact{}, false
 	}
-	return doctorArtefact{path: path, age: max(time.Since(info.ModTime()), 0), kind: info.Mode()}, true
+	return doctorArtefact{path: path, age: max(time.Since(info.ModTime()), 0), mtime: info.ModTime(), kind: info.Mode()}, true
 }
 
 func doctorArtefacts(nsDir string) []doctorArtefact {
@@ -149,7 +150,7 @@ func (d *Doctor) namespaceSection(ctx context.Context, registry *config.Registry
 	alive := make([]bool, len(candidates))
 	var workers sync.WaitGroup
 	for i, artefact := range candidates {
-		workers.Go(func() { alive[i] = doctorHolderAlive(ctx, artefact.path, d.interval()) })
+		workers.Go(func() { alive[i] = doctorHolderAlive(ctx, artefact, d.interval()) })
 	}
 	workers.Wait()
 	for i, artefact := range candidates {
@@ -165,12 +166,17 @@ func (d *Doctor) namespaceSection(ctx context.Context, registry *config.Registry
 	return out, nil
 }
 
-func doctorHolderAlive(ctx context.Context, path string, interval time.Duration) bool {
-	parent, err := os.Open(filepath.Dir(path))
+func doctorHolderAlive(ctx context.Context, first doctorArtefact, interval time.Duration) bool {
+	parent, err := os.Open(filepath.Dir(first.path))
 	if err != nil {
 		return true
 	}
 	defer func() { _ = parent.Close() }()
-	at := secret.LockSlot{Dir: int(parent.Fd()), Name: filepath.Base(path), Shown: path}
-	return secret.SampleHolderAcrossInterval(ctx, at, interval, secret.SystemClock(), secret.RealFS{})
+	at := secret.LockSlot{Dir: int(parent.Fd()), Name: filepath.Base(first.path), Shown: first.path}
+	// Keep the age-qualified sample: output may block while a holder heartbeats.
+	if err := secret.SystemClock().Sleep(ctx, interval); err != nil {
+		return true
+	}
+	second, present := (secret.RealFS{}).Mtime(at)
+	return !present || !second.Equal(first.mtime)
 }
