@@ -17,6 +17,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -152,12 +153,17 @@ func dispatch[T any](c *CLI, cmd *cobra.Command, h func(context.Context, Globals
 
 // groupCommand builds a parent command that only routes to subcommands and
 // rejects a bare invocation as a usage error, the way the rest of the
-// surface treats a missing required argument.
+// surface treats a missing required argument. An unknown subcommand is
+// named in the refusal: "a subcommand is required" would blame the user
+// for leaving out what they in fact misspelled.
 func groupCommand(use, short string) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,
 		Short: short,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath())
+			}
 			return errors.New("a subcommand is required; run `" + cmd.CommandPath() + " --help` for the list")
 		},
 	}

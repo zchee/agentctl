@@ -47,6 +47,9 @@ stderr 'supported shells are bash, zsh, fish, and powershell'
 stderr 'unknown command'
 
 ! exec agentctl claude bogus
+stderr 'unknown command "bogus" for "agentctl claude"'
+
+! exec agentctl claude
 stderr 'agentctl claude --help'
 
 # The exit contract, by number rather than by zero/non-zero: a usage

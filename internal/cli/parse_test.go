@@ -779,3 +779,36 @@ func TestANilHandlerFailsLoudly(t *testing.T) {
 		t.Fatalf("message = %q", notImplemented.Error())
 	}
 }
+
+func TestAGroupNamesTheUnknownSubcommandRatherThanDemandingOne(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		args []string
+		want string
+	}{
+		"error: an unknown claude subcommand is named": {
+			args: []string{"claude", "bogus"},
+			want: `unknown command "bogus" for "agentctl claude"`,
+		},
+		"error: an unknown accounts subcommand is named": {
+			args: []string{"claude", "accounts", "bogus"},
+			want: `unknown command "bogus" for "agentctl claude accounts"`,
+		},
+		"error: a bare group still asks for a subcommand": {
+			args: []string{"claude"},
+			want: "a subcommand is required; run `agentctl claude --help` for the list",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			message := mustReject(t, tt.args...)
+			if message != tt.want {
+				t.Errorf("rejection = %q, want %q", message, tt.want)
+			}
+		})
+	}
+}
