@@ -106,7 +106,7 @@ func ScriptCommands() map[string]func() {
 // sleeping, and refuses a lock somebody already holds.
 func flockholdMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 1 || len(args) > 2 {
-		say(stderr, "usage: flockhold <path> [duration]\\n")
+		say(stderr, "usage: flockhold <path> [duration]\n")
 		return 2
 	}
 	hold := time.Duration(-1)
@@ -143,7 +143,7 @@ func flockholdMain(args []string, stdout, stderr io.Writer) int {
 // sigtermMain sends SIGTERM to the process id in args[0].
 func sigtermMain(args []string, _, stderr io.Writer) int {
 	if len(args) != 1 {
-		say(stderr, "usage: sigterm <pid>\\n")
+		say(stderr, "usage: sigterm <pid>\n")
 		return 2
 	}
 	pid, err := strconv.Atoi(args[0])
@@ -163,7 +163,7 @@ func sigtermMain(args []string, _, stderr io.Writer) int {
 // assert a chatty child stayed live past the kernel's pipe buffer.
 func drainpipesMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 1 {
-		say(stderr, "usage: drainpipes <command> [args...]\\n")
+		say(stderr, "usage: drainpipes <command> [args...]\n")
 		return 2
 	}
 	cmd := exec.Command(args[0], args[1:]...)
@@ -187,7 +187,7 @@ func drainpipesMain(args []string, stdout, stderr io.Writer) int {
 // epoch, so a script can record it and prove it later unchanged.
 func mtimeMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		say(stderr, "usage: mtime <path>\\n")
+		say(stderr, "usage: mtime <path>\n")
 		return 2
 	}
 	info, err := os.Stat(args[0])
@@ -209,7 +209,7 @@ func waitforMain(args []string, _, stderr io.Writer) int {
 		args = args[1:]
 	}
 	if len(args) < 1 || len(args) > 2 {
-		say(stderr, "usage: waitfor [-gone] <path> [budget]\\n")
+		say(stderr, "usage: waitfor [-gone] <path> [budget]\n")
 		return 2
 	}
 	budget := 10 * time.Second
@@ -243,7 +243,7 @@ func waitforMain(args []string, _, stderr io.Writer) int {
 // schema named by args[0].
 func schemaMain(args []string, _, stderr io.Writer) int {
 	if len(args) != 2 {
-		say(stderr, "usage: schema <schema-name> <document>\\n")
+		say(stderr, "usage: schema <schema-name> <document>\n")
 		return 2
 	}
 	document, err := os.ReadFile(args[1])
@@ -267,7 +267,7 @@ func goldenMain(args []string, _, stderr io.Writer) int {
 		args = args[1:]
 	}
 	if len(args) != 2 {
-		say(stderr, "usage: golden [-trim] <name> <file>\\n")
+		say(stderr, "usage: golden [-trim] <name> <file>\n")
 		return 2
 	}
 	root, err := repoRoot()

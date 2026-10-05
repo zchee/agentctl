@@ -255,3 +255,42 @@ func TestGoldenMain(t *testing.T) {
 		t.Fatalf("golden with an unknown oracle did not fail")
 	}
 }
+
+func TestEveryUsageMessageEndsWithARealNewline(t *testing.T) {
+	t.Parallel()
+
+	// The message a misused helper prints is read in a terminal transcript;
+	// an escaped newline would glue it to the next line as a literal
+	// backslash-n instead of ending it.
+	tests := map[string]struct {
+		run func(args []string, stdout, stderr io.Writer) int
+	}{
+		"success: flockhold":  {run: flockholdMain},
+		"success: sigterm":    {run: sigtermMain},
+		"success: drainpipes": {run: drainpipesMain},
+		"success: mtime":      {run: mtimeMain},
+		"success: waitfor":    {run: waitforMain},
+		"success: schema":     {run: schemaMain},
+		"success: golden":     {run: goldenMain},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			code, _, stderr := runHelper(tt.run)
+			if code != 2 {
+				t.Fatalf("no arguments = %d, want the usage exit 2; stderr: %q", code, stderr)
+			}
+			if !strings.HasPrefix(stderr, "usage: ") {
+				t.Errorf("stderr = %q, want a usage line", stderr)
+			}
+			if !strings.HasSuffix(stderr, "\n") {
+				t.Errorf("stderr = %q, want a trailing newline", stderr)
+			}
+			if strings.Contains(stderr, `\n`) {
+				t.Errorf("stderr = %q holds a literal backslash-n", stderr)
+			}
+		})
+	}
+}
