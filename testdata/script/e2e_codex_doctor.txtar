@@ -1,0 +1,149 @@
+# Provenance: tests/e2e_codex_doctor.rs; headings retain exact reference test names.
+
+# the_report_names_every_item_and_validates_against_the_schema
+codex-doctor-fixture all
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+! stderr 'agctl-test-codex-(at|rt|ak|jwt|email)-|eyJ|[Bb]earer '
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+! stderr 'agctl-test-codex-(at|rt|ak|jwt|email)-|eyJ|[Bb]earer '
+codex-doctor-check
+
+# a_credential_that_is_read_is_reported_by_its_shape_only
+codex-doctor-fixture shape
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_malformed_config_is_reported_by_line_number_and_never_quoted
+codex-doctor-fixture malformed
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_well_formed_config_holding_a_key_is_never_echoed_either
+codex-doctor-fixture config-key
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# the_three_login_orphans_are_reported
+codex-doctor-fixture orphans
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# an_orphan_named_in_a_way_agctl_would_not_have_written_is_counted_and_never_printed
+codex-doctor-fixture hostile-orphans
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_write_log_line_agctl_would_not_have_written_is_not_echoed
+codex-doctor-fixture hostile-log
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_write_log_line_whose_only_hostile_field_is_the_provider_is_not_shown
+codex-doctor-fixture hostile-provider
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# every_write_path_the_log_records_is_rendered
+codex-doctor-fixture outcomes
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+codex-doctor-fixture outcomes-gained
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_run_changes_nothing_and_creates_nothing
+codex-doctor-fixture readonly
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+codex-doctor-fixture clean
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_codex_auth_item_agctl_cannot_explain_gets_no_command_in_any_stream
+codex-doctor-fixture unexplained
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_keychain_account_agctl_did_not_write_never_reaches_a_command
+codex-doctor-fixture hostile-account
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check
+
+# a_home_that_cannot_be_resolved_still_produces_a_report
+codex-doctor-fixture no-home
+exec agentctl codex doctor
+cp stdout doctor-table.txt
+cp stderr doctor-table-stderr.txt
+exec agentctl codex doctor --json
+cp stdout doctor-report.json
+cp stderr doctor-json-stderr.txt
+codex-doctor-check

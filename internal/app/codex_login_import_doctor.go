@@ -36,4 +36,18 @@ func codexLoginImportDoctorHandlers(deps Dependencies, handlers *cli.Handlers) {
 		command := commands.Import{Paths: paths, Reader: secret.NewReader(), Env: provider.Env{CodexHome: os.Getenv("CODEX_HOME"), Home: os.Getenv("HOME")}, Out: deps.Stdout}
 		return command.Run(ctx, opts)
 	}
+	handlers.CodexDoctor = func(ctx context.Context, globals cli.Globals, opts cli.CodexDoctorOptions) error {
+		paths, err := config.Resolve(globals.ConfigDir)
+		if err != nil {
+			return err
+		}
+		present := []string{}
+		for _, name := range []string{"CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "CODEX_REFRESH_TOKEN_URL_OVERRIDE", "CODEX_APP_SERVER_LOGIN_CLIENT_ID"} {
+			if _, set := os.LookupEnv(name); set {
+				present = append(present, name)
+			}
+		}
+		command := commands.Doctor{Paths: paths, Reader: secret.NewReader(), Env: provider.Env{CodexHome: os.Getenv("CODEX_HOME"), Home: os.Getenv("HOME")}, Present: present, Out: deps.Stdout}
+		return command.Run(ctx, opts)
+	}
 }
