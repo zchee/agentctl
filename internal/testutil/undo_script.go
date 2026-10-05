@@ -261,11 +261,11 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 		}
 	})
 	ts.SetCmd("undo-check", func(ts *testscript.TestScript, neg bool, args []string) {
-		if neg || len(args) != 3 {
-			ts.Fatalf("usage: undo-check <writes> <posts> <profiles>")
+		if neg || len(args) < 3 || len(args) > 4 || len(args) == 4 && args[3] != "third-absent" {
+			ts.Fatalf("usage: undo-check <writes> <posts> <profiles> [third-absent]")
 		}
 		want := make([]int, 3)
-		for i, arg := range args {
+		for i, arg := range args[:3] {
 			n, err := strconv.Atoi(arg)
 			ts.Check(err)
 			want[i] = n
@@ -287,11 +287,73 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 		}
 		for _, dir := range []string{ownerDir, incomingDir, thirdDir, filepath.Join(ts.Getenv("HOME"), ".claude")} {
 			entries, err := os.ReadDir(dir)
+			if dir == thirdDir && len(args) == 4 {
+				if !os.IsNotExist(err) {
+					ts.Fatalf("removed third-account namespace was recreated: %v", err)
+				}
+				continue
+			}
 			ts.Check(err)
 			for _, entry := range entries {
 				if strings.Contains(entry.Name(), ".tmp.") || entry.Name() == ".oauth_refresh.lock" || entry.Name() == ".credentials.json.lock" {
 					ts.Fatalf("unreleased temporary or peer lock at %s", filepath.Join(dir, entry.Name()))
 				}
+			}
+		}
+	})
+	ts.SetCmd("undo-history", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 6 {
+			ts.Fatalf("usage: undo-history <target> <direction> <outcome> <from-name|-> <to-name|-> <account|->")
+		}
+		entry := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339Nano), "monotonic_ms": 0, "agctl_pid": 1, "event": "write", "target": args[0], "direction": args[1], "outcome": args[2]}
+		for i, key := range []string{"from_digest8", "to_digest8"} {
+			entry[key] = nil
+			if args[i+3] != "-" {
+				entry[key] = Sha8("SENTINEL-access-" + args[i+3])
+			}
+		}
+		if args[5] != "-" {
+			entry["incoming_identity"] = map[string]string{"account_uuid": args[5], "organization_uuid": Org}
+		}
+		path := ts.Getenv("SWAP_AUDIT")
+		previous, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			ts.Check(err)
+		}
+		write(path, append(append(previous, document(entry)...), '\n'))
+	})
+	ts.SetCmd("undo-audit-count", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 3 {
+			ts.Fatalf("usage: undo-audit-count <writes> <configs> <catch-ups>")
+		}
+		counts := map[string]int{}
+		previousID, previousEvent := "", ""
+		for line := range strings.SplitSeq(ts.ReadFile(ts.Getenv("SWAP_AUDIT")), "\n") {
+			if line == "" {
+				continue
+			}
+			var entry struct {
+				Event string  `json:"event"`
+				TS    string  `json:"ts"`
+				PID   int     `json:"agctl_pid"`
+				After *string `json:"after"`
+			}
+			ts.Check(json.Unmarshal([]byte(line), &entry))
+			event := entry.Event
+			if event == "config_write" && entry.After == nil {
+				event = "config_catch_up"
+			}
+			counts[event]++
+			if entry.Event == "config_write" && entry.After != nil && (previousEvent != "write" || *entry.After != previousID) {
+				ts.Fatalf("config audit is not adjacent to the credential write it names")
+			}
+			previousID, previousEvent = entry.TS+"#"+strconv.Itoa(entry.PID), entry.Event
+		}
+		for i, event := range []string{"write", "config_write", "config_catch_up"} {
+			want, err := strconv.Atoi(args[i])
+			ts.Check(err)
+			if counts[event] != want {
+				ts.Fatalf("audit %s count=%d; want=%d", event, counts[event], want)
 			}
 		}
 	})

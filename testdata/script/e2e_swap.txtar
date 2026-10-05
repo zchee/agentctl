@@ -936,6 +936,141 @@ swap-io 9 0 0
 exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
 exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
 
+# Applied live history followed by namespace history does not replace profiling.
+swapfixture live unknown-after-namespace
+undo-setup
+undo-blob $UNDO_ITEM outgoing $OWNER
+cp $UNDO_ITEM unknown-namespace-before
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG config-namespace-before
+undo-history live forward applied outgoing incoming -
+undo-history namespace:0123abcd forward applied other previous -
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+stderr 'could not reproduce its bytes exactly'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json unknown-namespace-before
+cmp $UNDO_CONFIG config-namespace-before
+undo-credential $UNDO_ITEM incoming
+undo-check 1 0 2
+swap-io 3 0 0
+undo-audit-count 3 1 0
+
+# An unknown live write whose item still holds the displaced end is profiled.
+swapfixture live unknown-outgoing
+undo-setup
+undo-blob $UNDO_ITEM outgoing $OWNER
+cp $UNDO_ITEM unknown-outgoing-before
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG config-outgoing-before
+undo-history live forward unknown outgoing incoming -
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json unknown-outgoing-before
+cmp $UNDO_CONFIG config-outgoing-before
+undo-credential $UNDO_ITEM incoming
+undo-check 1 0 2
+swap-io 3 0 0
+undo-audit-count 2 1 0
+
+# Neither digest end matches, but the current profile still identifies the owner.
+swapfixture live unknown-neither-end
+undo-setup
+undo-blob $UNDO_ITEM outgoing-refreshed $OWNER
+cp $UNDO_ITEM unknown-neither-before
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG config-neither-before
+undo-history live forward unknown other incoming -
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json unknown-neither-before
+cmp $UNDO_CONFIG config-neither-before
+undo-credential $UNDO_ITEM incoming
+undo-check 1 0 2
+swap-io 3 0 0
+undo-audit-count 2 1 0
+
+# A newer incoming-account occupant is already active, with only config catch-up.
+swapfixture live unknown-newer-incoming
+undo-setup
+undo-blob $UNDO_ITEM incoming-refreshed $INCOMING newer
+cp $UNDO_ITEM unknown-newer-before
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG config-newer-before
+undo-history live forward unknown outgoing incoming -
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout 'already the one the live store holds'
+stdout '"reason": "not_reproducible"'
+stderr 'could not reproduce its bytes exactly'
+stderr 'claude use.*44444444-4444-4444-8444-444444444444'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM unknown-newer-before
+cmp $UNDO_CONFIG config-newer-before
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_CONFIG.lock
+undo-check 0 0 1
+swap-io 1 0 0
+undo-audit-count 1 0 1
+
+# Stale display identity is ignored when the actual occupant has an owned record.
+swapfixture live stale-display-owned
+undo-setup
+rm $UNDO_THIRD_DIR/.credentials.json
+undo-blob $UNDO_ITEM third -
+cp $UNDO_ITEM third-before
+cp compact-incoming.json $UNDO_CONFIG
+cp $UNDO_CONFIG stale-owned-config-before
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_THIRD_DIR/.credentials.adopted.json third-before
+cmp $UNDO_CONFIG stale-owned-config-before
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_INCOMING_DIR/.credentials.adopted.json
+undo-credential $UNDO_ITEM incoming
+undo-check 1 0 2
+swap-io 3 0 0
+undo-audit-count 1 1 0
+
+# An actual unowned occupant is refused, even when display config names incoming.
+swapfixture live stale-display-unowned
+undo-setup
+undo-blob $UNDO_ITEM third -
+cp $UNDO_ITEM unowned-third-before
+cp compact-incoming.json $UNDO_CONFIG
+cp $UNDO_CONFIG stale-unowned-config-before
+exec agentctl claude accounts remove $THIRD --yes --delete-secret
+! exists $UNDO_THIRD_DIR
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+stdout '"refusal": "F"'
+stdout '"config": null'
+stdout 'no account agentctl owns is that one'
+stdout '55555555-5555-4555-8555-555555555555'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM unowned-third-before
+cmp $UNDO_CONFIG stale-unowned-config-before
+! exists $UNDO_THIRD_DIR
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_INCOMING_DIR/.credentials.adopted.json
+undo-audit-count 0 0 0
+undo-check 0 0 1 third-absent
+swap-check 0 0 0
+swap-io 1 0 0
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
@@ -1781,6 +1916,10 @@ exec /bin/chmod 700 $HOME/.claude/sessions
 undo-remote check
 undo-check 0 0 0
 
+-- compact-owner.json --
+{"theme":"dark","oauthAccount":{"accountUuid":"11111111-2222-3333-4444-555555555555","organizationUuid":"66666666-7777-8888-9999-000000000000"}}
+-- compact-incoming.json --
+{"theme":"dark","oauthAccount":{"accountUuid":"44444444-4444-4444-8444-444444444444","organizationUuid":"66666666-7777-8888-9999-000000000000"}}
 -- other-org.txt --
 other-incoming-org
 -- profile-down --
