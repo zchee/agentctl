@@ -1276,6 +1276,210 @@ swap-io 3 0 0
 undo-check 1 0 2
 swap-audit applied 1
 
+# A vendor-held incoming namespace permits the swap but refuses refreshed save-back.
+swapfixture namespace vendor-held-writeback
+undo-setup
+undo-blob $UNDO_INCOMING_DIR/.credentials.json incoming $INCOMING expired
+cp $UNDO_INCOMING_DIR/.credentials.json vendor-before-source
+cp $HOME/.claude/.credentials.json vendor-before-live
+mkdir $UNDO_INCOMING_DIR/.oauth_refresh.lock
+exec agentctl claude use $INCOMING --live --yes
+stdout 'swapped:'
+stderr 'a Claude Code session holds `.oauth_refresh.lock` there'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_INCOMING_DIR/.credentials.json vendor-before-source
+cmp $HOME/.claude/.credentials.json vendor-before-live
+exists $UNDO_INCOMING_DIR/.oauth_refresh.lock
+undo-credential $UNDO_ITEM outgoing-rotated
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_INCOMING_DIR/.credentials.adopted.json
+swap-io 4 0 0
+swap-audit applied 0
+# Release only the planted vendor artifact after proving it survived, then check our cleanup.
+rm $UNDO_INCOMING_DIR/.oauth_refresh.lock
+undo-check 1 1 0
+
+# A namespace undo source must never be superseded by unrecorded live parking.
+swapfixture live parking-unrecorded-namespace
+undo-setup
+rm $UNDO_CONFIG
+undo-blob $UNDO_ITEM outgoing -
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json outgoing-namespace $OWNER -30m
+cp $UNDO_OWNER_DIR/.credentials.adopted.json namespace-before-parked
+cp $UNDO_ITEM namespace-before-item
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout 'was not parked by a live swap agentctl recorded'
+stdout 'move the file aside'
+stdout '"refusal": "F"'
+stdout '"config": null'
+! stdout 'belongs to another account'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json namespace-before-parked
+cmp $UNDO_ITEM namespace-before-item
+! exists $UNDO_CONFIG
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 0 0 1
+undo-audit-count 0 0 0
+swap-io 1 0 0
+
+# Identity refusal precedes live lineage even when the wrong copy has a matching audit digest.
+swapfixture live parking-wrong-identity
+undo-setup
+rm $UNDO_CONFIG
+undo-blob $UNDO_ITEM outgoing -
+undo-blob $UNDO_OWNER_DIR/.credentials.adopted.json incoming-parked $INCOMING -30m
+undo-history live forward applied incoming-parked - -
+cp $UNDO_OWNER_DIR/.credentials.adopted.json wrong-before-parked
+cp $UNDO_ITEM wrong-before-item
+cp $SWAP_AUDIT wrong-before-audit
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout 'belongs to another account'
+stdout '"refusal": "F"'
+stdout '"config": null'
+! stdout 'was not parked by a live swap'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json wrong-before-parked
+cmp $UNDO_ITEM wrong-before-item
+cmp $SWAP_AUDIT wrong-before-audit
+! exists $UNDO_CONFIG
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 0 0 1
+undo-audit-count 1 0 0
+swap-io 1 0 0
+
+# A live parking supersedes its own earlier parking after Claude renews the live grant.
+swapfixture live parking-recorded-descendant
+undo-setup
+rm $UNDO_CONFIG
+undo-blob $UNDO_ITEM outgoing -
+cp $UNDO_ITEM first-live-parking
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json first-live-parking
+undo-blob $UNDO_ITEM outgoing-next -
+cp $UNDO_ITEM next-live-parking
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"outcome": "skipped"'
+stdout '"reason": "absent"'
+stderr 'no `~/.claude.json` to update'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json next-live-parking
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_CONFIG
+cp stdout next-parking-report
+swap-hold-json next-parking-report 3000
+undo-check 3 0 6
+undo-audit-count 3 3 0
+
+# A refused audit wins before a duplicate forward config catch-up inspects a linked file.
+swapfixture live duplicate-forward-audit-refused
+undo-setup
+undo-config $OWNER link
+cp $UNDO_INCOMING_DIR/.credentials.json $UNDO_ITEM
+cp $UNDO_ITEM duplicate-before-item
+cp $UNDO_CONFIG duplicate-before-config
+cp $devnull $SWAP_AUDIT
+chmod 0644 $SWAP_AUDIT
+cp $SWAP_AUDIT duplicate-before-audit
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"outcome": "refused"'
+stdout '"reason": "audit_refused"'
+stdout 'audit log is refused, and agentctl rewrites nothing unrecorded'
+stdout 'agentctl claude use --live'
+stderr 'audit log is refused'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM duplicate-before-item
+cmp $UNDO_CONFIG duplicate-before-config
+cmp $SWAP_ROOT/config-target.json duplicate-before-config
+exec test -L $UNDO_CONFIG
+cmp $SWAP_AUDIT duplicate-before-audit
+[darwin] exec /usr/bin/stat -f %Lp $SWAP_AUDIT
+[!darwin] exec stat -c %a $SWAP_AUDIT
+stdout '^644\n$'
+! exists $UNDO_CONFIG.lock
+! exists $SWAP_ROOT/config-target.json.lock
+! exists $HOME/.claude/backups
+exec ls -A $AGENTCTL_CONFIG_DIR/claude/.locks
+! stdout .
+undo-check 0 0 1
+swap-io 1 0 0
+
+# Refused audit wins over the absent-file skip on the newer live grant return.
+swapfixture live newer-forward-audit-refused
+undo-setup
+rm $UNDO_CONFIG
+undo-blob $UNDO_ITEM incoming-newer - newer
+cp $UNDO_ITEM newer-before-item
+cp $devnull $SWAP_AUDIT
+chmod 0644 $SWAP_AUDIT
+cp $SWAP_AUDIT newer-before-audit
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"outcome": "refused"'
+stdout '"reason": "audit_refused"'
+stdout 'audit log is refused, and agentctl rewrites nothing unrecorded'
+stdout 'agentctl claude use --live'
+stderr 'audit log is refused'
+! stderr 'no `~/.claude.json` to update'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM newer-before-item
+cmp $SWAP_AUDIT newer-before-audit
+[darwin] exec /usr/bin/stat -f %Lp $SWAP_AUDIT
+[!darwin] exec stat -c %a $SWAP_AUDIT
+stdout '^644\n$'
+! exists $UNDO_CONFIG
+! exists $UNDO_CONFIG.lock
+! exists $HOME/.claude/backups
+exec ls -A $AGENTCTL_CONFIG_DIR/claude/.locks
+! stdout .
+undo-check 0 0 1
+swap-io 1 0 0
+
+# A refused audit prevents the already-active undo return from locking or updating config.
+swapfixture live undo-active-audit-refused
+undo-setup
+cp $UNDO_CONFIG catchup-original-config
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+undo-config-check $INCOMING catchup-original-config
+undo-blob $UNDO_ITEM outgoing-relogin -
+cp $UNDO_ITEM catchup-before-item
+cp $UNDO_CONFIG catchup-before-config
+chmod 0644 $SWAP_AUDIT
+cp $SWAP_AUDIT catchup-before-audit
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "already_active"'
+stdout 'nothing to put back'
+stdout '"outcome": "refused"'
+stdout '"reason": "audit_refused"'
+stdout 'audit log is refused, and agentctl rewrites nothing unrecorded'
+stdout 'agentctl claude use --live'
+stderr 'audit log is refused'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM catchup-before-item
+cmp $UNDO_CONFIG catchup-before-config
+cmp $SWAP_AUDIT catchup-before-audit
+[darwin] exec /usr/bin/stat -f %Lp $SWAP_AUDIT
+[!darwin] exec stat -c %a $SWAP_AUDIT
+stdout '^644\n$'
+! exists $UNDO_CONFIG.lock
+undo-config-check $INCOMING catchup-original-config
+undo-check 1 0 3
+undo-audit-count 1 1 0
+swap-io 4 0 0
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
