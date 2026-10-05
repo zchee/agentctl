@@ -69,28 +69,32 @@ func (c *LoginClient) Exchange(ctx context.Context, code, state string, pkce *PK
 }
 
 func (c *LoginClient) exchange(ctx context.Context, code, state string, pkce *PKCE, redirect Redirect, retryFloor time.Duration) (*TokenResponse, error) {
-	var body []byte
-	err := pkce.verifier.WithPlaintext(func(verifier []byte) error {
-		quoted, err := jsontext.AppendQuote(nil, verifier)
-		if err != nil {
+	attempt := func() (*TokenResponse, error) {
+		var response *TokenResponse
+		err := pkce.verifier.WithPlaintext(func(verifier []byte) error {
+			quoted, err := jsontext.AppendQuote(nil, verifier)
+			if err != nil {
+				return err
+			}
+			defer memguard.WipeBytes(quoted)
+			body, err := json.Marshal(struct {
+				GrantType    string         `json:"grant_type"`
+				Code         string         `json:"code"`
+				RedirectURI  string         `json:"redirect_uri"`
+				ClientID     string         `json:"client_id"`
+				CodeVerifier jsontext.Value `json:"code_verifier"`
+				State        string         `json:"state"`
+			}{"authorization_code", code, redirect.URI(), c.clientID, quoted, state})
+			defer memguard.WipeBytes(body)
+			if err != nil {
+				return err
+			}
+			response, err = c.postExchange(ctx, body)
 			return err
-		}
-		defer memguard.WipeBytes(quoted)
-		body, err = json.Marshal(struct {
-			GrantType    string         `json:"grant_type"`
-			Code         string         `json:"code"`
-			RedirectURI  string         `json:"redirect_uri"`
-			ClientID     string         `json:"client_id"`
-			CodeVerifier jsontext.Value `json:"code_verifier"`
-			State        string         `json:"state"`
-		}{"authorization_code", code, redirect.URI(), c.clientID, quoted, state})
-		return err
-	})
-	if err != nil {
-		return nil, err
+		})
+		return response, err
 	}
-	defer memguard.WipeBytes(body)
-	response, err := c.postExchange(ctx, body)
+	response, err := attempt()
 	httpErr, ok := errors.AsType[*errs.HTTPError](err)
 	if !ok || httpErr.Status != http.StatusTooManyRequests {
 		return response, err
@@ -103,7 +107,7 @@ func (c *LoginClient) exchange(ctx context.Context, code, state string, pkce *PK
 	case <-ctx.Done():
 		return nil, provider.NewFetchCancelled()
 	case <-timer.C:
-		return c.postExchange(ctx, body)
+		return attempt()
 	}
 }
 

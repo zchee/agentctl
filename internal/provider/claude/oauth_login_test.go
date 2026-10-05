@@ -15,10 +15,13 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	json "encoding/json/v2"
 	"errors"
 	"io"
+	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +129,93 @@ func TestLoginExchange(t *testing.T) {
 		})
 	}
 }
+
+func TestLoginExchangeWipesEachBodyBeforeRetryWait(t *testing.T) {
+	pkce, err := NewPKCE()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.UnmarshalRead(r.Body, &body); err != nil {
+			t.Error(err)
+			return
+		}
+		if CodeChallenge(body["code_verifier"]) != pkce.Challenge {
+			t.Error("attempt did not contain a fresh verifier body")
+		}
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, `{"access_token":"token","expires_in":20}`)
+	}))
+	defer server.Close()
+	client, err := NewLoginClient(server.URL, server.URL, server.URL, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bodies []func() (io.ReadCloser, error)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	defer transport.CloseIdleConnections()
+	client.tokenClient.Transport = exchangeBodyTransport(func(request *http.Request) (*http.Response, error) {
+		bodies = append(bodies, request.GetBody)
+		return transport.RoundTrip(request)
+	})
+	assertWiped := func(index int) {
+		t.Helper()
+		body, err := bodies[index]()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = body.Close() }()
+		blob, err := io.ReadAll(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(blob) == 0 || !bytes.Equal(blob, make([]byte, len(blob))) {
+			t.Error("exchange body was not wiped")
+		}
+	}
+	checkedBeforeWait := false
+	previous := slog.Default()
+	previousWriter, previousFlags := log.Writer(), log.Flags()
+	defer func() {
+		slog.SetDefault(previous)
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	}()
+	slog.SetDefault(slog.New(slog.NewTextHandler(exchangeLogWriter(func(p []byte) (int, error) {
+		if bytes.Contains(p, []byte("retrying once")) {
+			if len(bodies) != 1 {
+				t.Fatalf("requests before wait = %d; want 1", len(bodies))
+			}
+			assertWiped(0)
+			checkedBeforeWait = true
+		}
+		return len(p), nil
+	}), nil)))
+	if _, err := client.exchange(t.Context(), "code", pkce.State, pkce, Redirect{}, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if !checkedBeforeWait || calls.Load() != 2 || len(bodies) != 2 {
+		t.Fatalf("retry observation: checked=%v calls=%d bodies=%d", checkedBeforeWait, calls.Load(), len(bodies))
+	}
+	assertWiped(0)
+	assertWiped(1)
+}
+
+type exchangeBodyTransport func(*http.Request) (*http.Response, error)
+
+func (f exchangeBodyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+type exchangeLogWriter func([]byte) (int, error)
+
+func (f exchangeLogWriter) Write(p []byte) (int, error) { return f(p) }
 
 func TestLoginExchangeStopsAfterSecondRateLimit(t *testing.T) {
 	var calls atomic.Int32
