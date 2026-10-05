@@ -52,9 +52,18 @@ func (r ConfigReport) Record(after *string) *secret.ConfigWriteRecord {
 	return &secret.ConfigWriteRecord{After: after, Outcome: r.Outcome, Reason: r.Reason, Account: r.Account, FromSHA8: r.FromSHA8, ToSHA8: r.ToSHA8, Backup: r.Backup, HoldMS: r.HoldMS}
 }
 
+// ConfigReportJSON is the public configuration rewrite document, excluding account identifiers.
+type ConfigReportJSON struct {
+	Outcome  secret.ConfigOutcome `json:"outcome"`
+	Reason   *secret.ConfigReason `json:"reason"`
+	Backup   *string              `json:"backup"`
+	HoldMS   *uint64              `json:"hold_ms"`
+	BudgetMS uint64               `json:"budget_ms"`
+}
+
 // JSON returns the public configuration member, excluding account identifiers.
-func (r ConfigReport) JSON() map[string]any {
-	return map[string]any{"outcome": r.Outcome, "reason": r.Reason, "backup": r.Backup, "hold_ms": r.HoldMS, "budget_ms": uint64(secret.ConfigHoldBudget.Milliseconds())}
+func (r ConfigReport) JSON() ConfigReportJSON {
+	return ConfigReportJSON{Outcome: r.Outcome, Reason: r.Reason, Backup: r.Backup, HoldMS: r.HoldMS, BudgetMS: uint64(secret.ConfigHoldBudget.Milliseconds())}
 }
 
 // ConfigNotice is a sentence and whether it is a warning rather than a note.

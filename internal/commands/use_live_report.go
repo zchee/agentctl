@@ -26,10 +26,51 @@ import (
 	"github.com/zchee/agentctl/internal/secret"
 )
 
+type useBreakReport struct {
+	Broke          bool                  `json:"broke"`
+	Outcome        secret.BreakOutcome   `json:"outcome"`
+	Reason         *secret.BreakReason   `json:"reason"`
+	HolderEvidence secret.HolderEvidence `json:"holder_evidence"`
+}
+
 type useLockReport struct {
-	BudgetMS *uint64        `json:"budget_ms"`
-	Break    jsontext.Value `json:"break"`
-	HoldMS   *uint64        `json:"hold_ms"`
+	HoldMS   *uint64         `json:"hold_ms"`
+	BudgetMS *uint64         `json:"budget_ms"`
+	Break    *useBreakReport `json:"break"`
+}
+
+type useDigestReport struct {
+	Digest8 *string `json:"digest8"`
+}
+
+type useOutcomeDocument struct {
+	Kind    string          `json:"kind"`
+	Outcome string          `json:"outcome"`
+	Target  *string         `json:"target"`
+	Service string          `json:"service"`
+	From    useDigestReport `json:"from"`
+	To      useDigestReport `json:"to"`
+	Audit   struct {
+		ID *string `json:"id"`
+	} `json:"audit"`
+	AdoptedTo *string                  `json:"adopted_to"`
+	Lock      useLockReport            `json:"lock"`
+	Warnings  []string                 `json:"warnings"`
+	Note      *string                  `json:"note"`
+	Refusal   *string                  `json:"refusal"`
+	Config    *claude.ConfigReportJSON `json:"config"`
+	Reason    *string                  `json:"reason,omitzero"`
+}
+
+type usePlanDocument struct {
+	Kind       string          `json:"kind"`
+	Direction  string          `json:"direction"`
+	StoreDir   string          `json:"store_dir"`
+	Service    string          `json:"service"`
+	Account    string          `json:"account"`
+	From       useDigestReport `json:"from"`
+	To         useDigestReport `json:"to"`
+	ConfigPath *string         `json:"config_path"`
 }
 
 type useReport struct {
@@ -52,33 +93,30 @@ func useRefused(refusal claude.SwapRefusal, service, note string) *useReport {
 
 func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 	if asJSON {
-		var configuration any
-		if report.config != nil {
-			configuration = report.config.JSON()
+		doc := useOutcomeDocument{
+			Kind:      "outcome",
+			Outcome:   report.outcome.Word(),
+			Target:    report.target,
+			Service:   report.service,
+			From:      useDigestReport{Digest8: report.fromDigest8},
+			To:        useDigestReport{Digest8: report.toDigest8},
+			AdoptedTo: report.adoptedTo,
+			Lock:      report.lock,
+			Warnings:  report.warnings,
+			Note:      report.note,
 		}
-		doc := map[string]any{
-			"kind":       "outcome",
-			"outcome":    report.outcome.Word(),
-			"target":     report.target,
-			"service":    report.service,
-			"from":       map[string]any{"digest8": report.fromDigest8},
-			"to":         map[string]any{"digest8": report.toDigest8},
-			"audit":      map[string]any{"id": report.auditID},
-			"adopted_to": report.adoptedTo,
-			"lock":       report.lock,
-			"warnings":   report.warnings,
-			"note":       report.note,
-			"refusal":    nil,
-			"config":     configuration,
+		doc.Audit.ID = report.auditID
+		if report.config != nil {
+			doc.Config = new(report.config.JSON())
 		}
 		if report.outcome.Kind == claude.SwapRefused {
 			if reason := report.outcome.Refusal.Reason(); reason != "" {
-				doc["reason"] = reason
+				doc.Reason = &reason
 			} else {
-				doc["refusal"] = report.outcome.Refusal.Letter()
+				doc.Refusal = new(report.outcome.Refusal.Letter())
 			}
 		}
-		return p.emitUseJSON(doc, "could not render the swap as JSON")
+		return p.emitUseJSON(&doc, "could not render the swap as JSON")
 	}
 	if report.outcome.Kind == claude.SwapApplied {
 		digest := "unknown"
@@ -126,17 +164,17 @@ func (p SessionProcess) emitUsePlan(subject *useSubject, incoming *config.Accoun
 	if direction == secret.DirectionUndo {
 		word = "reverse"
 	}
-	doc := map[string]any{
-		"kind":        "plan",
-		"direction":   word,
-		"store_dir":   subject.storeDir,
-		"service":     subject.service,
-		"account":     account,
-		"from":        map[string]any{"digest8": fromDigest8},
-		"to":          map[string]any{"digest8": toDigest8},
-		"config_path": configPath,
+	doc := usePlanDocument{
+		Kind:       "plan",
+		Direction:  word,
+		StoreDir:   subject.storeDir,
+		Service:    subject.service,
+		Account:    account,
+		From:       useDigestReport{Digest8: fromDigest8},
+		To:         useDigestReport{Digest8: &toDigest8},
+		ConfigPath: configPath,
 	}
-	return p.emitUseJSON(doc, "the swap plan could not be rendered")
+	return p.emitUseJSON(&doc, "the swap plan could not be rendered")
 }
 
 func (p SessionProcess) emitUseJSON(doc any, message string) error {

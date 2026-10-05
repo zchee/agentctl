@@ -230,30 +230,30 @@ func TestUseEmitRefusalJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{
-  "adopted_to": null,
-  "audit": {
-    "id": null
-  },
-  "config": null,
+  "kind": "outcome",
+  "outcome": "refused",
+  "target": null,
+  "service": "Claude Code-credentials",
   "from": {
     "digest8": null
   },
-  "kind": "outcome",
-  "lock": {
-    "budget_ms": null,
-    "break": null,
-    "hold_ms": null
-  },
-  "note": "expired",
-  "outcome": "refused",
-  "reason": "live_token_expired",
-  "refusal": null,
-  "service": "Claude Code-credentials",
-  "target": null,
   "to": {
     "digest8": null
   },
-  "warnings": []
+  "audit": {
+    "id": null
+  },
+  "adopted_to": null,
+  "lock": {
+    "hold_ms": null,
+    "budget_ms": null,
+    "break": null
+  },
+  "warnings": [],
+  "note": "expired",
+  "refusal": null,
+  "config": null,
+  "reason": "live_token_expired"
 }
 `
 	if diff := gocmp.Diff(want, out.String()); diff != "" {

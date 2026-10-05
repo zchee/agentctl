@@ -126,11 +126,21 @@ func (p SessionProcess) tellUseConfig(ctx context.Context, env *claude.EnvView, 
 	}
 }
 
+type useConfigPlanDocument struct {
+	Kind       string `json:"kind"`
+	Direction  string `json:"direction"`
+	ConfigPath string `json:"config_path"`
+	Account    struct {
+		AccountUUID      string `json:"account_uuid"`
+		OrganizationUUID string `json:"organization_uuid"`
+	} `json:"account"`
+}
+
 func (p SessionProcess) emitUseConfigPlan(shown string, profile *claude.Profile) error {
-	return p.emitUseJSON(map[string]any{
-		"kind": "plan", "direction": "config", "config_path": shown,
-		"account": map[string]string{"account_uuid": profile.AccountUUID, "organization_uuid": profile.OrganizationUUID},
-	}, "the configuration plan could not be rendered")
+	doc := useConfigPlanDocument{Kind: "plan", Direction: "config", ConfigPath: shown}
+	doc.Account.AccountUUID = profile.AccountUUID
+	doc.Account.OrganizationUUID = profile.OrganizationUUID
+	return p.emitUseJSON(&doc, "the configuration plan could not be rendered")
 }
 
 func useAppendAudit(ctx context.Context, paths *config.Paths, held *os.File, event secret.AuditEvent) *string {

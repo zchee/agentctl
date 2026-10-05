@@ -16,7 +16,6 @@ package commands
 
 import (
 	"context"
-	json "encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -75,11 +74,11 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 	// A failed acquisition may already have removed a stale lock.
 	if draft != nil {
 		record := draft.Complete(input.subject.service, input.subject.audit)
-		var reason any
+		var reason *secret.BreakReason
 		if record.Reason != "" {
-			reason = record.Reason
+			reason = &record.Reason
 		}
-		report.lock.Break, _ = json.Marshal(map[string]any{"broke": record.Outcome == secret.OutcomeBroken, "outcome": record.Outcome, "reason": reason, "holder_evidence": record.Evidence})
+		report.lock.Break = &useBreakReport{Broke: record.Outcome == secret.OutcomeBroken, Outcome: record.Outcome, Reason: reason, HolderEvidence: record.Evidence}
 		useAppendAudit(ctx, input.paths, input.log, record)
 	}
 	end := func(kind claude.SwapOutcomeKind, refusal claude.SwapRefusalKind, note string) *useReport {

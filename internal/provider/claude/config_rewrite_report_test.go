@@ -15,6 +15,7 @@
 package claude
 
 import (
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"strings"
 	"testing"
@@ -27,16 +28,12 @@ import (
 func TestConfigReportRendering(t *testing.T) {
 	r := ConfigNotAttempted(secret.ConfigReasonProfileUnavailable)
 	r.Account = &secret.IncomingIdentity{AccountUUID: "private-id"}
-	got, err := json.Marshal(r.JSON())
+	got, err := json.Marshal(r.JSON(), json.Deterministic(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var members map[string]any
-	if err := json.Unmarshal(got, &members); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]any{"outcome": "not_attempted", "reason": "profile_unavailable", "backup": nil, "hold_ms": nil, "budget_ms": float64(1200)}
-	if diff := gocmp.Diff(want, members); diff != "" {
+	want := `{"outcome":"not_attempted","reason":"profile_unavailable","backup":null,"hold_ms":null,"budget_ms":1200}`
+	if diff := gocmp.Diff(want, string(got)); diff != "" {
 		t.Fatalf("JSON (-want +got):\n%s", diff)
 	}
 	if strings.Contains(string(got), "private-id") {
@@ -55,6 +52,49 @@ func TestConfigReportRendering(t *testing.T) {
 	}
 	if CompletionClause() != "running sessions show the new account within a second; " {
 		t.Fatal("completion clause changed")
+	}
+}
+
+func TestConfigReportJSONReferenceOrder(t *testing.T) {
+	// Reference binary config members, with their nesting indentation removed.
+	tests := map[string]struct {
+		report ConfigReport
+		want   string
+	}{
+		"success: applied config retains null reason": {
+			report: ConfigReport{Outcome: secret.ConfigApplied, Backup: new(".claude.json.backup.1791235855951"), HoldMS: new(uint64(22))},
+			want: `{
+  "outcome": "applied",
+  "reason": null,
+  "backup": ".claude.json.backup.1791235855951",
+  "hold_ms": 22,
+  "budget_ms": 1200
+}`,
+		},
+		"success: refused config retains null backup and hold": {
+			report: ConfigReport{Outcome: secret.ConfigRefused, Reason: new(secret.ConfigReasonNotReproducible)},
+			want: `{
+  "outcome": "refused",
+  "reason": "not_reproducible",
+  "backup": null,
+  "hold_ms": null,
+  "budget_ms": 1200
+}`,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			test.report.Account = &secret.IncomingIdentity{AccountUUID: "private-account", OrganizationUUID: new("private-org")}
+			test.report.FromSHA8 = new("private-from")
+			test.report.ToSHA8 = new("private-to")
+			got, err := json.Marshal(test.report.JSON(), json.Deterministic(true), jsontext.WithIndent("  "))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := gocmp.Diff(test.want, string(got)); diff != "" {
+				t.Fatalf("reference config JSON differs (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
