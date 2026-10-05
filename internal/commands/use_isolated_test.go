@@ -88,15 +88,41 @@ func TestRunUseIsolated(t *testing.T) {
 	}
 }
 
+func TestRunUseForgetsBeforeOtherModes(t *testing.T) {
+	tests := map[string]struct {
+		opts cli.ClaudeUseOptions
+	}{
+		"success: forget dispatch":         {opts: cli.ClaudeUseOptions{Forget: "account", Yes: true}},
+		"success: forget takes precedence": {opts: cli.ClaudeUseOptions{Forget: "account", Yes: true, Live: true, Undo: true, RestartRemoteControl: true}},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := testutil.New(t)
+			fixture.WriteRegistry([]any{fixture.OwnedRecord("account", "org")})
+			session := filepath.Join(fixture.ConfigDir(), "claude-sessions", "account", "org")
+			if err := os.MkdirAll(session, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := (SessionProcess{Out: &out}).RunUse(t.Context(), cli.Globals{ConfigDir: fixture.ConfigDir()}, test.opts); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(session); !os.IsNotExist(err) {
+				t.Fatalf("session was not removed: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunUseUnavailableModes(t *testing.T) {
 	tests := map[string]struct {
 		opts cli.ClaudeUseOptions
 		want string
 	}{
-		"error: missing id":             {want: "an account id is required"},
-		"error: live not implemented":   {opts: cli.ClaudeUseOptions{Live: true}, want: "not implemented"},
-		"error: undo not implemented":   {opts: cli.ClaudeUseOptions{Undo: true}, want: "not implemented"},
-		"error: forget not implemented": {opts: cli.ClaudeUseOptions{Forget: "account"}, want: "not implemented"},
+		"error: missing id":                     {want: "an account id is required"},
+		"error: live not implemented":           {opts: cli.ClaudeUseOptions{Live: true}, want: "not implemented"},
+		"error: undo not implemented":           {opts: cli.ClaudeUseOptions{Undo: true}, want: "not implemented"},
+		"error: remote control not implemented": {opts: cli.ClaudeUseOptions{RestartRemoteControl: true}, want: "not implemented"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
