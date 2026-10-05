@@ -31,4 +31,9 @@
 // Nothing in this package opens, locks or renames files. Callers read the
 // document, plan the rewrite in memory, and may re-verify that the document
 // is still the bytes the plan was built from before writing the result.
+//
+// One credential-parsing divergence is deliberate: an empty accessToken
+// string cannot be sealed into locked memory, so it is treated as a missing
+// field and refused at parse time, rather than being carried along and
+// failing later as an unauthorized request.
 package claude

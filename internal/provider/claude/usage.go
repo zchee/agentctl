@@ -88,10 +88,6 @@ const ConnectTimeout = 5 * time.Second
 // whole.
 const MaxUsageBodyBytes = 1 << 22
 
-// HeadlineScope is the scope whose weekly window has a column of its own
-// in the table.
-const HeadlineScope = "Fable"
-
 // PercentAgreementTolerance is how far extra_usage.utilization and
 // spend.percent may drift before the disagreement is worth a warning.
 //
