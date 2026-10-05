@@ -1245,6 +1245,37 @@ refresh-check keychain-calls 5 8
 refresh-check peers-absent
 ! exists $REFRESH_NS/.credentials.json
 
+# A live swap breaks a stale lock at the resolved store without changing outer trees.
+swapfixture live live-containment
+undo-setup
+rm $HOME/.claude/.credentials.json
+rm $UNDO_CONFIG
+mv $HOME/.claude $HOME/.claude-real
+symlink $HOME/.claude -> $HOME/.claude-real
+env SWAP_STORE=$HOME/.claude
+mkdir $SWAP_STORE/.oauth_refresh.lock
+undo-age $SWAP_STORE/.oauth_refresh.lock
+env AGENTCTL_FAULT=lock_stale
+cp $UNDO_ITEM containment-before-item
+swap-live-watch
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"outcome": "skipped"'
+stdout '"reason": "absent"'
+stderr 'no `~/.claude.json` to update'
+! stdout SENTINEL
+! stderr SENTINEL
+cp stdout containment-report
+swap-hold-json containment-report 3000
+swap-live-watch-check
+swap-live-equal $UNDO_OWNER_DIR/.credentials.adopted.json containment-before-item
+swap-live-equal $UNDO_ITEM $UNDO_INCOMING_DIR/.credentials.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_CONFIG
+swap-io 3 0 0
+undo-check 1 0 2
+swap-audit applied 1
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
