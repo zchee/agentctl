@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -112,14 +113,50 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 	} {
 		ts.Setenv(key, value)
 	}
+	ts.SetCmd("undo-advisory", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 3 {
+			ts.Fatalf("usage: undo-advisory <expected-file> <stdout-file> <stderr-file>")
+		}
+		want := strings.TrimSuffix(ts.ReadFile(args[0]), "\n")
+		decoder := jsontext.NewDecoder(strings.NewReader(ts.ReadFile(args[1])))
+		var warnings []string
+		for {
+			body, err := decoder.ReadValue()
+			if err == io.EOF {
+				break
+			}
+			ts.Check(err)
+			var row struct {
+				Kind     string   `json:"kind"`
+				Warnings []string `json:"warnings"`
+			}
+			ts.Check(json.Unmarshal(body, &row))
+			if row.Kind == "outcome" {
+				warnings = row.Warnings
+			}
+		}
+		count := 0
+		for _, warning := range warnings {
+			if warning == want {
+				count++
+			}
+		}
+		if count != 1 || strings.Count(ts.ReadFile(args[2]), "note: "+want+"\n") != 1 {
+			ts.Fatalf("expected advisory must occur exactly once and verbatim in JSON warnings and stderr")
+		}
+	})
 	var remoteTree map[string]string
 	ts.SetCmd("undo-remote", func(ts *testscript.TestScript, neg bool, args []string) {
-		if neg || len(args) != 1 || args[0] != "seed" && args[0] != "check" {
-			ts.Fatalf("usage: undo-remote <seed|check>")
+		if neg || len(args) != 1 || args[0] != "seed" && args[0] != "off" && args[0] != "check" {
+			ts.Fatalf("usage: undo-remote <seed|off|check>")
 		}
 		dir := filepath.Join(ts.Getenv("HOME"), ".claude", "sessions")
-		if args[0] == "seed" {
-			write(filepath.Join(dir, "4242.json"), document(map[string]any{"pid": os.Getpid(), "name": "undo-remote-session", "cwd": "private-working-directory", "tmux": "private-tmux", "sessionId": "private-local-session", "bridgeSessionId": "private-bridge-session"}))
+		if args[0] == "seed" || args[0] == "off" {
+			var bridge *string
+			if args[0] == "seed" {
+				bridge = new("private-bridge-session")
+			}
+			write(filepath.Join(dir, "4242.json"), document(map[string]any{"pid": os.Getpid(), "name": "undo-remote-session", "cwd": "private-working-directory", "tmux": "private-tmux", "sessionId": "private-local-session", "bridgeSessionId": bridge}))
 			write(filepath.Join(dir, "session.key"), []byte("registry sibling"))
 			write(filepath.Join(dir, "nested", "unchanged"), []byte("nested bytes"))
 			ts.Check(os.Symlink("4242.json", filepath.Join(dir, "alias.json")))
@@ -150,7 +187,7 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 			tree[path] = value
 			return nil
 		}))
-		if args[0] == "seed" {
+		if args[0] == "seed" || args[0] == "off" {
 			remoteTree = tree
 		} else if !gocmp.Equal(tree, remoteTree) {
 			ts.Fatalf("session registry changed during a swap")

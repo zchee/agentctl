@@ -1011,5 +1011,160 @@ stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Re
 undo-remote check
 undo-check 2 0 4
 
+# Absent registry and disabled Remote Control do not produce completion warnings.
+swapfixture live undo-remote-silent-absent
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+undo-check 1 0 2
+
+swapfixture live undo-remote-silent-off
+undo-setup
+undo-remote off
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+undo-remote check
+undo-check 1 0 2
+
+# The environment gate precedes both registry scanning and completion advice.
+swapfixture live-env-token undo-remote-silent-env
+undo-setup
+undo-remote seed
+exec expectexit 11 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+undo-remote check
+undo-check 0 0 0
+
+# Nonterminal cancellation never names sessions or emits completion advice in either direction.
+swapfixture live undo-remote-silent-cancel
+undo-setup
+undo-remote seed
+exec expectexit 20 agentctl claude use $INCOMING --live --json
+stdout '"outcome": "cancelled"'
+! stdout 'undo-remote-session|Remote Control'
+! stderr 'undo-remote-session|had Remote Control'
+undo-remote check
+exec expectexit 20 agentctl claude use $INCOMING --live
+! stdout 'undo-remote-session|Remote Control'
+! stderr 'undo-remote-session|had Remote Control'
+undo-remote check
+exec agentctl claude use $INCOMING --live --yes --json
+undo-remote check
+exec expectexit 20 agentctl claude use --undo --json
+stdout '"outcome": "cancelled"'
+! stdout 'undo-remote-session|Remote Control'
+! stderr 'undo-remote-session|had Remote Control'
+undo-remote check
+exec expectexit 20 agentctl claude use --undo
+! stdout 'undo-remote-session|Remote Control'
+! stderr 'undo-remote-session|had Remote Control'
+undo-remote check
+undo-check 1 0 6
+
+# An unknown write must not claim Remote Control stopped after an applied change.
+swapfixture live undo-remote-silent-unknown
+undo-setup
+undo-remote seed
+undo-security hang
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "unknown"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+undo-remote check
+undo-check 1 0 2
+
+# An already-current account/config does not repeat completion warnings.
+swapfixture live undo-remote-silent-current
+undo-setup
+undo-remote seed
+exec agentctl claude use $INCOMING --live --yes --json
+undo-remote check
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stdout '"reason": "already_current"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+undo-remote check
+undo-check 1 0 3
+
+# Config catch-up warns for its applied rewrite, but the next already-current pass stays silent.
+swapfixture live undo-remote-catch-up
+undo-setup
+rm $UNDO_CONFIG
+undo-remote seed
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "absent"'
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+stdout -count=1 '1 Claude Code session had Remote Control on'
+! stdout 'undo-remote-session|4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-remote check
+undo-config $OWNER
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "already_active"'
+stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Remote Control on'
+stdout -count=1 '1 Claude Code session had Remote Control on'
+! stdout 'undo-remote-session|4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+! stderr '4242.json|private-working-directory|private-tmux|private-local-session|private-bridge-session'
+undo-config-check $INCOMING
+undo-remote check
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "already_current"'
+! stdout 'Remote Control'
+! stderr 'had Remote Control'
+undo-remote check
+undo-check 1 0 4
+
+# Missing session registries are silent; unreadable ones advise only live passes after the env gate.
+swapfixture live undo-remote-unreadable-absent
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+! stdout 'session registry'
+! stderr 'session registry|had Remote Control'
+undo-check 1 0 2
+
+swapfixture live undo-remote-unreadable-live
+undo-setup
+undo-remote seed
+exec /bin/chmod 000 $HOME/.claude/sessions
+exec agentctl claude use $INCOMING --live --yes --json
+cp stdout advisory-stdout
+cp stderr advisory-stderr
+undo-advisory remote-unreadable-note advisory-stdout advisory-stderr
+! stderr 'had Remote Control'
+exec /bin/chmod 700 $HOME/.claude/sessions
+undo-remote check
+undo-check 1 0 2
+
+swapfixture namespace undo-remote-unreadable-namespace
+undo-setup
+undo-remote seed
+exec /bin/chmod 000 $HOME/.claude/sessions
+exec agentctl claude use $INCOMING --live --yes --json
+! stdout 'session registry'
+! stderr 'session registry|had Remote Control'
+exec /bin/chmod 700 $HOME/.claude/sessions
+undo-remote check
+undo-check 1 0 0
+
+swapfixture live-env-token undo-remote-unreadable-env
+undo-setup
+undo-remote seed
+exec /bin/chmod 000 $HOME/.claude/sessions
+exec expectexit 11 agentctl claude use $INCOMING --live --yes --json
+! stdout 'session registry'
+! stderr 'session registry|had Remote Control'
+exec /bin/chmod 700 $HOME/.claude/sessions
+undo-remote check
+undo-check 0 0 0
+
 -- profile-down --
 down-owner
+-- remote-unreadable-note --
+agentctl could not read Claude Code's session registry (permission denied), so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again
