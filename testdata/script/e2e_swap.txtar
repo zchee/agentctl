@@ -1480,6 +1480,349 @@ undo-check 1 0 3
 undo-audit-count 1 1 0
 swap-io 4 0 0
 
+# Different organizations of one account are distinct swap and undo identities.
+swapfixture live same-account-two-orgs
+undo-setup
+rm $HOME/.claude/.credentials.json
+rm $UNDO_CONFIG
+mv $HOME/.claude $HOME/.claude-real
+symlink $HOME/.claude -> $HOME/.claude-real
+env SWAP_STORE=$HOME/.claude
+swap-orgs-setup
+cp $ORGS_SOURCE org1-before-source
+cp $UNDO_ITEM org2-before-item
+mkdir $SWAP_STORE/.oauth_refresh.lock
+undo-age $SWAP_STORE/.oauth_refresh.lock
+env AGENTCTL_FAULT=lock_stale
+swap-live-watch
+exec agentctl claude use $INCOMING/$ORGS_1 --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "absent"'
+stderr 'no `~/.claude.json` to update'
+! stdout SENTINEL
+! stderr SENTINEL
+cp stdout org-forward-report
+swap-hold-json org-forward-report 3000
+swap-live-equal $ORGS_DIR2/.credentials.adopted.json org2-before-item
+! exists $ORGS_DIR1/.credentials.adopted.json
+cmp $ORGS_SOURCE org1-before-source
+swap-live-equal $UNDO_ITEM org1-before-source
+cp $ORGS_DIR2/.credentials.adopted.json org2-parked
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "absent"'
+stderr 'no `~/.claude.json` to update'
+! stdout SENTINEL
+! stderr SENTINEL
+cp stdout org-undo-report
+swap-hold-json org-undo-report 3000
+cmp $UNDO_ITEM org2-parked
+cmp $ORGS_SOURCE org1-before-source
+swap-orgs-check
+swap-live-watch-check
+undo-check 2 0 0
+undo-audit-count 2 2 0
+swap-io 7 0 0
+
+# Attribute expired-own-applied only through the appropriate profile or recorded live write.
+swapfixture live expired-own-applied
+undo-setup
+swap-attribution-server 200
+undo-blob $UNDO_ITEM outgoing-attribution - expired
+cp $UNDO_ITEM expired-own-applied-before-item
+cp compact-incoming.json $UNDO_CONFIG
+cp $UNDO_CONFIG expired-own-applied-before-config
+undo-history live undo applied incoming outgoing-attribution $OWNER
+cp $SWAP_AUDIT expired-own-applied-before-audit
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json expired-own-applied-before-item
+undo-credential $UNDO_ITEM incoming
+cmp $UNDO_CONFIG expired-own-applied-before-config
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+undo-check 1 0 0
+swap-attribution-check 0 1 0
+swap-io 3 0 0
+undo-audit-count 2 1 0
+swap-tree
+
+# Attribute expired-own-unknown only through the appropriate profile or recorded live write.
+swapfixture live expired-own-unknown
+undo-setup
+swap-attribution-server 200
+undo-blob $UNDO_ITEM outgoing-attribution - expired
+cp $UNDO_ITEM expired-own-unknown-before-item
+cp compact-incoming.json $UNDO_CONFIG
+cp $UNDO_CONFIG expired-own-unknown-before-config
+undo-history live undo unknown incoming outgoing-attribution $OWNER
+cp $SWAP_AUDIT expired-own-unknown-before-audit
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json expired-own-unknown-before-item
+undo-credential $UNDO_ITEM incoming
+cmp $UNDO_CONFIG expired-own-unknown-before-config
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+undo-check 1 0 0
+swap-attribution-check 0 1 0
+swap-io 3 0 0
+undo-audit-count 2 1 0
+swap-tree
+
+# Attribute expired-foreign only through the appropriate profile or recorded live write.
+swapfixture live expired-foreign
+undo-setup
+swap-attribution-server 200
+undo-blob $UNDO_ITEM outgoing-attribution - expired
+cp $UNDO_ITEM expired-foreign-before-item
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG expired-foreign-before-config
+
+! exists $SWAP_AUDIT
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "live_token_expired"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM expired-foreign-before-item
+cmp $UNDO_CONFIG expired-foreign-before-config
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+stdout 'has expired and agentctl did not write it'
+stdout 'send one message in Claude Code'
+stdout '"refusal": null'
+! exists $SWAP_AUDIT
+undo-check 0 0 0
+swap-attribution-check 0 0 0
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# Attribute expired-newer-legacy only through the appropriate profile or recorded live write.
+swapfixture live expired-newer-legacy
+undo-setup
+swap-attribution-server 200
+undo-blob $UNDO_ITEM outgoing-attribution - expired
+cp $UNDO_ITEM expired-newer-legacy-before-item
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG expired-newer-legacy-before-config
+undo-history live undo applied incoming outgoing-attribution $OWNER
+undo-history live forward applied incoming outgoing-attribution -
+cp $SWAP_AUDIT expired-newer-legacy-before-audit
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "live_token_expired"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM expired-newer-legacy-before-item
+cmp $UNDO_CONFIG expired-newer-legacy-before-config
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+stdout 'has expired and agentctl did not write it'
+stdout 'send one message in Claude Code'
+stdout '"refusal": null'
+cmp $SWAP_AUDIT expired-newer-legacy-before-audit
+undo-check 0 0 0
+swap-attribution-check 0 0 0
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# Attribute expired-namespace-write only through the appropriate profile or recorded live write.
+swapfixture live expired-namespace-write
+undo-setup
+swap-attribution-server 200
+undo-blob $UNDO_ITEM outgoing-attribution - expired
+cp $UNDO_ITEM expired-namespace-write-before-item
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG expired-namespace-write-before-config
+undo-history $ATTRIBUTION_NAMESPACE_TARGET forward applied incoming outgoing-attribution $OWNER
+swap-attribution-history
+cp $SWAP_AUDIT expired-namespace-write-before-audit
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "live_token_expired"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM expired-namespace-write-before-item
+cmp $UNDO_CONFIG expired-namespace-write-before-config
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+stdout 'has expired and agentctl did not write it'
+stdout 'send one message in Claude Code'
+stdout '"refusal": null'
+cmp $SWAP_AUDIT expired-namespace-write-before-audit
+undo-check 0 0 0
+swap-attribution-check 0 0 0
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# Attribute revoked-own only through the appropriate profile or recorded live write.
+swapfixture live revoked-own
+undo-setup
+swap-attribution-server 401
+undo-blob $UNDO_ITEM outgoing-attribution -
+cp $UNDO_ITEM revoked-own-before-item
+cp compact-incoming.json $UNDO_CONFIG
+cp $UNDO_CONFIG revoked-own-before-config
+undo-history live undo applied incoming outgoing-attribution $OWNER
+cp $SWAP_AUDIT revoked-own-before-audit
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json revoked-own-before-item
+undo-credential $UNDO_ITEM incoming
+cmp $UNDO_CONFIG revoked-own-before-config
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+undo-check 1 0 0
+swap-attribution-check 1 1 0
+swap-io 3 0 0
+undo-audit-count 2 1 0
+swap-tree
+
+# Attribute forbidden-own only through the appropriate profile or recorded live write.
+swapfixture live forbidden-own
+undo-setup
+swap-attribution-server 403
+undo-blob $UNDO_ITEM outgoing-attribution -
+cp $UNDO_ITEM forbidden-own-before-item
+cp compact-incoming.json $UNDO_CONFIG
+cp $UNDO_CONFIG forbidden-own-before-config
+undo-history live undo applied incoming outgoing-attribution $OWNER
+cp $SWAP_AUDIT forbidden-own-before-audit
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+stdout '"reason": "not_reproducible"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json forbidden-own-before-item
+undo-credential $UNDO_ITEM incoming
+cmp $UNDO_CONFIG forbidden-own-before-config
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+undo-check 1 0 0
+swap-attribution-check 1 1 0
+swap-io 3 0 0
+undo-audit-count 2 1 0
+swap-tree
+
+# Attribute unavailable-own only through the appropriate profile or recorded live write.
+swapfixture live unavailable-own
+undo-setup
+swap-attribution-server 500
+undo-blob $UNDO_ITEM outgoing-attribution -
+cp $UNDO_ITEM unavailable-own-before-item
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG unavailable-own-before-config
+undo-history live undo applied incoming outgoing-attribution $OWNER
+cp $SWAP_AUDIT unavailable-own-before-audit
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "profile_unavailable"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM unavailable-own-before-item
+cmp $UNDO_CONFIG unavailable-own-before-config
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+stdout 'could not ask the server'
+cmp $SWAP_AUDIT unavailable-own-before-audit
+undo-check 0 0 0
+swap-attribution-check 1 0 0
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# Attribute malformed-own only through the appropriate profile or recorded live write.
+swapfixture live malformed-own
+undo-setup
+swap-attribution-server malformed
+undo-blob $UNDO_ITEM outgoing-attribution -
+cp $UNDO_ITEM malformed-own-before-item
+cp compact-owner.json $UNDO_CONFIG
+cp $UNDO_CONFIG malformed-own-before-config
+undo-history live undo applied incoming outgoing-attribution $OWNER
+cp $SWAP_AUDIT malformed-own-before-audit
+exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "profile_unavailable"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM malformed-own-before-item
+cmp $UNDO_CONFIG malformed-own-before-config
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $HOME/.claude/backups
+! exists $UNDO_CONFIG.lock
+stdout 'could not ask the server'
+cmp $SWAP_AUDIT malformed-own-before-audit
+undo-check 0 0 0
+swap-attribution-check 1 0 0
+swap-check 0 0 0
+swap-io 1 0 0
+swap-tree
+
+# A store moved after item naming is refused before any credential hold or write.
+swapfixture namespace store-move-interleaving
+undo-setup
+env ORG=66666666-7777-8888-9999-000000000000
+env LOCKS=$AGENTCTL_CONFIG_DIR/claude/.locks
+cp moved-store-marker $UNDO_OWNER_DIR/marker
+cp $UNDO_ITEM moved-before-item
+cp $UNDO_INCOMING_DIR/.credentials.json moved-before-incoming
+cp $UNDO_REGISTRY moved-before-registry
+env AGENTCTL_FAULT=pause_swap_namespace_acquired
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json &storemove&
+exec waitfor $AGENTCTL_FAULT_RESUME.reached
+exists $LOCKS/$OWNER.$ORG.lock
+! exists $LOCKS/$INCOMING.$ORG.lock
+! exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+stderr 'already held'
+swap-io 1 0 0
+mv $UNDO_OWNER_DIR $SWAP_ROOT/moved-owner
+symlink $UNDO_OWNER_DIR -> $SWAP_ROOT/moved-owner
+swap-action resume
+wait storemove
+stdout '"refusal": "F"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM moved-before-item
+cmp $UNDO_INCOMING_DIR/.credentials.json moved-before-incoming
+cmp $UNDO_REGISTRY moved-before-registry
+cmp $SWAP_ROOT/moved-owner/marker moved-store-marker
+! exists $SWAP_ROOT/moved-owner/.credentials.adopted.json
+! exists $SWAP_ROOT/moved-owner/.credentials.json
+! exists $SWAP_AUDIT
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
+undo-check 0 0 0
+swap-check 0 0 0
+swap-io 1 0 0
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
@@ -2333,5 +2676,7 @@ undo-check 0 0 0
 other-incoming-org
 -- profile-down --
 down-owner
+-- moved-store-marker --
+unchanged moved store contents
 -- remote-unreadable-note --
 agentctl could not read Claude Code's session registry (permission denied), so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again
