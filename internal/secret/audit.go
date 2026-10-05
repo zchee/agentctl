@@ -584,12 +584,21 @@ func OpenAuditLogAt(dir int, name, shown string) (*os.File, error) {
 	// namespace lock held, so the whole store would wedge instead of one
 	// entry failing. With it the open returns at once and the FIFO is
 	// refused as what it is; it changes nothing for a regular file.
-	flags := unix.O_WRONLY | unix.O_APPEND | unix.O_CREAT | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
-	fd, err := unix.Openat(dir, name, flags, uint32(config.FileMode))
+	flags := unix.O_WRONLY | unix.O_APPEND | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	fd, err := unix.Openat(dir, name, flags, 0)
+	if errors.Is(err, unix.ENOENT) {
+		// Separate creation from opening an existing log: concurrent O_CREAT
+		// opens can return ENOENT while another creator installs the file.
+		// An exclusive creator wins; the others reopen without creation.
+		fd, err = unix.Openat(dir, name, flags|unix.O_CREAT|unix.O_EXCL, uint32(config.FileMode))
+		if errors.Is(err, unix.EEXIST) {
+			fd, err = unix.Openat(dir, name, flags, 0)
+		}
+	}
 	if err != nil {
 		// The open has already refused: O_NOFOLLOW followed nothing and
-		// O_CREAT without O_TRUNC wrote nothing. This second look only
-		// decides which sentence the caller is handed.
+		// no open uses O_TRUNC. This second look only decides which
+		// sentence the caller is handed.
 		return nil, auditRefused(shown, whyAuditOpenFailed(dir, name, err))
 	}
 
@@ -1026,7 +1035,7 @@ func isDigest8(value string) bool {
 		return false
 	}
 	for _, b := range []byte(value) {
-		if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')) {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') {
 			return false
 		}
 	}

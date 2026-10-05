@@ -328,7 +328,7 @@ func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec
 		// only be an earlier write's kept temporary, which may hold a
 		// rotated grant, so it is left alone.
 		foreign := errors.Is(err, fs.ErrExist)
-		if !(foreign && stop == StopComplete) {
+		if !foreign || stop != StopComplete {
 			_ = unlinkAt(f.dir, tmpName)
 		}
 		return WriteOutcome{}, errs.NewIO(fmt.Sprintf("could not write `%s`", tmpShown), err)

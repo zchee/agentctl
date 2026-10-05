@@ -147,7 +147,7 @@ func TestAuditALiveWriteRecordsTheAccountItInstalledByIDAlone(t *testing.T) {
 		"success: a forward write names the account": {
 			event: &WriteEvent{
 				Target:           TargetLive,
-				FromDigest8:      ptr("deadbeef"),
+				FromDigest8:      new("deadbeef"),
 				ToDigest8:        "cafebabe",
 				Outcome:          WriteApplied,
 				Direction:        DirectionForward,
@@ -158,7 +158,7 @@ func TestAuditALiveWriteRecordsTheAccountItInstalledByIDAlone(t *testing.T) {
 		"success: an undo write may name nobody": {
 			event: &WriteEvent{
 				Target:      TargetLive,
-				FromDigest8: ptr("cafebabe"),
+				FromDigest8: new("cafebabe"),
 				ToDigest8:   "deadbeef",
 				Outcome:     WriteApplied,
 				Direction:   DirectionUndo,
@@ -168,11 +168,11 @@ func TestAuditALiveWriteRecordsTheAccountItInstalledByIDAlone(t *testing.T) {
 		"success: an undo write names the account it put back": {
 			event: &WriteEvent{
 				Target:           TargetLive,
-				FromDigest8:      ptr("cafebabe"),
+				FromDigest8:      new("cafebabe"),
 				ToDigest8:        "deadbeef",
 				Outcome:          WriteUnknown,
 				Direction:        DirectionUndo,
-				IncomingIdentity: &IncomingIdentity{AccountUUID: "acct-p", OrganizationUUID: ptr("org-p")},
+				IncomingIdentity: &IncomingIdentity{AccountUUID: "acct-p", OrganizationUUID: new("org-p")},
 			},
 			wantIdentity: true,
 		},
@@ -227,7 +227,7 @@ func TestAuditALiveWriteRecordsTheAccountItInstalledByIDAlone(t *testing.T) {
 
 func TestAuditAnEntryRoundTripsThroughTheLog(t *testing.T) {
 	paths := newAuditStore(t)
-	entry := NewAuditEntry(writeEvent("aabbccdd", ptr("11223344")))
+	entry := NewAuditEntry(writeEvent("aabbccdd", new("11223344")))
 
 	id, err := AuditAppend(t.Context(), paths, entry)
 	if err != nil {
@@ -439,7 +439,7 @@ func TestAuditNoLineCarriesTokenMaterial(t *testing.T) {
 	// may appear — while a nanosecond mtime, the longest legitimate run at
 	// 19 digits, must still pass.
 	paths := newAuditStore(t)
-	if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(writeEvent("aabbccdd", ptr("11223344")))); err != nil {
+	if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(writeEvent("aabbccdd", new("11223344")))); err != nil {
 		t.Fatalf("appendable: %v", err)
 	}
 	if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(breakRecord(t))); err != nil {
@@ -474,7 +474,7 @@ func TestAuditAppendRefusesADigestThatIsNotAPrefix(t *testing.T) {
 	whole := strings.Repeat("aabbccdd", 8)
 	tests := map[string]*WriteEvent{
 		"error: a whole digest as to_digest8":   writeEvent(whole, nil),
-		"error: a whole digest as from_digest8": writeEvent("aabbccdd", ptr(whole)),
+		"error: a whole digest as from_digest8": writeEvent("aabbccdd", new(whole)),
 		"error: an uppercase prefix":            writeEvent("AABBCCDD", nil),
 		"error: a short prefix":                 writeEvent("aabbccd", nil),
 		"error: a planted token-shaped value":   writeEvent("sk-ant-oat01-whatever", nil),
@@ -528,7 +528,7 @@ func TestAuditABreakRecordSerialisesWithTheFixedFieldNames(t *testing.T) {
 }
 
 func TestAuditAWriteSerialisesWithTheDocumentedFieldNames(t *testing.T) {
-	line, err := auditEntryLine(NewAuditEntry(writeEvent("aabbccdd", ptr("11223344"))))
+	line, err := auditEntryLine(NewAuditEntry(writeEvent("aabbccdd", new("11223344"))))
 	if err != nil {
 		t.Fatalf("serializable: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestAuditTheBytesOnDiskAreTheEntryAndOneNewline(t *testing.T) {
 	t.Cleanup(func() { auditNow = time.Now })
 
 	paths := newAuditStoreWithRoot(t)
-	entry := NewAuditEntry(writeEvent("aabbccdd", ptr("11223344")))
+	entry := NewAuditEntry(writeEvent("aabbccdd", new("11223344")))
 	entry.MonotonicMS = 0
 	entry.PID = 1
 	line, err := auditEntryLine(entry)
@@ -923,7 +923,7 @@ func TestAuditAppendThroughWritesToTheLogTheGateOpenedNotToWhatItsNameBecame(t *
 		t.Fatalf("symlink: %v", err)
 	}
 
-	entry := NewAuditEntry(writeEvent("aabbccdd", ptr("11223344")))
+	entry := NewAuditEntry(writeEvent("aabbccdd", new("11223344")))
 	if _, err := AuditAppend(t.Context(), paths, entry); err == nil || !strings.Contains(err.Error(), "symbolic link") {
 		t.Fatalf("an append by name meets the planted link: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestAuditAppendThroughRefusesWhatAppendRefusesBeforeWritingAByte(t *testing
 	defer func() { _ = held.Close() }()
 	whole := strings.Repeat("aabbccdd", 8)
 
-	for _, event := range []*WriteEvent{writeEvent(whole, nil), writeEvent("aabbccdd", ptr(whole))} {
+	for _, event := range []*WriteEvent{writeEvent(whole, nil), writeEvent("aabbccdd", new(whole))} {
 		_, err := AuditAppendThrough(held, shown, NewAuditEntry(event))
 		if err == nil || !strings.Contains(err.Error(), "digest prefixes only") {
 			t.Errorf("a whole digest is not a digest prefix: %v", err)
@@ -973,29 +973,26 @@ func TestAuditAppendThroughRefusesWhatAppendRefusesBeforeWritingAByte(t *testing
 // configRecord is a config step's record with every member populated.
 func configRecord(outcome ConfigOutcome, reason *ConfigReason) *ConfigWriteRecord {
 	record := &ConfigWriteRecord{
-		After:    ptr("2026-09-14T00:00:00Z#4242"),
+		After:    new("2026-09-14T00:00:00Z#4242"),
 		Outcome:  outcome,
 		Reason:   reason,
-		Account:  &IncomingIdentity{AccountUUID: "acct-t", OrganizationUUID: ptr("org-t")},
-		FromSHA8: ptr("0123abcd"),
-		Backup:   ptr(".claude.json.backup.1789000000000"),
+		Account:  &IncomingIdentity{AccountUUID: "acct-t", OrganizationUUID: new("org-t")},
+		FromSHA8: new("0123abcd"),
+		Backup:   new(".claude.json.backup.1789000000000"),
 		HoldMS:   new(uint64),
 	}
 	*record.HoldMS = 12
 	if outcome == ConfigApplied {
-		record.ToSHA8 = ptr("89abcdef")
+		record.ToSHA8 = new("89abcdef")
 	}
 	return record
 }
-
-//go:fix inline
-func reasonPtr(reason ConfigReason) *ConfigReason { return new(reason) }
 
 func TestAuditConfigWriteCarriesIDsOnlyAndParsesOldLines(t *testing.T) {
 	// The pre-existing lines — a write and a lock break — read back to the
 	// entries they were, before and after a config_write line joins them.
 	paths := newAuditStore(t)
-	oldWrite := NewAuditEntry(writeEvent("aabbccdd", ptr("11223344")))
+	oldWrite := NewAuditEntry(writeEvent("aabbccdd", new("11223344")))
 	oldBreak := NewAuditEntry(breakRecord(t))
 	for _, entry := range []AuditEntry{oldWrite, oldBreak} {
 		if _, err := AuditAppend(t.Context(), paths, entry); err != nil {
@@ -1109,22 +1106,22 @@ func TestAuditAConfigWriteWithAWholeDigestOrAPathIsRefused(t *testing.T) {
 		},
 		"error: an uppercase prefix": func() *ConfigWriteRecord {
 			record := applied()
-			record.FromSHA8 = ptr("AABBCCDD")
+			record.FromSHA8 = new("AABBCCDD")
 			return record
 		},
 		"error: a backup path": func() *ConfigWriteRecord {
 			record := applied()
-			record.Backup = ptr("/x/.claude.json.backup.1")
+			record.Backup = new("/x/.claude.json.backup.1")
 			return record
 		},
 		"error: a backup name in another shape": func() *ConfigWriteRecord {
 			record := applied()
-			record.Backup = ptr(".claude.json.corrupted.1")
+			record.Backup = new(".claude.json.corrupted.1")
 			return record
 		},
 		"error: a backup name with no stamp": func() *ConfigWriteRecord {
 			record := applied()
-			record.Backup = ptr(".claude.json.backup.")
+			record.Backup = new(".claude.json.backup.")
 			return record
 		},
 		"error: a read-only outcome word": func() *ConfigWriteRecord {
@@ -1150,7 +1147,7 @@ func TestAuditAConfigWriteWithAWholeDigestOrAPathIsRefused(t *testing.T) {
 	}
 
 	withPath := applied()
-	withPath.Backup = ptr("/x/.claude.json.backup.1")
+	withPath.Backup = new("/x/.claude.json.backup.1")
 	_, err := AuditAppend(t.Context(), paths, NewAuditEntry(withPath))
 	if err == nil || strings.Contains(err.Error(), "/x/") {
 		t.Errorf("the refusal does not repeat the path: %v", err)

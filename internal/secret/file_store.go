@@ -328,7 +328,7 @@ func listStrayWithPrefix(nsDir, prefix string) ([]string, error) {
 		}
 		hex := true
 		for _, b := range []byte(suffix) {
-			if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')) {
+			if (b < '0' || b > '9') && (b < 'a' || b > 'f') && (b < 'A' || b > 'F') {
 				hex = false
 				break
 			}

@@ -226,9 +226,6 @@ func TestPendingAMissingOrUnparseableMetaOrPendingIsInvalid(t *testing.T) {
 	}
 }
 
-//go:fix inline
-func ptr(s string) *string { return new(s) }
-
 // ptrOf builds a valid meta body for the row that corrupts the pending file
 // rather than the meta.
 func ptrOf(t *testing.T, prior *Digests) *string {
