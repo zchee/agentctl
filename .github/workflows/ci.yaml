@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Install validation tools
+        run: |
+          go install mvdan.cc/gofumpt@latest
+          go install golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest
+          go install github.com/zchee/goimports-rereviser/v4@latest
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+      - name: Check workflows
+        run: actionlint
+      - name: Check gofmt
+        run: |
+          files="$(gofmt -s -l .)"
+          if [ -n "$files" ]; then
+            printf '%s\n' "$files"
+            exit 1
+          fi
+      - name: Check gofumpt
+        run: |
+          gofumpt -w -extra .
+          git diff --exit-code
+      - name: Check modern Go usage
+        run: |
+          modernize -test ./...
+          GOFLAGS=-tags=agentctl_testing modernize -test ./...
+          git diff --exit-code
+      - name: Check imports
+        run: |
+          goimports-rereviser -project-name=github.com/zchee/agentctl -use-cache -cache-fast-skip -rm-unused -set-alias -recursive .
+          git diff --exit-code
+      - name: Vet
+        run: |
+          go vet ./...
+          go vet -tags agentctl_testing ./...
+      - name: Lint
+        run: |
+          golangci-lint config verify
+          golangci-lint run ./...
+          golangci-lint run --build-tags agentctl_testing ./...
+      - name: Test
+        run: |
+          go test -race -count=1 ./...
+          go test -tags agentctl_testing -race -count=1 ./...
+
+  linux:
+    # Full Linux support is deferred; run build, vet, and untagged unit tests only.
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -count=1 ./...
