@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/zchee/agentctl/internal/app"
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/runtime/logbuf"
@@ -38,9 +39,9 @@ func main() {
 	os.Exit(run())
 }
 
-// run executes the command tree and returns the process exit status. It is
-// separate from main so every exit flows through one return path instead
-// of scattered os.Exit calls.
+// run executes the command tree and returns the process exit status. Normal
+// and cooperative signal exits return through the single deferred purge;
+// the controller force-exits without purging if the command stays active.
 func run() int {
 	initLogging()
 
@@ -52,10 +53,9 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "agentctl: %v\n", err)
 		return errs.ExitFatal
 	}
-	// One purge on the one way out of run, so no exit path — the normal
-	// return, the error return, or the deferred signal exit below — can
-	// leave a decryptable secret behind. It runs after the command tree
-	// has returned, so every plaintext user has stopped by then.
+	// Purge only after the command returns and its plaintext users have
+	// stopped. The forced signal exit bypasses defers rather than destroy
+	// memory a cancellation-ignoring command could still be reading.
 	defer secret.Purge()
 
 	// A write to a closed stdout must come back as an error the writer
@@ -68,17 +68,17 @@ func run() int {
 	// cleanup registry. The exit status depends on which signal fired
 	// (143 for TERM, 129 for HUP, 130 for INT), so the controller records
 	// the signal and the mapping below stays the one source of the code.
-	ctx, controller := signals.Install(context.Background())
+	_, controller := signals.Install(context.Background())
 	defer controller.Stop()
 
-	c := cli.New(cli.Handlers{})
-	err := c.Root().ExecuteContext(ctx)
+	c := cli.New(app.Handlers(app.Dependencies{Stdout: os.Stdout}))
+	err := controller.Execute(c.Root().ExecuteContext, func(sig os.Signal) {
+		os.Exit(cli.SignalExitCode(sig))
+	})
 
 	// A run that was cancelled by a signal exits with the signal's own
-	// status, whatever the command returned on its way out — but only
-	// after the teardown has finished, so the exit (and the purge the
-	// defer above runs) cannot race the child takedown or the cleanup
-	// registry.
+	// status, whatever the command returned on its way out. Join teardown
+	// before purging, bounded by the deadline established at the signal.
 	if sig, ok := controller.Fired(); ok {
 		controller.Wait()
 		return cli.SignalExitCode(sig)

@@ -78,11 +78,8 @@ const (
 	// tears it down.
 	childTermBudget = 500 * time.Millisecond
 
-	// exitDeferralLimit is how long Wait defers to a teardown in progress
-	// before giving up and letting the caller exit anyway. Well above
-	// everything the teardown does — the children's budget, the kill
-	// settle and the cleanup registry — so reaching it means the teardown
-	// is stuck, and exiting is the better outcome.
+	// exitDeferralLimit bounds command completion and signal teardown from
+	// receipt of the first signal. Both waits share this deadline.
 	exitDeferralLimit = 10 * time.Second
 )
 
@@ -98,6 +95,11 @@ type childEntry struct {
 	identity string
 }
 
+type termination struct {
+	signal   os.Signal
+	deadline time.Time
+}
+
 // Controller owns the termination-signal disposition for the process.
 type Controller struct {
 	// base never cancels: the teardown reads the process table after the
@@ -107,7 +109,7 @@ type Controller struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	notify chan os.Signal
-	fired  atomic.Pointer[os.Signal]
+	fired  atomic.Pointer[termination]
 	done   chan struct{}
 
 	spawns atomic.Int64
@@ -148,7 +150,7 @@ func (c *Controller) run() {
 	}
 	// Record before cancelling, so a caller woken by the cancellation
 	// already sees which signal ended the run.
-	c.fired.Store(&sig)
+	c.fired.Store(&termination{signal: sig, deadline: time.Now().Add(deferralLimit())})
 	c.cancel()
 	// Children first, cleanup second: the cleanup registry releases lock
 	// directories, and a child still writing under one of them must be
@@ -161,20 +163,25 @@ func (c *Controller) run() {
 // Fired returns the signal that ended the run, if one has.
 func (c *Controller) Fired() (os.Signal, bool) {
 	if sig := c.fired.Load(); sig != nil {
-		return *sig, true
+		return sig.signal, true
 	}
 	return nil, false
 }
 
 // Wait blocks until the signal teardown — child takedown and the cleanup
-// registry — has finished, so the caller's exit cannot race it. It gives up
-// after a generous bound: reaching it means the teardown is stuck, and
-// exiting anyway is the better outcome. Call it only after Fired reported a
-// signal; without one there is no teardown to wait for.
+// registry — has finished, or the exit deferral expires. The deadline starts
+// at the first signal, not when Wait is called. Without a signal it returns
+// immediately.
 func (c *Controller) Wait() {
+	fired := c.fired.Load()
+	if fired == nil {
+		return
+	}
+	timer := time.NewTimer(time.Until(fired.deadline))
+	defer timer.Stop()
 	select {
 	case <-c.done:
-	case <-time.After(exitDeferralLimit):
+	case <-timer.C:
 	}
 }
 

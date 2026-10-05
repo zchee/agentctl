@@ -52,15 +52,16 @@ stderr 'unknown command "bogus" for "agentctl claude"'
 ! exec agentctl claude
 stderr 'agentctl claude --help'
 
-# The exit contract, by number rather than by zero/non-zero: a usage
-# error exits 2 whether it is an unknown shell, an unknown command or a
-# rejected flag, and a parsed command whose implementation has not
-# arrived exits 1, the fatal status.
+# The exit contract, by number rather than by zero/non-zero: usage errors
+# and Claude status on an empty store exit 2. The parsed codex status command
+# below still exits 1 because its implementation has not arrived.
 exec expectexit 2 agentctl completions tcsh
 exec expectexit 2 agentctl bogus
 exec expectexit 2 agentctl claude bogus
 exec expectexit 2 agentctl claude status --timeout nonsense
-exec expectexit 1 agentctl claude status
+exec expectexit 2 agentctl claude status
+stderr 'agentctl: 1 shown account\(s\) could not be read'
+! stderr '(panic:|sk-ant)'
 exec expectexit 0 agentctl --version
 
 # The startup locked-memory check and the exit-path purge leave the
