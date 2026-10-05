@@ -26,12 +26,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-
-	json "encoding/json/v2"
 
 	"github.com/awnumar/memguard"
 

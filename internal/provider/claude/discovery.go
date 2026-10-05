@@ -48,7 +48,6 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -60,6 +59,7 @@ import (
 	"time"
 
 	"github.com/awnumar/memguard"
+	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/secret"
@@ -95,11 +95,6 @@ const MaxClaudeJSONBytes int64 = 16 << 20
 // CredentialsFileName is the credential document's name inside a namespace
 // directory, the same name the peer tooling reads.
 const CredentialsFileName = ".credentials.json"
-
-// maxCredentialsFileBytes bounds the read of one credential file. A blob is
-// a few kilobytes; the ceiling keeps a corrupt or hostile file from being
-// read into memory whole.
-const maxCredentialsFileBytes int64 = 1 << 20
 
 // The lock artefacts a Claude Code session leaves inside a store directory
 // it is using. Their presence means something other than agentctl owns the
@@ -221,26 +216,25 @@ func resolveKeychain(ctx context.Context, reader secret.Reader, service string) 
 //
 // The leaf is refused when it is not a plain file: a symbolic link planted
 // at the credential path must not be followed to wherever it points.
-func resolveFile(nsDir string) resolved {
-	path := filepath.Join(nsDir, CredentialsFileName)
-	info, err := os.Lstat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
+func resolveFile(paths *config.Paths, nsDir string) resolved {
+	dir, err := secret.OpenDirUnder(paths.NamespaceRoot(), nsDir)
+	if errors.Is(err, fs.ErrNotExist) {
 		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeAbsent}}
-	case err != nil:
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
-	case !info.Mode().IsRegular():
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: fmt.Sprintf("`%s` is not a regular file", path)}}
-	case info.Size() > maxCredentialsFileBytes:
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: fmt.Sprintf("`%s` exceeds %d bytes", path, maxCredentialsFileBytes)}}
 	}
-
-	blob, err := os.ReadFile(path)
 	if err != nil {
 		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
 	}
-	credentials, err := ParseBlob(blob)
-	memguard.WipeBytes(blob)
+	defer func() { _ = unix.Close(dir) }()
+	file := secret.NewSecretFile(paths.NamespaceRoot(), dir, CredentialsFileName, filepath.Join(nsDir, CredentialsFileName))
+	read, err := file.ReadStrict(secret.MaxCredentialsBytes)
+	if err != nil {
+		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
+	}
+	if !read.Present {
+		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeAbsent}}
+	}
+	credentials, err := ParseBlob(read.Bytes)
+	memguard.WipeBytes(read.Bytes)
 	if err != nil {
 		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
 	}
@@ -417,13 +411,13 @@ func ownedRow(ctx context.Context, id string, record *config.AccountRecord, path
 		}
 		state = StateOfMigratedToKeychain(activity.migratedService)
 	case activity.lockName != "":
-		if result := resolveFile(nsDir); result.credentials != nil {
+		if result := resolveFile(paths, nsDir); result.credentials != nil {
 			credentials = result.credentials
 			source = SourceFile
 		}
 		state = StateOfClaudeSessionDetected(activity.lockName, activity.lockAgeMillis)
 	default:
-		result := resolveFile(nsDir)
+		result := resolveFile(paths, nsDir)
 		switch result.outcome.Kind {
 		case secret.OutcomeCredential:
 			credentials, state, source = result.credentials, StateOfOK(), SourceFile
@@ -838,27 +832,12 @@ func claudeJSONIdentity(path string) *Identity {
 // readClaudeJSON reads the file whole, bounded, following links, together
 // with the fingerprint of the bytes it actually read.
 func readClaudeJSON(path string) ([]byte, claudeJSONFingerprint, bool) {
-	file, err := os.Open(path)
-	if err != nil {
+	read, err := secret.ReadFileFollowing(path, MaxClaudeJSONBytes)
+	if err != nil || !read.Present {
 		return nil, claudeJSONFingerprint{}, false
 	}
-	defer func() {
-		// The bytes are already in hand by the time this runs; a close
-		// failure on a read-only descriptor changes nothing.
-		_ = file.Close()
-	}()
-
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > MaxClaudeJSONBytes {
-		return nil, claudeJSONFingerprint{}, false
-	}
-	// One byte past the ceiling, so a file that grew between the stat and
-	// the read is refused rather than parsed truncated.
-	bytes, err := io.ReadAll(io.LimitReader(file, MaxClaudeJSONBytes+1))
-	if err != nil || int64(len(bytes)) > MaxClaudeJSONBytes {
-		return nil, claudeJSONFingerprint{}, false
-	}
-	return bytes, fingerprintFromInfo(info), true
+	fingerprint := claudeJSONFingerprint{dev: read.Snap.Dev, ino: read.Snap.Ino, size: read.Snap.Size, mtime: read.Snap.MtimeNS}
+	return read.Bytes, fingerprint, true
 }
 
 // fingerprintOf stats path, following links, and fingerprints the result.
