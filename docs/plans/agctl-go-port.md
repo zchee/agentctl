@@ -756,6 +756,7 @@ go test -tags agentctl_testing -race -count=1 ./...
 | Golden file names (lane question, answered by the naming rule) | keep `agctl__` prefix vs strip it vs re-slug | strip the crate prefix only; `testdata/golden/MAPPING.md` records the correspondence |
 | W3 start | start the four read-path lanes while `fix-w1` runs vs wait for the W1 close and the last spike | start now; W1 close bounds W4 |
 | Early start of W3-independent lanes after the W1 close | `claude-file-store` (W5) + `claude-peer-locks` (W6) + `runtime-core` (the `internal/runtime` row of section 4, which had no lane) now vs only the first and third vs wait for W3 | all three now (seven lanes); W4 waits for W3 |
+| Signal exit when the command ignores cancellation past the 10 s deferral | force exit 128+n without `Purge()` (reference behaviour, warning logged) vs wait for the command vs a join barrier inside `secret` | force exit without `Purge()`; the cooperative path keeps the single deferred `Purge()`; cleanup callbacks run FIFO as in the reference |
 | memguard under a finite `RLIMIT_MEMLOCK` (v0.23.0 deadlocks in purge after a key-view allocation failure; macOS default is unlimited) | conditional GO with a startup budget check that fails fast vs NO-GO and an own wiped `Secret` type vs conditional GO with a non-mlock fallback | conditional GO: `secret.EnsureLockedMemoryBudget()` refuses with exit 1 below the measured threshold; follow-up recorded in the spike document; the check and `Purge()` are wired into `main.go` by the foundation fix lane |
 
 Lead decisions (not asked, recorded for review): Rust implementation normative over its
@@ -810,3 +811,4 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
   started early on the user's decision (seven lanes with the read-path four).
 - 2026-10-05 19:36:34 JST: read-path lanes finished; verification and review lanes started; the status
   wave started with a token-refresh lane split out of login.
+- 2026-10-05 19:39:01 JST: signal-exit decision recorded (forced exit skips Purge after the deferral).
