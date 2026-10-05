@@ -28,12 +28,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// swapSecretsHeldAtOnce is the number of token-bearing values a live
-// credential swap keeps in memory at its peak: the incoming access and
-// refresh tokens, the displaced access and refresh tokens, the encoded
-// keychain input line, the adopted-copy occupant's access and refresh
-// tokens read for the identity comparison, and the staged reversal copy.
-const swapSecretsHeldAtOnce = 8
+// baseOpenBufferBudget is a conservative capacity floor, not an exact count
+// of simultaneously open plaintext buffers in a credential operation.
+const baseOpenBufferBudget = 8
 
 func TestPurge(t *testing.T) {
 	s, err := NewSecret([]byte("purge-test-token"))
@@ -48,8 +45,8 @@ func TestPurge(t *testing.T) {
 	if err := s.WithPlaintext(func([]byte) error { return nil }); err == nil {
 		t.Fatal("a purged secret must not decrypt")
 	}
-	// A second purge must be a no-op, and sealing must work again afterwards
-	// because every exit path calls Purge without coordinating with the rest.
+	// Repeated purge is safe once plaintext users have stopped, and a later
+	// session can create fresh key material.
 	Purge()
 	after, err := NewSecret([]byte("post-purge-token"))
 	if err != nil {
@@ -128,8 +125,9 @@ func openUntilFailure(maxOpen int, progress func(opened int)) (opened int, failu
 			return len(buffers), err
 		}
 		buffers = append(buffers, b)
+		opened = len(buffers)
 		if progress != nil {
-			progress(len(buffers))
+			progress(opened)
 		}
 	}
 	return len(buffers), nil
@@ -141,8 +139,8 @@ func TestLockedBufferBudget(t *testing.T) {
 		if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &limit); err != nil {
 			t.Fatalf("lowering RLIMIT_MEMLOCK: %v", err)
 		}
-		// Progress goes to stdout unbuffered: the failure path can abort or
-		// hang the process, and a t.Logf line would die with it.
+		// Record each successful open before an allocation failure can abort
+		// or hang the child, leaving the last completed count observable.
 		opened, failure := openUntilFailure(1024, func(opened int) {
 			fmt.Printf("constrained: %d buffers open under RLIMIT_MEMLOCK=%d, page size %d\n", opened, limit.Cur, unix.Getpagesize())
 		})
@@ -155,11 +153,11 @@ func TestLockedBufferBudget(t *testing.T) {
 		t.Fatalf("reading RLIMIT_MEMLOCK: %v", err)
 	}
 	pageSize := unix.Getpagesize()
-	need := swapSecretsHeldAtOnce * 2
+	need := baseOpenBufferBudget * 2
 
 	opened, failure := openUntilFailure(need, nil)
 	t.Logf("measurement: RLIMIT_MEMLOCK cur=%d max=%d (%#x means unlimited), page size %d bytes", limit.Cur, limit.Max, uint64(unix.RLIM_INFINITY), pageSize)
-	t.Logf("measurement: need %d simultaneous buffers (%d swap-path secrets with a 2x margin), opened %d, failure: %v", need, swapSecretsHeldAtOnce, opened, failure)
+	t.Logf("measurement: need %d simultaneous buffers (%d-buffer capacity floor with a 2x margin), opened %d, failure: %v", need, baseOpenBufferBudget, opened, failure)
 	if failure != nil || opened < need {
 		t.Fatalf("only %d of %d required locked buffers could be open at once: %v", opened, need, failure)
 	}

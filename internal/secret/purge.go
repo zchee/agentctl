@@ -16,9 +16,11 @@ package secret
 
 import "github.com/awnumar/memguard"
 
-// Purge destroys every open plaintext buffer and rotates the session key, so
-// no previously created Secret can be decrypted again. It is idempotent and
-// safe to call more than once.
+// Purge destroys every open plaintext buffer and the session key, so no
+// previously created Secret can be decrypted again. It is idempotent and
+// safe to call more than once after all plaintext users have stopped.
+// Callers must stop and join those users before purging: destroying a buffer
+// while its callback is running can fault on the callback's next access.
 //
 // It must run on every process exit path — the normal return from the command
 // tree, the error return, and the signal path before the deferred exit —

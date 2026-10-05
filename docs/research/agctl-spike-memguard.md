@@ -1,165 +1,188 @@
 # Spike verdict: memguard secret memory on macOS arm64
 
-- Captured: 2026-10-05 18:01:40 JST (`date` in the command that captured the
-  platform facts below)
-- Platform: macOS 27.2, darwin/arm64, go1.27.1, `github.com/awnumar/memguard`
-  v0.23.0 (`golang.org/x/sys` v0.48.0)
-- Code: `internal/secret/secret.go`, `internal/secret/purge.go`; evidence in
-  `internal/secret/secret_test.go`, `internal/secret/purge_test.go`
-  (`TestLockedBufferBudget` prints the measurements with `t.Logf`)
+- Platform facts captured: 2026-10-05 18:01:40 JST (`date` in the command
+  that captured them): macOS 27.2, darwin/arm64, go1.27.1.
+- Dependency: `github.com/awnumar/memguard` v0.23.0;
+  `golang.org/x/sys` v0.48.0.
+- Implementation: `internal/secret/secret.go`, `purge.go`, `secret_budget.go`.
+  Evidence: their sibling test files, including `TestLockedBufferBudget`.
 
-## Verdict: GO, conditional on the mlock budget
+## Verdict: GO, conditional on the startup budget check
 
-The enclave model holds on this platform: tokens stay encrypted at rest in
-process memory, plaintext exists only inside a guarded, mlocked, read-only
-buffer opened around one operation and destroyed on return, error and panic
-alike, and every formatting and serialization hook Go 1.27 consults returns
-`[REDACTED]`. On the default macOS limits the mlock budget is a non-issue at
-the swap path's scale.
+Keep memguard. Before the first secret is sealed or opened, the executable
+must call `secret.EnsureLockedMemoryBudget()` and refuse startup on error.
+A finite soft `RLIMIT_MEMLOCK` below **64 system pages** returns a typed
+`*errs.ConfigError`, classified as fatal exit status **1**. At 16 KiB pages
+this requires **1,048,576 bytes (1 MiB)**. `RLIM_INFINITY` passes. Failure to
+read the limit returns a fatal `*errs.IOError`. A warning is not sufficient.
 
-The condition: memguard has **no recoverable path** when `mlock` fails — it
-panics through a purge that has been observed to deadlock (measured below:
-under a 256 KiB limit the fifth simultaneous open fails, and the process
-dies messily or hangs). The design must therefore (a) keep the number of
-simultaneously open plaintext buffers small — the swap path needs 8, one at
-a time in practice — and (b) treat a finite, small `RLIMIT_MEMLOCK` as a
-fail-fast startup condition, not a runtime branch: a `Getrlimit` check at
-process start that refuses to proceed (or at minimum warns) when the limit
-is finite and below a safety floor (1 MiB covers 64 open buffers at 16 KiB
-pages, an order of magnitude above need). Whether that check ships, and
-whether its failure is fatal or a warning, is an acceptance decision raised
-with the lead; the alternative reading of these numbers is a NO-GO until
-exhaustion handling is replaced or patched upstream. This document's
-recommendation is the conditional GO with the startup check, because the
-deadlock is unreachable under the platform's default (unlimited) limit and
-the check turns the one dangerous configuration into a clean refusal.
+The error names the observed limit, required bytes and pages, and a shell
+remedy (`ulimit -l 1024` in KiB on the measured host); if the hard limit is
+lower, an administrator must raise it before restarting. The check reads
+only the soft limit and page size: it neither raises limits nor reserves
+memory. Its boundary tests inject those values through an unexported pure
+helper; they never lower the test process's limit.
 
-## Measured numbers
+This check prevents an already-known inadequate configuration from reaching
+memguard's unsafe allocation-failure path. It does **not** prove that a later
+allocation cannot fail, even with an unlimited limit. Other locked-memory
+users, system resource exhaustion, larger payloads, or unbounded concurrent
+opens remain outside the sizing assumptions below. `main.go` wiring is a
+separate integration task; exporting the check alone does not satisfy this
+condition.
 
-From `TestLockedBufferBudget` on this machine (fresh run, `-race`):
+## Measured numbers and threshold derivation
+
+`go test -race -count=1 -v -run '^TestLockedBufferBudget$' ./internal/secret`
+produced these observations on the host above:
 
 | Measurement | Value |
 |---|---|
-| `RLIMIT_MEMLOCK` (cur and max, `unix.Getrlimit`) | `0x7fffffffffffffff` — unlimited |
-| Page size (`unix.Getpagesize`, matches `sysctl hw.pagesize`) | 16384 bytes (16 KiB) |
-| Locked bytes per open buffer (token-sized payload) | one 16 KiB inner page (guard pages are mapped but not mlocked) |
-| Simultaneous buffers the swap path needs | 8 (incoming access+refresh, displaced access+refresh, keychain stdin line, adopted-copy occupant access+refresh, staged reversal copy), tested at 16 for a 2x margin |
-| Buffers opened simultaneously without failure | 1024 (probe cap; no failure observed) |
-| First N at which opening fails, default limits | not reached at cap 1024 (~16 MiB locked) |
-| First N at which opening fails, `RLIMIT_MEMLOCK` lowered to 256 KiB in a child | **5** — four buffers opened, the fifth open failed (race-instrumented child; the limit's 16 pages are shared with memguard's session-key buffers and the per-open transient key view, so the ceiling is below the naive 16-page count) |
+| Soft and hard `RLIMIT_MEMLOCK` | `9223372036854775807` (`0x7fffffffffffffff`), unlimited on this host |
+| System page size | 16,384 bytes |
+| Intended simultaneous-open capacity, including margin | 16 token-sized buffers; all opened successfully |
+| Default-limit headroom probe | 1,024 simultaneously open buffers, the probe cap; no failure observed |
+| Constrained child's soft and hard limits | 262,144 bytes (256 KiB, 16 pages) |
+| Constrained child's last successful open | **4** |
+| First failing open in that child | **5**, during the transient session-key view allocation |
+| Constrained child outcome in the recorded race run | `fatal error: all goroutines are asleep - deadlock!`, exit status 2 |
 
-## Failure mode under memlock exhaustion
+A token-sized plaintext occupies one locked inner page, but that is not the
+whole process budget. Memguard also holds session-key buffers and allocates
+transient key views. The exact observed four-buffer ceiling is an empirical
+result, not a proof that each additional buffer always costs four pages.
 
-When `mlock` fails, `memguard` does not return an error: `core.NewBuffer`
-calls `core.Panic`, which runs a session purge and then panics. Observed
-with `RLIMIT_MEMLOCK` lowered to 256 KiB, where the fifth simultaneous open
-fails (per-open progress printed unbuffered by the child proves the count):
+The startup policy deliberately uses the empirical allowance of
+`16 pages / 4 successful retained opens = 4 pages per open`, multiplied by
+an **eight-buffer capacity floor** and a **2x overlap margin**:
 
-- under `-race`, the child process died with a goroutine dump (exit status 2);
-- in a plain build, the purge-under-panic path **deadlocked** on the session
-  key's mutex and the process had to be killed (the upstream repository ships
-  `examples/deadlock/` reproducing this class of hang).
+```text
+required bytes = system page size × 4 × 8 × 2
+               = system page size × 64
+16 KiB pages: 1,048,576 bytes
+ 4 KiB pages:   262,144 bytes
+```
 
-Consequence: an mlock failure is a process-fatal event, not a branch, and on
-the hang path not even a clean fatal one — which is why the verdict above
-asks for the fail-fast `Getrlimit` startup check instead of claiming sizing
-alone suffices. Sizing bounds the demand (8 buffers x 16 KiB = 128 KiB, one
-at a time in practice); the check refuses the configurations in which that
-demand could still cross a finite limit. The constrained probe in the test
-is deadline-bounded, kills its child on timeout, and logs rather than
-asserts, so the suite cannot hang on this path.
+Eight is a conservative capacity floor, not an exact count of live tokens.
+The frozen reference's credential operation owns incoming and displaced
+access/refresh pairs, can build a keychain input line, and may temporarily
+re-read an adopted occupant's pair. Its `StagedAdoption` holds paths and a
+cleanup token, not another in-memory credential copy; its undo record holds
+identity. Sealed values do not each imply an open plaintext buffer. The Go
+`Equal` operation opens two buffers, and callbacks can overlap across
+callers, so claiming "only one buffer at a time" would also be incorrect.
 
-## API facts confirmed with the vendored source
+The 64-page floor budgets for at most 16 overlapping token-sized opens and
+allows overhead rather than equating 64 pages with 64 open buffers. It is a
+conservative policy derived from this measurement, not an allocation
+reservation or a verified cross-platform upper bound. Integration must keep
+concurrent opens bounded and revisit the budget for payloads larger than
+one page, additional locked-memory consumers, or a different platform.
+The 4 KiB boundary is tested arithmetically, not measured on another host.
 
-- `memguard.NewEnclave(src)` wipes `src` after sealing and returns nil for
-  empty input; `NewSecret` therefore wipes unconditionally and rejects empty
-  input before sealing (an audit-grade secret of length zero is a caller bug).
-- `Enclave.Open` returns an error only for decryption failure (the session
-  key was purged); allocation failures panic as above. `Open` also opens one
-  transient 32-byte key-view buffer per call, so each `WithPlaintext` briefly
-  locks two buffers.
-- `LockedBuffer`s returned by `Open` are frozen (read-only pages): a callback
-  that writes into the slice faults. Callbacks treat the plaintext as
-  read-only; the keychain line builder appends into its own buffer.
-- `memguard.Purge` destroys every live buffer and rotates the session key, so
-  it invalidates existing `Secret`s process-wide, and a second call is a
-  no-op. Verified by `TestPurge`.
-- After the callback the plaintext mapping is unmapped: a retained alias
-  faults on access (`TestSecretPlaintextDestroyed` proves this in a child
-  process for return, error and panic exits).
-- Importing memguard disables core dumps at init (`memcall.DisableCoreDumps`),
-  which is desirable here and costs nothing.
-- The session key is re-keyed every 500 ms by a background goroutine the
-  library starts on first use; it is invisible to callers but shows up in
-  goroutine dumps.
+## Why the failure cannot be recovered in-process
 
-## Signals: CatchInterrupt/CatchSignal are not used
+The constrained child printed successful opens 1 through 4, then stopped
+inside its fifth `Enclave.Open`. Its stack shows:
 
-`memguard.CatchSignal` calls `signal.Reset()` before `signal.Notify`, which
-would silently remove the program's own handlers, and its handler exits with
-status 1 — both incompatible with the exit-status contract (143/129/130).
-Neither function is called anywhere in this module.
-`TestPackageKeepsDefaultSignalDisposition` proves it behaviorally: a child
-process that seals, uses and purges a secret still dies **from SIGINT**
-(`WaitStatus.Signaled()`, not an exit code), so the default disposition
-survived the import. Review rule: `memguard.Catch` must never appear outside
-this document.
+```text
+Coffer.View (holding the coffer mutex)
+  -> NewBuffer(32) -> failed memory lock
+  -> core.Panic -> core.Purge
+  -> Coffer.Destroyed -> lock the same coffer mutex
+```
 
-## Purge wiring the lead must add (deferred to the signal/exit integration)
+The purge attempts to reacquire the non-reentrant mutex already held by the
+same goroutine. `core.Panic` runs purge **before** invoking Go's built-in
+`panic`, so an outer `recover` cannot execute: stack unwinding has not begun.
+The background rekey goroutine is blocked on the same mutex. The recorded
+race child terminated with the runtime deadlock diagnostic; an earlier
+plain run hung and required termination. Neither is a recoverable error
+return. The existing exhaustion probe runs only in a deadline-bounded child,
+kills it on timeout, and logs its outcome. A passing parent measurement test
+does not mean the child's exhaustion handling passed.
 
-`secret.Purge()` must run on every exit path, after the last secret use and
-before the process exits:
+## API facts confirmed in the dependency's module-cache source
 
-1. **Normal exit**: at the end of the run function, after the command tree
-   returns and before the exit status is returned.
-2. **Error exit**: the same site covers it when every exit flows through one
-   return path; any later `os.Exit` call site added elsewhere must purge
-   first.
-3. **Signal exit**: in the signal goroutine, after child teardown and
-   emergency cleanup, immediately before the `128+signal` exit. Purge is
-   idempotent, so the signal path and the normal path may both run it.
+- `NewEnclave(src)` wipes the input and rejects empty data. `NewSecret`
+  unconditionally wipes its input and returns an error for empty input.
+- `Enclave.Open` can return a decryption error; allocation failure follows
+  the fatal path above. Successful opens expose a frozen, read-only
+  `LockedBuffer`. `WithPlaintext` destroys it on return, error and panic.
+- A deliberately retained callback alias faults after destruction.
+  `TestSecretPlaintextDestroyed` checks return, error and panic paths in
+  isolated children. Callbacks must not retain or modify the bytes.
+- Memguard itself decrypts through `secretbox.Open(nil, ...)` into a
+  temporary Go-heap plaintext slice, then moves and wipes it. The wrapper
+  therefore does **not** promise that plaintext never touches the Go heap.
+- `Purge` destroys live buffers and session-key material, invalidating old
+  secrets. Repeated purge is supported, and later new secrets can lazily
+  obtain a fresh key. `TestPurge` exercises both facts. Trying to use old
+  secrets after purge is not an application recovery strategy.
+- Import initialization attempts to disable core dumps. First key use
+  starts a background rekey goroutine with a 500 ms interval.
 
-4. **Startup budget check** (the verdict's condition): read
-   `RLIMIT_MEMLOCK` with `unix.Getrlimit` during bring-up and refuse to
-   proceed — or at minimum warn — when the limit is finite and below the
-   1 MiB floor, because an mlock failure later is a panic that can deadlock,
-   not an error a command can report.
+## Signal ownership and integration contract
 
-Not wired by this change: `main.go` is owned elsewhere; the only exported
-surface is `secret.Purge`.
+Do not call `memguard.CatchInterrupt` or `memguard.CatchSignal`: their signal
+reset/registration would interfere with the application's handlers, and
+they exit with status 1 rather than the required 143/129/130. The exercised
+seal/use/purge paths preserve SIGINT's default disposition in
+`TestPackageKeepsDefaultSignalDisposition`; this behavioral test does not
+by itself prove the absence of every possible signal-registration path.
 
-## json/v2 hook findings (go1.27.1)
+The executable's owner must add both integrations, without using memguard's
+signal handlers:
 
-`encoding/json/v2.Marshal` consults, in precedence order: `MarshalJSONTo`
-(`json.MarshalerTo`), `MarshalJSON` (`json.Marshaler`), `AppendText`
-(`encoding.TextAppender`), `MarshalText` (`encoding.TextMarshaler`). `Secret`
-implements **all four** on value receivers — plus `String`, `GoString`,
-`Format` and `slog.LogValue` — so by-value fields, pointer fields, `any`
-values, map keys and text contexts all render `[REDACTED]`. Verified through
-`fmt` (every verb, flag, width and precision), slog text and JSON handlers
-(top level and inside groups), `json.Marshal` of value and pointer fields,
-and `errors.New(fmt.Sprint(secret))`.
+1. Call `EnsureLockedMemoryBudget` before any secret use; return fatal status
+   1 on error, with the diagnostic intact.
+2. Call `secret.Purge()` on normal and error exits, after the command and all
+   plaintext users have finished, before `os.Exit`.
+3. On signal exit, cancel and join plaintext users and complete child and
+   emergency cleanup before purging and returning `128+signal`. Purging
+   while a callback is still accessing its buffer can fault. Idempotence is
+   not permission to race purge against an in-flight callback.
 
-The one deliberate exposure path is `AppendPlaintextTo`, inside
-`WithPlaintext`, for credential documents that must carry the token to their
-store. It is the only place plaintext leaves the enclave; its godoc says so
-and tells the caller to wipe the returned slice after the I/O.
+These changes intentionally do not edit `main.go`.
 
-## Documented limits (outside the guarantee)
+## Redaction and explicit plaintext export
 
-- **Copies made by other packages.** Bytes handed to `net/http`, an encoder,
-  or a child process pipe during the `WithPlaintext` window are ordinary GC
-  memory: the runtime may copy them, and they are wiped only where the
-  consumer wipes them. The guarantee covers the at-rest representation, not
-  the I/O call's transient copies.
-- **GC-managed intermediates.** The input to `NewSecret` and the output of
-  `AppendPlaintextTo` are wiped explicitly, but any intermediate the caller
-  built before sealing (string concatenation, JSON decoding) is unmanaged.
-  Callers must seal as early as possible and decode directly into buffers
-  they wipe.
-- **A purged process keeps running.** `Purge` makes old secrets undecryptable
-  but does not stop code from sealing new ones; exit paths must not do secret
-  work after their purge.
-- **mlock covers residency, not ptrace.** A same-UID debugger can still read
-  the plaintext during the open window; the threat model is swap, core dumps
-  and accidental serialization, not a hostile root.
+`Secret` implements value-receiver `String`, `GoString`, `Format`,
+`slog.LogValue`, `MarshalJSONTo`, `MarshalJSON`, `AppendText` and `MarshalText`,
+all returning `[REDACTED]`. Tests cover the listed ordinary `fmt` verbs and
+flags, slog text/JSON with nested groups, JSON value/pointer/interface
+fields, and `errors.New(fmt.Sprint(secret))`. They do not establish that
+arbitrary custom serializers are unable to override these hooks.
+
+For json/v2's ordinary method selection, `MarshalJSONTo` precedes
+`MarshalJSON`, and `AppendText` precedes `MarshalText`. Explicitly supplied
+custom marshalers can override ordinary method dispatch.
+
+`AppendPlaintextTo` deliberately copies bytes into a caller-owned slice for
+credential documents; the caller must wipe that slice after use.
+`WithPlaintext` also necessarily exposes its borrowed bytes to the callback.
+Neither API can prevent a callback or downstream I/O library from making an
+ordinary heap copy. Inputs assembled by callers, encoders, HTTP requests and
+child pipes require their own lifetime and wiping discipline. The guarantee
+is encrypted retained state, scoped locked callback access, and ordinary
+redaction—not an absence of all transient plaintext copies.
+
+Memory locking protects residency, not access by a debugger or privileged
+process during an open window. Exit paths must not perform secret work after
+purge; the dependency permits fresh key creation, and its old-secret
+failure path does not immediately destroy every buffer it allocates.
+
+## Follow-ups that could remove the startup-check condition
+
+Neither alternative is implemented here; either requires fresh lifecycle
+and exhaustion verification before changing this verdict:
+
+- **Fix upstream memguard allocation-failure handling.** Eliminate the
+  purge-under-coffer-lock deadlock and provide an allocation failure path
+  that can cleanly report or terminate without hanging. This retains locked
+  plaintext storage but requires an upstream change and dependency upgrade.
+- **Implement an own-wiped-buffer fallback.** Use application-owned buffers
+  with explicit wiping when locked allocation is unavailable, with an
+  explicit policy for the weaker residency guarantee. This avoids reliance
+  on memguard's failing allocation path but would need independent lifetime,
+  copy, redaction and cleanup validation; it is not equivalent protection.
