@@ -17,6 +17,7 @@ package commands
 import (
 	"bytes"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -159,6 +160,50 @@ func TestStatusFetchesAndRendersAFreshOwnedAccount(t *testing.T) {
 	}
 	if got := world.calls.Load(); got != 1 {
 		t.Errorf("usage calls after the cached pass = %d, want still 1", got)
+	}
+}
+
+func TestStatusReturnsOutputErrors(t *testing.T) {
+	tests := map[string]struct {
+		json bool
+		raw  bool
+	}{
+		"error: table output fails":               {},
+		"error: JSON output fails":                {json: true},
+		"error: raw output fails after the table": {raw: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			world := newStatusWorld(t, serveBody(http.StatusOK, usageBody(t)))
+			world.seedOwned(t, world.fixture.Blob("access-fresh", "refresh-fresh", testutil.FreshAt()))
+			world.status.Now = func() time.Time { return time.UnixMilli(testutil.FreshAt() - 600_000) }
+			table, err := world.run(t, cli.ClaudeStatusOptions{Accounts: ownedOnly})
+			if err != nil {
+				t.Fatalf("render the table: %v", err)
+			}
+			reader, writer := io.Pipe()
+			defer func() { _ = writer.Close() }()
+			if tt.raw {
+				finished := make(chan error, 1)
+				go func() {
+					_, err := io.CopyN(io.Discard, reader, int64(len(table)))
+					_ = reader.Close()
+					finished <- err
+				}()
+				t.Cleanup(func() {
+					if err := <-finished; err != nil {
+						t.Errorf("read table before closing stdout: %v", err)
+					}
+				})
+			} else if err := reader.Close(); err != nil {
+				t.Fatal(err)
+			}
+			world.status.Stdout = writer
+			err = world.status.Run(t.Context(), world.globals, cli.ClaudeStatusOptions{JSON: tt.json, Raw: tt.raw, Accounts: ownedOnly})
+			if !errors.Is(err, io.ErrClosedPipe) || errs.ExitCode(err) != errs.ExitFatal {
+				t.Fatalf("Run error = %v, exit = %d; want closed pipe and fatal exit", err, errs.ExitCode(err))
+			}
+		})
 	}
 }
 

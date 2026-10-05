@@ -135,6 +135,13 @@ func Footer(hidden int) string {
 	return fmt.Sprintf("%d %s hidden (--all)", hidden, noun)
 }
 
+// Print writes rendered text followed by one newline, preserving right padding.
+// The text must not already end in a newline. Any write error is returned.
+func Print(w io.Writer, text string) error {
+	_, err := fmt.Fprintln(w, text)
+	return err
+}
+
 // Render renders a whole report: the table, then the hidden-row footer.
 // The returned string carries no trailing newline; the printer adds it.
 //

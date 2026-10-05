@@ -204,11 +204,17 @@ func (s *Status) Run(ctx context.Context, globals cli.Globals, opts cli.ClaudeSt
 		if err != nil {
 			return errs.NewConfig(fmt.Sprintf("the JSON report could not be serialized: %v", err))
 		}
-		fmt.Fprintln(s.stdout(), string(out))
+		if err := render.Print(s.stdout(), string(out)); err != nil {
+			return errs.NewIO("write the JSON report", err)
+		}
 	} else {
-		fmt.Fprintln(s.stdout(), render.Render(&report))
+		if err := render.Print(s.stdout(), render.Render(&report)); err != nil {
+			return errs.NewIO("write the status table", err)
+		}
 		if opts.Raw {
-			s.printRaw(outcomes, opts.All)
+			if err := s.printRaw(outcomes, opts.All); err != nil {
+				return errs.NewIO("write the raw usage bodies", err)
+			}
 		}
 	}
 
@@ -623,7 +629,7 @@ func jsonReport(outcomes []rowOutcome, report *render.Report, raw bool) render.S
 // table. Separate from the table because a usage body is a couple of
 // kilobytes of JSON and a table cell is not where anyone would read it.
 // The bodies carry usage figures and no token material.
-func (s *Status) printRaw(outcomes []rowOutcome, showAll bool) {
+func (s *Status) printRaw(outcomes []rowOutcome, showAll bool) error {
 	for i := range outcomes {
 		outcome := &outcomes[i]
 		if !showAll && !outcome.visibleByDefault {
@@ -637,8 +643,11 @@ func (s *Status) printRaw(outcomes []rowOutcome, showAll bool) {
 			slog.Warn("the raw body could not be re-serialized", slog.Any("error", err))
 			continue
 		}
-		fmt.Fprintf(s.stdout(), "\n--- raw: %s ---\n%s\n", outcome.account, body)
+		if err := render.Print(s.stdout(), fmt.Sprintf("\n--- raw: %s ---\n%s", outcome.account, body)); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // selectRows narrows the discovered rows to the ones the account flag

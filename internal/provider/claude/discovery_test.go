@@ -31,10 +31,6 @@ import (
 // identity block.
 const otherBlob = `{"claudeAiOauth":{"accessToken":"other-access","refreshToken":"other-refresh","expiresAt":9999999999999,"tokenAccount":{"uuid":"33333333-3333-4333-8333-333333333333","emailAddress":"other@example.com","organizationUuid":"44444444-4444-4444-8444-444444444444"}}}`
 
-// oldBlob carries no tokenAccount, which is what an older vendor build
-// wrote.
-const oldBlob = `{"claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":9999999999999}}`
-
 // testStore builds a store root and the environment pointing at an
 // isolated home.
 func testStore(t *testing.T) (*config.Paths, *EnvView) {

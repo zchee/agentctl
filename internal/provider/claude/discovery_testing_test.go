@@ -27,6 +27,9 @@ import (
 	"github.com/zchee/agentctl/internal/testutil"
 )
 
+// oldBlob carries no tokenAccount, as older credential documents did.
+const oldBlob = `{"claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":9999999999999}}`
+
 // liveBlob is the live item's credential, with a full identity block.
 const liveBlob = `{"claudeAiOauth":{"accessToken":"live-access","refreshToken":"live-refresh","expiresAt":9999999999999,"tokenAccount":{"uuid":"11111111-1111-4111-8111-111111111111","emailAddress":"live@example.com","organizationUuid":"22222222-2222-4222-8222-222222222222"}}}`
 

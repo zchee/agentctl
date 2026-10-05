@@ -15,11 +15,13 @@
 package render
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
 
 	lipgloss "charm.land/lipgloss/v2"
+	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/internal/testutil"
 	"github.com/zchee/agentctl/internal/usage"
@@ -173,11 +175,12 @@ func TestClaudeStatusTableExactBytes(t *testing.T) {
 		"-------------------+------+------+-----+--------+----------------+---------+------------------+----------------------+-------",
 		" alice@example.com | Acme | max  | 21% | 35%    | 56%            | n/a     | 2h13m (11:13 AM) | 2d20h (Fri 05:00 AM) | ok    ",
 	}, "\n")
-	if rendered != want {
-		t.Errorf("exact bytes mismatch:\ngot:  %q\nwant: %q", rendered, want)
+	var printed bytes.Buffer
+	if err := Print(&printed, rendered); err != nil {
+		t.Fatalf("print the table: %v", err)
 	}
-	if printed := rendered + "\n"; !strings.HasSuffix(printed, "| ok    \n") {
-		t.Errorf("the printed table must keep the final row's padding ahead of the one newline: %q", printed)
+	if diff := gocmp.Diff(want+"\n", printed.String()); diff != "" {
+		t.Errorf("printed table mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -194,11 +197,12 @@ func TestCodexStatusTableExactBytes(t *testing.T) {
 		"-----------------+------+------+-----+--------+---------+------------------+----------------------+-------",
 		" dev@example.com | plus | live | 21% | 35%    | —       | 2h13m (11:13 AM) | 2d20h (Fri 05:00 AM) | ok    ",
 	}, "\n")
-	if rendered != want {
-		t.Errorf("exact bytes mismatch:\ngot:  %q\nwant: %q", rendered, want)
+	var printed bytes.Buffer
+	if err := Print(&printed, rendered); err != nil {
+		t.Fatalf("print the table: %v", err)
 	}
-	if printed := rendered + "\n"; !strings.HasSuffix(printed, "| ok    \n") {
-		t.Errorf("the printed table must keep the final row's padding ahead of the one newline: %q", printed)
+	if diff := gocmp.Diff(want+"\n", printed.String()); diff != "" {
+		t.Errorf("printed table mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -216,8 +220,12 @@ func TestFinishedCellTableExactBytes(t *testing.T) {
 		"-------------+-------------------+------+-------+----------+-------+-------------------",
 		" owned:alice | alice@example.com | Acme | owned | keychain | ok    | alice@example.com ",
 	}, "\n")
-	if rendered != want {
-		t.Errorf("exact bytes mismatch:\ngot:  %q\nwant: %q", rendered, want)
+	var printed bytes.Buffer
+	if err := Print(&printed, rendered); err != nil {
+		t.Fatalf("print the table: %v", err)
+	}
+	if diff := gocmp.Diff(want+"\n", printed.String()); diff != "" {
+		t.Errorf("printed table mismatch (-want +got):\n%s", diff)
 	}
 }
 
