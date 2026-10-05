@@ -26,6 +26,7 @@ func init() { register(isolateHandlers) }
 
 func isolateHandlers(deps Dependencies, handlers *cli.Handlers) {
 	process := commands.SessionProcess{In: os.Stdin, Out: deps.Stdout, Err: os.Stderr, Signals: deps.Signals}
+	handlers.ClaudeUse = process.RunUse
 	handlers.ClaudeExec = process.RunExec
 	handlers.ClaudeEnv = func(ctx context.Context, globals cli.Globals, opts cli.ClaudeEnvOptions) error {
 		return commands.RunEnv(ctx, globals, opts, deps.Stdout)
