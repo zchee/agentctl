@@ -1,0 +1,27 @@
+{
+  // Workers of this repository run on the agent definitions in ~/.claude/agents/codex-*.md
+  // (model claude-gpt-6-astra-ultrafast[1m] in their frontmatter; explore and writer stay on
+  // claude-gpt-5.6-luna-fast[1m] by the user's decision of 2026-10-05). "inherit" stops the
+  // OMC hook from replacing that model with the user-level agents.<role>.model tier alias.
+  "agents": {
+    "explore": { "model": "inherit" },
+    "analyst": { "model": "inherit" },
+    "planner": { "model": "inherit" },
+    "architect": { "model": "inherit" },
+    "debugger": { "model": "inherit" },
+    "executor": { "model": "inherit" },
+    "verifier": { "model": "inherit" },
+    "securityReviewer": { "model": "inherit" },
+    "codeReviewer": { "model": "inherit" },
+    "testEngineer": { "model": "inherit" },
+    "designer": { "model": "inherit" },
+    "writer": { "model": "inherit" },
+    "qaTester": { "model": "inherit" },
+    "scientist": { "model": "inherit" },
+    "tracer": { "model": "inherit" },
+    "gitMaster": { "model": "inherit" },
+    "codeSimplifier": { "model": "inherit" },
+    "critic": { "model": "inherit" },
+    "documentSpecialist": { "model": "inherit" }
+  }
+}
