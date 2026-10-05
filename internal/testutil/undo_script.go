@@ -375,8 +375,8 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 		}
 	})
 	ts.SetCmd("undo-move-record", func(ts *testscript.TestScript, neg bool, args []string) {
-		if neg || len(args) != 0 {
-			ts.Fatalf("usage: undo-move-record")
+		if neg || len(args) > 1 || len(args) == 1 && args[0] != "matching" {
+			ts.Fatalf("usage: undo-move-record [matching]")
 		}
 		var current map[string]any
 		ts.Check(json.Unmarshal([]byte(ts.ReadFile(registryPath)), &current))
@@ -384,7 +384,13 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 		for _, value := range accounts {
 			account := value.(map[string]any)
 			if account["account_uuid"] == owner {
-				account["kind"].(map[string]any)["export_spelling"] = filepath.Join(root, "previous-namespace")
+				kind := account["kind"].(map[string]any)
+				spelling := ExportSpelling(filepath.Join(root, "previous-namespace"))
+				kind["export_spelling"] = spelling
+				if len(args) == 1 {
+					kind["export_sha8"] = Sha8(spelling)
+					ts.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", spelling)
+				}
 			}
 		}
 		write(registryPath, document(current))

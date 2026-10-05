@@ -706,6 +706,89 @@ undo-check 1 0 2
 swap-io 3 0 0
 swap-audit applied 1
 
+# Stop after the first acquire: only the ascending-smallest namespace may exist.
+swapfixture namespace namespace-order
+undo-setup
+undo-blob $UNDO_ITEM third $THIRD
+rm $UNDO_THIRD_DIR/.credentials.json
+cp $UNDO_ITEM order-item-before
+env LOCKS=$AGENTCTL_CONFIG_DIR/claude/.locks
+env ORG=66666666-7777-8888-9999-000000000000
+! exists $LOCKS/$OWNER.$ORG.lock
+! exists $LOCKS/$INCOMING.$ORG.lock
+! exists $LOCKS/$THIRD.$ORG.lock
+env AGENTCTL_FAULT=pause_swap_namespace_acquired
+! exec agentctl claude use $INCOMING --live --yes --json &order&
+exec waitfor $AGENTCTL_FAULT_RESUME.reached
+exists $LOCKS/$OWNER.$ORG.lock
+! exists $LOCKS/$INCOMING.$ORG.lock
+! exists $LOCKS/$THIRD.$ORG.lock
+! exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+stderr 'already held'
+swap-action terminate
+wait order
+swap-action signal-exit
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+cmp $UNDO_ITEM order-item-before
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_THIRD_DIR/.credentials.json
+! exists $SWAP_AUDIT
+undo-check 0 0 0
+swap-io 1 0 0
+
+# A third occupant is filed in its namespace, under all three namespace locks.
+swapfixture namespace third-namespace-lock
+undo-setup
+undo-blob $UNDO_INCOMING_DIR/.credentials.json incoming $INCOMING
+undo-blob $UNDO_ITEM third $THIRD
+cp $UNDO_ITEM third-item-before
+rm $UNDO_THIRD_DIR/.credentials.json
+env LOCKS=$AGENTCTL_CONFIG_DIR/claude/.locks
+! exists $LOCKS/$THIRD.$ORG.lock
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+exists $LOCKS/$OWNER.$ORG.lock
+exists $LOCKS/$INCOMING.$ORG.lock
+exists $LOCKS/$THIRD.$ORG.lock
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
+exec flockhold $LOCKS/$THIRD.$ORG.lock 1ms
+cmp $UNDO_THIRD_DIR/.credentials.json third-item-before
+cmp $UNDO_ITEM $UNDO_INCOMING_DIR/.credentials.json
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 1 0 0
+swap-io 4 0 0
+swap-audit applied 0
+
+# Registry and inherited spelling agree, but neither names the derived store.
+swapfixture namespace moved-store
+undo-setup
+undo-move-record matching
+cp $UNDO_ITEM moved-item-before
+exec expectexit 15 agentctl claude use $INCOMING --live --yes
+stdout 'the store moved'
+stdout 'previous-namespace'
+! stdout SENTINEL
+! stderr SENTINEL
+exec expectexit 15 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+stdout '"reason": "not_owned"'
+stdout '"refusal": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM moved-item-before
+! exists $UNDO_OWNER_DIR/.credentials.json
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+! exists $SWAP_AUDIT
+! exists $AGENTCTL_CONFIG_DIR/claude/.locks/$OWNER.$ORG.lock
+! exists $AGENTCTL_CONFIG_DIR/claude/.locks/$INCOMING.$ORG.lock
+undo-check 0 0 0
+swap-io 0 0 0
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
