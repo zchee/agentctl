@@ -676,6 +676,10 @@ func serveLockHolder(lockDir string) {
 		}
 		fmt.Println("ok")
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "holder: read order: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // TestLockHolderProtocol is two tests in one binary: re-executed with
