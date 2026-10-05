@@ -149,7 +149,7 @@ func (c *CLI) newCodexStatusCmd() *cobra.Command {
 	f.BoolVar(&opts.NoCache, "no-cache", false, "Ignore the on-disk usage cache for this run.")
 	f.BoolVar(&opts.All, "all", false, "Show rows that are hidden by default, such as stale siblings.")
 	f.StringArrayVar(&opts.Accounts, "account", nil, "Limit the report to this account; repeat to name several.")
-	f.Var(newDurationValue(&opts.Timeout, ParseDuration), "timeout", "Per-request HTTP timeout, such as 10s or 5m.")
+	f.Var(newDurationValue(&opts.Timeout, ParseDuration), "timeout", "Per-request HTTP timeout, such as 10s or 5m.\n\nThe budget for each phase of one request, not for the pass. One request can take 4 × min(--timeout, 5s) + 2 × --timeout (40s by default), and when an owned account may be refreshed the pass may take up to 1s + 19s + 1s + 2 × that (101s by default), because a refresh POST has its own budget and is never cut short.")
 	return cmd
 }
 

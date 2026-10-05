@@ -354,7 +354,7 @@ func (c *CLI) newClaudeUseCmd() *cobra.Command {
 	f.BoolVar(&opts.RestartRemoteControl, "restart-remote-control", false, "Before a live swap, disconnect Remote Control in each running Claude Code session that has it on and runs in a tmux pane, and start it again there after the swap, so the claude.ai conversation carries over.")
 	f.BoolVar(&opts.NewOnly, "new-only", false, "Accepted as a synonym for the default (isolated-session) behaviour.")
 	f.BoolVar(&opts.Undo, "undo", false, "Undo the most recent --live swap.")
-	f.StringVar(&opts.Forget, "forget", "", "Remove the session directory created by an earlier use of this account.")
+	f.StringVar(&opts.Forget, "forget", "", "Remove the session directory created by an earlier use <id>.")
 	f.StringVar(&opts.ClaudeConfigDir, "claude-config-dir", "", "Use this directory as the session's Claude Code config directory instead of a generated one. Must be an absolute path.")
 	f.BoolVar(&opts.FreshContext, "fresh-context", false, "Do not symlink the directories that hold resumable work.")
 	f.BoolVar(&opts.NoMCP, "no-mcp", false, "Omit the MCP symlink, the --mcp-config flag and the shell alias together.")

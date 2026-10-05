@@ -21,4 +21,10 @@
 // dispatches through a Handlers value injected by the caller, so the surface
 // stays reviewable in one place while the command implementations arrive
 // independently.
+//
+// Help strings contain no backticks, and that is this surface's one
+// deliberate divergence from the published help text: the flag library
+// consumes a backquoted span in a usage string as the flag's placeholder
+// name instead of printing it, so a term the help would quote in
+// backticks is stated plain.
 package cli

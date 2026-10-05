@@ -107,7 +107,7 @@ func New(h Handlers) *CLI {
 			return errors.New("a subcommand is required; run `agentctl --help` for the list")
 		},
 	}
-	root.PersistentFlags().StringVar(&c.configDir, "config-dir", "", "Use this agentctl configuration directory instead of the default")
+	root.PersistentFlags().StringVar(&c.configDir, "config-dir", "", "Use this agentctl configuration directory instead of the default.")
 	root.CompletionOptions.DisableDefaultCmd = true
 
 	root.AddCommand(c.newClaudeCmd(), c.newCodexCmd(), c.newCompletionsCmd())
