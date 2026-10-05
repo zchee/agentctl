@@ -18,4 +18,4 @@ by hand: re-run the script against the reference checkout instead.
 | src/tui/snapshots/agctl__tui__ui__tests__two_accounts_render_as_expected.snap | testdata/golden/tui__ui__tests__two_accounts_render_as_expected.golden |
 | src/provider/codex/snapshots/agctl__provider__codex__account__tests__codex_table.snap | testdata/golden/provider__codex__account__tests__codex_table.golden |
 | src/provider/codex/snapshots/agctl__provider__codex__account__tests__codex_watch_two_rows.snap | testdata/golden/provider__codex__account__tests__codex_watch_two_rows.golden |
-| src/provider/codex/snapshots/agctl__provider__codex__usage__tests__f78_capture_json_v2.snap | testdata/golden/provider__codex__usage__tests__f78_capture_json_v2.golden |
+| src/provider/codex/snapshots/agctl__provider__codex__usage__tests__f78_capture_json_v2.snap | testdata/golden/provider__codex__usage__capture_json_v2.golden |
