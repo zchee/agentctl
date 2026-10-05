@@ -1,0 +1,4 @@
+ Account           | Org  | Plan | 5h  | Weekly | Fable (weekly) | Credits | 5h reset         | Weekly reset         | State 
+-------------------+------+------+-----+--------+----------------+---------+------------------+----------------------+-------
+ alice@example.com | Acme | max  | 21% | 35%    | 56%            | n/a     | 2h13m (11:13 AM) | 2d20h (Fri 05:00 AM) | ok    
+ bob@example.com   | Acme | max  | 21% | 35%    | 56%            | n/a     | 2h13m (11:13 AM) | 2d20h (Fri 05:00 AM) | ok
