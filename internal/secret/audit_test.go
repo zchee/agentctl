@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1436,5 +1437,43 @@ func TestAuditOpenLogIsStillTheRootedOpenOfTheMainLog(t *testing.T) {
 	want := fmt.Sprintf("the audit log `%s` is refused: a symbolic link, which agentctl will not append through", shown)
 	if err == nil || err.Error() != want {
 		t.Errorf("refusal sentence:\n got: %v\nwant: %s", err, want)
+	}
+}
+
+func TestAuditConcurrentAppendersNeverInterleaveHalfLines(t *testing.T) {
+	// One write syscall per entry through O_APPEND is what keeps two
+	// processes from interleaving half-lines; concurrent appenders must
+	// each land a whole line that reads back.
+	paths := newAuditStore(t)
+	const writers = 16
+	var group sync.WaitGroup
+	errCh := make(chan error, writers)
+	for i := range writers {
+		group.Go(func() {
+			digest := fmt.Sprintf("%08x", i)
+			if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(writeEvent(digest, nil))); err != nil {
+				errCh <- fmt.Errorf("writer %d: %w", i, err)
+			}
+		})
+	}
+	group.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+
+	read, err := TailAuditLog(paths, writers)
+	if err != nil {
+		t.Fatalf("readable: %v", err)
+	}
+	if len(read.Unreadable) != 0 {
+		t.Fatalf("no line may be torn: %+v", read.Unreadable)
+	}
+	seen := make(map[string]bool, writers)
+	for _, entry := range read.Entries {
+		seen[entry.Event.(*WriteEvent).ToDigest8] = true
+	}
+	if len(seen) != writers {
+		t.Errorf("every writer's whole line survives: %d of %d", len(seen), writers)
 	}
 }
