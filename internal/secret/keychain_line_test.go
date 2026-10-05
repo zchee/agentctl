@@ -12,27 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package claude
+package secret
 
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/zchee/agentctl/internal/errs"
-	"github.com/zchee/agentctl/internal/secret"
 )
 
-// liveService is the live keychain item's service name the line vectors
-// target.
-const liveService = LiveService
+// lineService is the service name the line vectors target. Any quotable
+// name works; the shape and length rules do not read it.
+const lineService = "example-service"
 
-// lineBytes captures the bytes a line puts on a pipe.
-func lineBytes(t *testing.T, line *secret.KeychainStdinLine) []byte {
+// keychainLineBytes captures the bytes a line puts on a pipe.
+func keychainLineBytes(t *testing.T, line *KeychainStdinLine) []byte {
 	t.Helper()
 	var sink bytes.Buffer
 	if _, err := line.WriteTo(&sink); err != nil {
@@ -41,48 +39,27 @@ func lineBytes(t *testing.T, line *secret.KeychainStdinLine) []byte {
 	return sink.Bytes()
 }
 
-// credentialsOfBlobLen builds a credential whose serialized blob is
-// exactly blobLen bytes, with the padding in an unrecognised member so the
-// length is reachable exactly rather than approximately.
-func credentialsOfBlobLen(t *testing.T, blobLen int) *Credentials {
-	t.Helper()
-	minimal := `{"claudeAiOauth":{"accessToken":"a","expiresAt":0,"scopes":[],"pad":""}}`
-	credentials, err := ParseBlob([]byte(minimal))
-	if err != nil {
-		t.Fatalf("the minimal blob parses: %v", err)
-	}
-	base := len(mustBlobJSON(t, credentials))
-	padding := blobLen - base
-	if padding < 0 {
-		t.Fatalf("the requested blob of %d bytes is under the %d-byte base", blobLen, base)
-	}
-	for i := range credentials.Extra {
-		if credentials.Extra[i].Name == "pad" {
-			credentials.Extra[i].Value = jsontext.Value(`"` + strings.Repeat("p", padding) + `"`)
-		}
-	}
-	if got := len(mustBlobJSON(t, credentials)); got != blobLen {
-		t.Fatalf("the padded blob is %d bytes, want %d", got, blobLen)
-	}
-	return credentials
+// blobOfLen builds a payload of exactly blobLen bytes. The content is
+// arbitrary because the line carries its lowercase hex, never the bytes.
+func blobOfLen(blobLen int) []byte {
+	return bytes.Repeat([]byte{'p'}, blobLen)
 }
 
-// lineOfExactly builds a line of exactly length bytes, trailing newline
-// included. The blob contributes two bytes per byte, so the parity of the
-// length is fixed by the account and service names; one of the two account
-// lengths below always lands on the requested number.
-func lineOfExactly(t *testing.T, length int) (*secret.KeychainStdinLine, error) {
+// keychainLineOfExactly builds a line of exactly length bytes, trailing
+// newline included. The blob contributes two bytes per byte, so the parity
+// of the length is fixed by the account and service names; one of the two
+// account lengths below always lands on the requested number.
+func keychainLineOfExactly(t *testing.T, length int) (*KeychainStdinLine, error) {
 	t.Helper()
 	// 28 bytes through the opening quote, 6 for `" -s "`, 6 for `" -X "`,
 	// 1 for the closing quote and 1 for the newline.
 	const fixed = 42
 	for accountLen := 1; accountLen <= 2; accountLen++ {
-		overhead := fixed + accountLen + len(liveService)
+		overhead := fixed + accountLen + len(lineService)
 		if length < overhead || (length-overhead)%2 != 0 {
 			continue
 		}
-		credentials := credentialsOfBlobLen(t, (length-overhead)/2)
-		return credentials.ToKeychainStdinLine(strings.Repeat("u", accountLen), liveService)
+		return NewKeychainStdinLine(strings.Repeat("u", accountLen), lineService, blobOfLen((length-overhead)/2))
 	}
 	t.Fatalf("no account length makes a line of exactly %d bytes", length)
 	return nil, nil
@@ -91,21 +68,21 @@ func lineOfExactly(t *testing.T, length int) (*secret.KeychainStdinLine, error) 
 func TestTheKeychainLineIsTheUpdateShape(t *testing.T) {
 	t.Parallel()
 
-	credentials := parseFixture(t, "credentials-new-blob.json")
-	line, err := credentials.ToKeychainStdinLine("example", liveService)
+	blob := []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-abc"}}`)
+	line, err := NewKeychainStdinLine("example", lineService, blob)
 	if err != nil {
-		t.Fatalf("the fixture blob is well under the limit: %v", err)
+		t.Fatalf("the blob is well under the limit: %v", err)
 	}
 
 	expected := fmt.Sprintf("add-generic-password -U -a %q -s %q -X %q\n",
-		"example", liveService, hex.EncodeToString(mustBlobJSON(t, credentials)))
-	if got := string(lineBytes(t, line)); got != expected {
+		"example", lineService, hex.EncodeToString(blob))
+	if got := string(keychainLineBytes(t, line)); got != expected {
 		t.Fatalf("line mismatch:\ngot  %q\nwant %q", got, expected)
 	}
 	if line.Len() != len(expected) {
 		t.Fatalf("Len() = %d, want %d", line.Len(), len(expected))
 	}
-	if line.Account() != "example" || line.Service() != liveService {
+	if line.Account() != "example" || line.Service() != lineService {
 		t.Fatalf("the line must record its item: %s", line)
 	}
 }
@@ -113,12 +90,11 @@ func TestTheKeychainLineIsTheUpdateShape(t *testing.T) {
 func TestTheLinesLengthIsFixedOverheadPlusTwiceTheBlob(t *testing.T) {
 	t.Parallel()
 
-	credentials := credentialsOfBlobLen(t, 100)
-	line, err := credentials.ToKeychainStdinLine("u", liveService)
+	line, err := NewKeychainStdinLine("u", lineService, blobOfLen(100))
 	if err != nil {
 		t.Fatalf("well under the limit: %v", err)
 	}
-	if want := 42 + 1 + len(liveService) + 200; line.Len() != want {
+	if want := 42 + 1 + len(lineService) + 200; line.Len() != want {
 		t.Fatalf("Len() = %d, want %d", line.Len(), want)
 	}
 }
@@ -131,13 +107,13 @@ func TestTheLimitCountsTheTrailingNewline(t *testing.T) {
 		refused bool
 	}{
 		"success: one byte under the limit": {length: 4031},
-		"success: exactly at the limit":     {length: secret.KeychainLineLimit},
+		"success: exactly at the limit":     {length: KeychainLineLimit},
 		"error: one byte over the limit":    {length: 4033, refused: true},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			line, err := lineOfExactly(t, tt.length)
+			line, err := keychainLineOfExactly(t, tt.length)
 			if !tt.refused {
 				if err != nil {
 					t.Fatalf("a line of %d bytes is allowed: %v", tt.length, err)
@@ -147,7 +123,7 @@ func TestTheLimitCountsTheTrailingNewline(t *testing.T) {
 				}
 				return
 			}
-			tooLong, ok := errors.AsType[*secret.LineTooLongError](err)
+			tooLong, ok := errors.AsType[*LineTooLongError](err)
 			if !ok {
 				t.Fatalf("want the over-long refusal, got %v", err)
 			}
@@ -170,27 +146,26 @@ func TestTheLimitCountsTheTrailingNewline(t *testing.T) {
 func TestAnUnquotableNameIsRefusedBeforeAnythingIsBuilt(t *testing.T) {
 	t.Parallel()
 
-	credentials := parseFixture(t, "credentials-new-blob.json")
 	tests := map[string]struct {
 		account string
 		service string
 		field   string
 	}{
 		"error: a quote in the account": {
-			account: `ex"ample`, service: liveService, field: "account",
+			account: `ex"ample`, service: lineService, field: "account",
 		},
 		"error: a backslash in the service": {
 			account: "example", service: `live\service`, field: "service",
 		},
 		"error: a newline in the account": {
-			account: "exam\nple", service: liveService, field: "account",
+			account: "exam\nple", service: lineService, field: "account",
 		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := credentials.ToKeychainStdinLine(tt.account, tt.service)
-			unquotable, ok := errors.AsType[*secret.UnquotableError](err)
+			_, err := NewKeychainStdinLine(tt.account, tt.service, blobOfLen(8))
+			unquotable, ok := errors.AsType[*UnquotableError](err)
 			if !ok || unquotable.Field != tt.field {
 				t.Fatalf("want the unquotable %s refusal, got %v", tt.field, err)
 			}
@@ -201,12 +176,12 @@ func TestAnUnquotableNameIsRefusedBeforeAnythingIsBuilt(t *testing.T) {
 func TestTheLineNeverPrintsItsPayload(t *testing.T) {
 	t.Parallel()
 
-	credentials := parseFixture(t, "credentials-new-blob.json")
-	line, err := credentials.ToKeychainStdinLine("example", liveService)
+	blob := []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-abc"}}`)
+	payload := hex.EncodeToString(blob)
+	line, err := NewKeychainStdinLine("example", lineService, blob)
 	if err != nil {
 		t.Fatalf("well under the limit: %v", err)
 	}
-	payload := hex.EncodeToString(mustBlobJSON(t, credentials))
 
 	renders := map[string]string{
 		"String()": line.String(),
@@ -225,7 +200,7 @@ func TestTheLineNeverPrintsItsPayload(t *testing.T) {
 		if !strings.Contains(rendered, "<redacted>") {
 			t.Errorf("%s must mark the redaction: %q", name, rendered)
 		}
-		if !strings.Contains(rendered, liveService) {
+		if !strings.Contains(rendered, lineService) {
 			t.Errorf("%s: the item the line names is not a secret: %q", name, rendered)
 		}
 	}
