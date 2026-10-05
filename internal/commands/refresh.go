@@ -28,6 +28,7 @@ import (
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/runtime/fault"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -77,7 +78,7 @@ func (s *Status) underNamespaceLock(ctx context.Context, paths *config.Paths, re
 	}
 	guard, err := secret.Acquire(ctx, paths.LocksDir(), filepath.Base(paths.LockPath(record.AccountUUID, record.OrganizationUUID)), deadline)
 	if err != nil {
-		if errors.Is(err, secret.ErrLockBusy) {
+		if errors.Is(err, secret.ErrLockBusy) || errors.Is(err, context.DeadlineExceeded) {
 			if fresh := rereadCredential(nsDir); fresh != nil && !fresh.AccessExpired(s.now().UnixMilli(), claude.RefreshMarginMillis) {
 				return refreshOutcome{credentials: fresh, note: "another process refreshed this account", lockState: "adopted"}
 			}
@@ -135,6 +136,7 @@ func (s *Status) underNamespaceLock(ctx context.Context, paths *config.Paths, re
 		return refreshFailure(err)
 	}
 	s.askRefreshPlan(ctx, record, current, secret.ReadTimeout)
+	fault.Active().PausePoint("before_refresh_recheck")
 	observed, err := secret.Snapshot(target)
 	if err != nil || snapshot == nil || observed == nil || *snapshot != *observed || s.detectRefreshActivity(ctx, nsDir, record, listing).Kind != secret.ForeignNone {
 		return refreshRefused(claude.StateOfRefreshDiscarded(), "claude_detected")

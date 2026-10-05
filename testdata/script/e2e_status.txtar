@@ -158,6 +158,119 @@ status-check bounded
 usage-calls 0 0 0
 status-check read-only
 
+# Additional coverage from tests/e2e_status.rs at the frozen checkout above.
+# ac6_an_expired_owned_credential_is_refreshed_and_replaced_atomically
+refreshfixture owned
+exec agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'Fable \(weekly\)'
+refresh-calls 1 1 0
+refresh-check stored rotated
+refresh-check atomic
+refresh-check namespace .credentials.json
+refresh-check read-only
+
+# ac31_a_hanging_security_times_out_and_owned_rows_still_refresh
+refreshfixture hanging-owned
+exec expectexit 2 agentctl claude status --refresh
+! stderr 'sk-ant|SENTINEL'
+stdout 'keychain timeout'
+stdout 'migration probe skipped'
+! stdout '99999999-9999-9999-9999-999999999999|decoy@example.com'
+refresh-calls 1 1 0
+refresh-check stored rotated
+refresh-check bounded
+refresh-check read-only
+
+# ac32_a_locked_keychain_stops_keychain_rows_and_not_owned_ones
+refreshfixture locked-owned
+exec expectexit 2 agentctl claude status --refresh
+! stderr 'sk-ant|SENTINEL'
+stdout 'keychain locked'
+refresh-calls 1 1 0
+refresh-check stored rotated
+! grep 'find-generic-password' $REFRESH_ROOT/security.log
+refresh-check read-only
+
+# ac34_a_migrated_namespace_is_read_from_the_keychain_and_never_written
+refreshfixture migrated-with-file
+exec agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'keychain service'
+refresh-calls 1 0 0
+refresh-check file-unchanged
+refresh-check namespace .credentials.json
+refresh-check read-only
+
+# ac48_a_symlink_at_the_lock_path_stops_the_refresh
+refreshfixture lock-symlink
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'lock unavailable'
+refresh-calls 0 0 0
+refresh-check file-unchanged
+! exists $REFRESH_ROOT/elsewhere
+
+# ac48_an_unavailable_flock_stops_the_refresh
+refreshfixture flock-unavailable
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'lock unavailable'
+refresh-calls 0 0 0
+refresh-check file-unchanged
+refresh-check namespace .credentials.json
+
+# an_owned_row_shows_its_plan_after_one_refresh
+refreshfixture owned-plan
+refresh-action fresh
+exec agentctl claude status --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check plan-cell stdout '—'
+refresh-calls 1 0 0
+refresh-action expire
+exec agentctl claude status --refresh --no-cache --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check plan-cell stdout pro
+refresh-calls 2 1 1
+refresh-check plan pro
+refresh-action expire
+exec agentctl claude status --refresh --no-cache --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check plan-cell stdout pro
+refresh-calls 3 2 1
+refresh-check config-unchanged
+
+# an_unmapped_organization_is_asked_again_at_each_refresh
+refreshfixture unmapped-plan
+exec agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check plan-cell stdout '—'
+refresh-calls 1 1 1
+refresh-check plan ''
+refresh-action expire
+exec agentctl claude status --refresh --no-cache --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check plan-cell stdout '—'
+refresh-calls 2 2 2
+refresh-check plan ''
+
+# a_migrated_items_plan_is_asked_before_the_hold_and_written_with_the_refresh
+refreshfixture migrated-plan
+exec agentctl claude status --refresh --account owner@example.com &migratedplan&
+refresh-action wait-pause
+refresh-calls 0 1 1
+refresh-check peers-absent
+refresh-action resume
+wait migratedplan
+! stderr 'sk-ant|SENTINEL'
+refresh-calls 1 1 1
+refresh-check stored rotated
+refresh-check plan pro
+refresh-check write
+refresh-check keychain-calls 6 11
+refresh-check namespace
+refresh-check peers-absent
+
 -- expected.stdout --
  Account | Org          | Plan | 5h | Weekly | Fable (weekly) | Credits | 5h reset | Weekly reset | State                                                    
 ---------+--------------+------+----+--------+----------------+---------+----------+--------------+----------------------------------------------------------

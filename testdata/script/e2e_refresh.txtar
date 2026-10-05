@@ -1,0 +1,348 @@
+# Process-boundary coverage from tests/e2e_refresh.rs at
+# dbf6aeab84dfbe2465de496316d7bf6780940a60. Each heading names its test.
+# The held-lock cases use a blocked loopback token handler instead of hold_lock;
+# the holder spends one POST, and the blocked contender spends none.
+# Pending writes are staged through rename_fail, except the first-write and
+# removed-current vectors, whose metadata cannot be produced by a refresh.
+
+# ac7_two_concurrent_refreshes_make_exactly_one_post
+refreshfixture delayed
+exec agentctl claude status --refresh --no-cache --account owner@example.com &first&
+refresh-action wait-post
+exec agentctl claude status --json --refresh --no-cache --account owner@example.com &second&
+wait first
+! stderr 'sk-ant|SENTINEL'
+wait second
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout lock_state adopted
+refresh-calls 2 1 0
+refresh-check atomic
+refresh-check stored rotated
+
+# ac7_a_lock_held_past_the_deadline_makes_the_second_process_busy
+# ac27_sigterm_during_a_held_refresh_exits_143_and_releases_the_lock
+# ac48_the_lock_body_names_the_process_holding_it
+refreshfixture blocked
+! exec agentctl claude status --refresh --timeout 60s --account owner@example.com &holder&
+refresh-action wait-post
+refresh-check held
+refresh-check lock-body
+exec expectexit 2 agentctl claude status --json --refresh --timeout 1s --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state busy
+refresh-check row stdout lock_state busy
+refresh-calls 0 1 0
+refresh-action terminate
+wait holder
+refresh-check signal-exit
+refresh-check unlocked
+refresh-check namespace .credentials.json
+refresh-check file-unchanged
+refresh-action release
+
+# storage_mutex_status_compatibility_json_and_legacy_refresh
+refreshfixture legacy
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+cp stdout legacy.json
+refresh-calls 1 1 0
+cmp $REFRESH_NS/.storage-write unchanged
+refreshfixture legacy-session
+exec expectexit 2 agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state claude_session_detected
+refresh-check same-keys legacy.json stdout
+refresh-calls 0 0 0
+cmp $REFRESH_NS/.storage-write unchanged
+refresh-check file-unchanged
+
+# ac21_a_claude_lock_in_the_namespace_refuses_the_refresh
+refreshfixture session
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'claude session detected'
+refresh-calls 0 0 0
+refresh-check namespace .credentials.json .oauth_refresh.lock
+refresh-check file-unchanged
+
+# ac21_a_session_appearing_after_the_post_discards_the_refresh
+refreshfixture session-after-post
+! exec agentctl claude status --refresh --account owner@example.com &session&
+refresh-action wait-pause
+refresh-calls 0 1 0
+refresh-action session
+refresh-action resume
+wait session
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh discarded: namespace changed during refresh'
+refresh-calls 0 1 0
+refresh-check namespace .credentials.json .oauth_refresh.lock
+refresh-check file-unchanged
+
+# ac33a_an_unchanged_file_replays_its_pending_without_a_post
+refreshfixture owned
+env AGENTCTL_FAULT=rename_fail
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh saved to pending'
+refresh-check namespace .credentials.json .credentials.json.pending .pending.meta
+refresh-calls 1 1 0
+env AGENTCTL_FAULT=
+exec agentctl claude status --refresh --no-cache --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending replayed'
+refresh-calls 2 1 0
+refresh-check stored rotated
+refresh-check namespace .credentials.json
+
+# ac33b_a_changed_file_discards_its_pending_and_refreshes_again
+refreshfixture pending-changed
+env AGENTCTL_FAULT=rename_fail
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh saved to pending'
+refresh-calls 1 1 0
+env AGENTCTL_FAULT=
+refresh-action pending
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending discarded: file changed'
+refresh-calls 2 2 0
+refresh-check stored rotated
+refresh-check namespace .credentials.json
+
+# ac33c_a_pending_past_its_expiry_is_replayed_and_then_refreshed
+refreshfixture pending-expired
+env AGENTCTL_FAULT=rename_fail
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh saved to pending'
+refresh-calls 1 1 0
+env AGENTCTL_FAULT=
+exec agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending replayed'
+refresh-calls 2 2 0
+refresh-check stored rotated
+refresh-check namespace .credentials.json
+
+# ac33d_a_pending_without_metadata_is_invalid
+refreshfixture pending-invalid
+env AGENTCTL_FAULT=rename_fail
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh saved to pending'
+refresh-calls 1 1 0
+env AGENTCTL_FAULT=
+refresh-action pending
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending discarded: invalid'
+refresh-calls 2 2 0
+refresh-check namespace .credentials.json
+
+# ac33e_a_symlinked_pending_is_invalid
+refreshfixture pending-symlink
+env AGENTCTL_FAULT=rename_fail
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh saved to pending'
+refresh-calls 1 1 0
+env AGENTCTL_FAULT=
+refresh-action pending
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending discarded: invalid'
+refresh-calls 2 2 0
+refresh-check namespace .credentials.json
+cmp $REFRESH_ROOT/untouched untouched
+
+# ac33f_a_first_write_pending_replays_onto_an_empty_namespace
+refreshfixture pending-first
+exec agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending replayed'
+refresh-calls 1 0 0
+refresh-check stored pending
+refresh-check namespace .credentials.json
+
+# ac33g_a_pending_whose_file_was_removed_is_discarded
+refreshfixture pending-removed
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'needs login'
+refresh-calls 0 0 0
+refresh-check namespace
+
+# ac33h_a_migrated_namespace_discards_its_pending
+refreshfixture pending-migrated
+env AGENTCTL_FAULT=rename_fail
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh saved to pending'
+refresh-calls 1 1 0
+env AGENTCTL_FAULT=
+refresh-action pending
+exec expectexit 2 agentctl claude status --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'pending discarded: namespace taken over'
+refresh-calls 1 1 0
+refresh-check namespace .credentials.json
+refresh-check file-unchanged
+refresh-check read-only
+
+# ac65_a_migrated_namespace_refreshes_its_own_keychain_item_in_place
+refreshfixture migrated
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout source keychain
+refresh-check row stdout lock_state migrated_refreshed
+refresh-calls 1 1 0
+refresh-check stored rotated
+refresh-check write
+refresh-check audit applied
+refresh-check keychain-calls 6 11
+refresh-check namespace
+refresh-check peers-absent
+
+# ac65_a_peer_refresh_before_the_post_is_adopted_and_costs_no_grant
+refreshfixture peer-before-post
+exec agentctl claude status --json --refresh --account owner@example.com &peer&
+refresh-action wait-pause
+refresh-action peer
+refresh-action resume
+wait peer
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout lock_state adopted
+refresh-check row stdout note 'a Claude Code session refreshed this item'
+refresh-calls 1 0 0
+refresh-check stored peer
+refresh-check read-only
+refresh-check peers-absent
+! exists $REFRESH_ROOT/config/claude/keychain-writes.jsonl
+
+# ac65_an_invalid_grant_after_a_peer_refresh_adopts_rather_than_asking_for_a_login
+refreshfixture invalid-grant-peer
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout lock_state adopted
+refresh-calls 1 1 0
+refresh-check stored peer
+refresh-check read-only
+refresh-check peers-absent
+! exists $REFRESH_ROOT/config/claude/keychain-writes.jsonl
+
+# ac65_a_refusal_after_the_post_records_the_discarded_refresh
+# ac65_a_contended_store_reports_busy_and_writes_nothing
+refreshfixture migrated-contended
+exec expectexit 2 agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state busy
+refresh-check row stdout lock_state busy
+refresh-calls 0 1 0
+refresh-check stored old
+refresh-check read-only
+refresh-check audit discarded
+refresh-check peers-absent
+
+# ac65_the_hold_creates_three_locks_and_a_changed_item_discards_the_refresh
+refreshfixture peer-after-post
+! exec agentctl claude status --refresh --account owner@example.com &changed&
+refresh-action wait-pause
+refresh-check peers-absent
+refresh-action peer
+refresh-action resume
+wait changed
+! stderr 'sk-ant|SENTINEL'
+stdout 'refresh discarded: the item changed under us'
+refresh-calls 0 1 0
+refresh-check stored peer
+refresh-check read-only
+refresh-check audit discarded
+refresh-check peers-leaked
+
+# ac66_a_fresh_migrated_namespace_is_no_longer_terminal
+refreshfixture migrated-fresh
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout source keychain
+refresh-check row stdout lock_state none
+stdout 'keychain service'
+refresh-calls 1 0 0
+refresh-check stored old
+refresh-check read-only
+refresh-check namespace
+refresh-check peers-absent
+
+# ac65_an_item_under_the_canonical_spelling_is_never_refreshed
+refreshfixture migrated-canonical
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state migrated_to_keychain
+refresh-check row stdout lock_state migrated
+stdout 'item name does not match the recorded export spelling; refusing to refresh'
+refresh-calls 0 0 0
+refresh-check read-only
+refresh-check peers-absent
+
+# ac65_a_blob_over_the_stdin_limit_spawns_no_write
+refreshfixture large-line
+exec expectexit 2 agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state error
+refresh-check row stdout state_label 'blob exceeds the keychain stdin limit'
+refresh-calls 0 1 0
+refresh-check stored old
+refresh-check read-only
+refresh-check peers-absent
+
+# the_plan_is_asked_under_the_namespace_lock_before_the_write
+refreshfixture plan-locked
+exec agentctl claude status --refresh --account owner@example.com &plan&
+refresh-action wait-pause
+refresh-calls 0 1 1
+refresh-check held
+refresh-action resume
+wait plan
+! stderr 'sk-ant|SENTINEL'
+refresh-calls 1 1 1
+refresh-check stored rotated
+refresh-check plan pro
+
+# a_refresh_whose_profile_answers_500_still_saves_the_rotated_credential
+refreshfixture profile-failure
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL|plan|profile'
+refresh-check row stdout state ok
+refresh-calls 1 1 1
+refresh-check stored rotated
+refresh-check plan ''
+
+# a_refused_tier_is_logged_by_its_length_and_never_stored
+refreshfixture tier-refused
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|sentinel'
+stderr 'len=65'
+refresh-calls 1 1 1
+refresh-check stored rotated
+refresh-check plan pro
+
+# a_pass_too_short_for_the_plan_saves_the_refresh_without_asking
+refreshfixture short-budget
+exec agentctl claude status --json --refresh --timeout 3s --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-calls 1 1 0
+refresh-check stored rotated
+refresh-check plan ''
+
+-- unchanged --
+unchanged
+-- untouched --
+untouched

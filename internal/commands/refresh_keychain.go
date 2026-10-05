@@ -26,6 +26,7 @@ import (
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/runtime/fault"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -81,6 +82,8 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	if err != nil {
 		return refreshFailure(err)
 	}
+	injected := fault.Active()
+	injected.PausePoint("before_migrated_reread")
 	peer, err := s.readRefreshItem(ctx, item.service)
 	if err != nil {
 		return refreshOutcome{state: new(claude.StateOfStale()), note: "the item could not be re-read before the refresh", lockState: "none"}
@@ -98,6 +101,7 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	current, err = s.Refresher.RefreshAccess(ctx, current)
 	if err != nil {
 		if auth, ok := errors.AsType[*errs.AuthError](err); ok && auth.InvalidGrant {
+			injected.PausePoint("before_invalid_grant_reread")
 			peer, readErr := s.readRefreshItem(ctx, item.service)
 			if readErr != nil {
 				return refreshOutcome{state: new(claude.StateOfStale()), note: "the refresh was rejected and the item could not be re-read", lockState: "none"}
@@ -135,12 +139,15 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 		}
 		return refreshFailure(err)
 	}
+	injected.PausePoint("before_migrated_write")
 	dir, err := secret.OpenNamespaceDir(paths, item.nsDir)
 	if err != nil {
 		return refreshRefused(claude.StateOfError("refresh refused: "+err.Error()), "unavailable")
 	}
 	_ = unix.Close(dir)
-	acquisition, err := secret.AcquirePeerLocks(ctx, secret.LockSubject{StoreDir: item.nsDir, Tree: secret.TreeOwn}, paths, nil, secret.RealSeams(secret.SystemClock()))
+	seams := secret.RealSeams(secret.SystemClock())
+	seams.Fault = injected.Is
+	acquisition, err := secret.AcquirePeerLocks(ctx, secret.LockSubject{StoreDir: item.nsDir, Tree: secret.TreeOwn}, paths, nil, seams)
 	var draft *secret.BreakDraft
 	if acquisition != nil {
 		draft = acquisition.BreakRecord
