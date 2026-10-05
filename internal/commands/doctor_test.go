@@ -218,7 +218,11 @@ func TestDoctorHeldRecordAndNamespaceBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	output = strings.Join(command.heldLocksSection(t.Context()), "\n")
-	if !strings.Contains(output, "held by pid") || strings.Contains(output, "leaked") {
+	wantHeld := "held by pid"
+	if !DoctorCanRemoveStale {
+		wantHeld = DoctorStaleRemovalUnsupported
+	}
+	if !strings.Contains(output, wantHeld) || strings.Contains(output, "leaked") {
 		t.Errorf("wrong held record:\n%s", output)
 	}
 	if err := os.Remove(record.Paths[0]); err != nil {

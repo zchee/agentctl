@@ -294,7 +294,11 @@ func (d *Doctor) heldLocksSection(ctx context.Context) []string {
 	}
 	for _, held := range records {
 		record := &held.Record
-		out = append(out, fmt.Sprintf("  %s  pid %d (%s), %s, taken %s", held.File, record.WriterPID, holderLabel(ctx, record.WriterPID), record.Tree.Label(), record.TakenAt))
+		state := doctorRecordedHolder(ctx, record.WriterPID, record.WriterStartTime)
+		if DoctorCanRemoveStale {
+			state = holderLabel(ctx, record.WriterPID)
+		}
+		out = append(out, fmt.Sprintf("  %s  pid %d (%s), %s, taken %s", held.File, record.WriterPID, state, record.Tree.Label(), record.TakenAt))
 		present := 0
 		gone := record.WriterIsGone(ctx)
 		for _, path := range record.Paths {
@@ -304,6 +308,12 @@ func (d *Doctor) heldLocksSection(ctx context.Context) []string {
 			present++
 			if filepath.Base(path) == secret.LegacyStorageWriteArtefact {
 				out = append(out, "    "+doctorLegacyNotice(path))
+			} else if !DoctorCanRemoveStale {
+				writer := "writer not proved gone"
+				if gone {
+					writer = "writer gone"
+				}
+				out = append(out, fmt.Sprintf("    %s  %s; %s", path, writer, DoctorStaleRemovalUnsupported))
 			} else if gone {
 				out = append(out, fmt.Sprintf("    %s  leaked — `doctor --remove-stale %s --yes` removes it", path, path))
 			} else {

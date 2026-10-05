@@ -157,6 +157,9 @@ func (d *Doctor) namespaceSection(ctx context.Context, registry *config.Registry
 		if alive[i] {
 			state, removal = "alive (heartbeat seen)", ""
 		}
+		if !DoctorCanRemoveStale {
+			removal = "; " + DoctorStaleRemovalUnsupported
+		}
 		out = append(out, fmt.Sprintf("  %s  age %ds, holder %s — agentctl refuses to refresh this namespace%s", artefact.path, int64(artefact.age/time.Second), state, removal))
 	}
 	return out, nil
