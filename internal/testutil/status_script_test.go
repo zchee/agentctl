@@ -30,8 +30,16 @@ import (
 )
 
 func TestScriptCmds(t *testing.T) {
-	if diff := gocmp.Diff([]string{"statusfixture"}, slices.Sorted(maps.Keys(ScriptCmds()))); diff != "" {
-		t.Fatalf("in-process script commands mismatch (-want +got):\n%s", diff)
+	// Other families register their own commands, so the exact set is not
+	// pinned here: the status family must be present, and the map handed
+	// out must be a copy, so a caller cannot reach the registry through it.
+	cmds := ScriptCmds()
+	if !slices.Contains(slices.Sorted(maps.Keys(cmds)), "statusfixture") {
+		t.Fatalf("statusfixture is not registered; registered: %v", slices.Sorted(maps.Keys(cmds)))
+	}
+	delete(cmds, "statusfixture")
+	if _, still := ScriptCmds()["statusfixture"]; !still {
+		t.Fatal("ScriptCmds returned the registry itself rather than a copy")
 	}
 }
 
