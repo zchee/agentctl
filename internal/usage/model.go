@@ -64,6 +64,25 @@ type WindowKind struct {
 	Name string
 }
 
+// Label returns the name a window of this kind carries in the table's
+// continuation rows.
+//
+// Named windows say what they are scoped to; an unrecognised kind says so
+// verbatim, because the kind string is the only evidence the user has that
+// something new appeared.
+func (k WindowKind) Label() string {
+	switch k.Class {
+	case WindowSession:
+		return "session"
+	case WindowWeeklyAll:
+		return "weekly"
+	case WindowWeeklyScoped:
+		return k.Name + " (weekly)"
+	default:
+		return k.Name + " (unknown kind)"
+	}
+}
+
 // LimitWindow is one usage window, whatever the provider called it.
 type LimitWindow struct {
 	// Kind says which window this is.
@@ -90,21 +109,8 @@ type LimitWindow struct {
 
 // Label returns the name this window carries in the table's continuation
 // rows.
-//
-// Named windows say what they are scoped to; an unrecognised kind says so
-// verbatim, because the kind string is the only evidence the user has that
-// something new appeared.
 func (w *LimitWindow) Label() string {
-	switch w.Kind.Class {
-	case WindowSession:
-		return "session"
-	case WindowWeeklyAll:
-		return "weekly"
-	case WindowWeeklyScoped:
-		return w.Kind.Name + " (weekly)"
-	default:
-		return w.Kind.Name + " (unknown kind)"
-	}
+	return w.Kind.Label()
 }
 
 // CreditsClass says what is known about an account's extra-usage credits.
