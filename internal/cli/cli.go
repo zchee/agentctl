@@ -110,7 +110,7 @@ func New(h Handlers) *CLI {
 	root.PersistentFlags().StringVar(&c.configDir, "config-dir", "", "Use this agentctl configuration directory instead of the default")
 	root.CompletionOptions.DisableDefaultCmd = true
 
-	root.AddCommand(c.newClaudeCmd(), c.newCodexCmd())
+	root.AddCommand(c.newClaudeCmd(), c.newCodexCmd(), c.newCompletionsCmd())
 
 	c.root = root
 	return c
