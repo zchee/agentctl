@@ -32,9 +32,32 @@ type Dependencies struct {
 	Stdout io.Writer
 }
 
+// composer fills the handler fields of one command family. Each family
+// lives in its own file and registers itself, so adding a command never
+// edits a line another family also edits.
+type composer func(deps Dependencies, handlers *cli.Handlers)
+
+var composers []composer
+
+// register adds a family composer. It runs from package initialisers, so
+// the order of registration follows the file order of the package and no
+// two families fill the same field.
+func register(c composer) {
+	composers = append(composers, c)
+}
+
 // Handlers connects the available commands to their application services.
 // Each invocation resolves its own store after the global flags are parsed.
 func Handlers(deps Dependencies) cli.Handlers {
+	handlers := readHandlers(deps)
+	for _, compose := range composers {
+		compose(deps, &handlers)
+	}
+	return handlers
+}
+
+// readHandlers composes the read-only commands that landed first.
+func readHandlers(deps Dependencies) cli.Handlers {
 	return cli.Handlers{
 		ClaudeStatus: func(ctx context.Context, globals cli.Globals, opts cli.ClaudeStatusOptions) error {
 			timeout := opts.Timeout
