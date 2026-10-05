@@ -298,6 +298,17 @@ func (f *SecretFile) Remove() (bool, error) {
 // ctx is consulted only under [StopDiscardStaged], at the one point where
 // abandoning leaves the file exactly as it was found.
 func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec, stop StopPolicy) (WriteOutcome, error) {
+	return f.WriteWithFaults(ctx, doc, pending, stop, WriteFaultNames{BeforeRename: "before_rename", RenameFail: "rename_fail"})
+}
+
+// WriteFaultNames lets a writer name the pause point and rename failure its tests drive.
+type WriteFaultNames struct {
+	BeforeRename string
+	RenameFail   string
+}
+
+// WriteWithFaults replaces the file with the same rules as Write, using caller-named fault points.
+func (f *SecretFile) WriteWithFaults(ctx context.Context, doc []byte, pending *PendingSpec, stop StopPolicy, names WriteFaultNames) (WriteOutcome, error) {
 	if err := f.check(); err != nil {
 		return WriteOutcome{}, err
 	}
@@ -355,7 +366,7 @@ func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec
 	}
 
 	activeFaults := fault.Active()
-	activeFaults.PausePoint("before_rename")
+	activeFaults.PausePoint(names.BeforeRename)
 	if f.faults != nil && f.faults.beforeRename != nil {
 		f.faults.beforeRename()
 	}
@@ -373,7 +384,7 @@ func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec
 	var renameErr error
 	if f.faults != nil && f.faults.renameErr != nil {
 		renameErr = f.faults.renameErr
-	} else if activeFaults.Is("rename_fail") {
+	} else if activeFaults.Is(names.RenameFail) {
 		renameErr = unix.EXDEV
 	} else {
 		renameErr = unix.Renameat(f.dir, tmpName, f.dir, f.name)
