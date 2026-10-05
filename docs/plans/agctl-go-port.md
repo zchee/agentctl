@@ -399,7 +399,7 @@ Codex refresh `https://auth.openai.com/oauth/token`; Codex usage
 |---|---|---|---|
 | P0 | Planning: this document; research mirrored to `docs/research/` | ✅ done | `34585b7`, `0957188`, `3a35bd7`, `60b5e9a`; handoff `b6df779` |
 | P1 | Foundation: module skeleton, `internal/cli` tree + duration grammar + completions, `internal/errs`, `internal/config` (paths, registry, locks), `internal/testutil`, fixtures/schemas/goldens copied, CI | 🔶 in progress (W1 started 2026-10-05) | — |
-| P2 | Spikes with go/no-go gates: refresh-POST outcome classification on `net/http`+`httptrace`; byte-exact `~/.claude.json` edit by span splicing; Darwin process observation via `sysctl KERN_PROC`; memguard lifecycle under the signal handler and mlock limits | 🔜 | — |
+| P2 | Spikes with go/no-go gates: refresh-POST outcome classification on `net/http`+`httptrace`; byte-exact `~/.claude.json` edit by span splicing; Darwin process observation via `sysctl KERN_PROC`; memguard lifecycle under the signal handler and mlock limits | 🔶 in progress (W2 started 2026-10-05, in parallel with W1) | — |
 | P3 | Claude read path: `security(1)` reader, credentials, namespace, discovery, usage + cache, render tables/reset/JSON v1, `status`, `accounts list/show` | 🔜 | — |
 | P4 | Claude `watch` (Bubble Tea v2), `login` (PKCE + loopback), `import --from keychain`, `accounts remove/relocate/forget/unforget`, file store + pending replay | 🔜 | — |
 | P5 | Claude `use` (isolate), `exec`, `env`, `doctor` (incl. `--remove-stale`), then `use --live` / `--undo` / `--forget` (peer locks, swap, adopt, audit, `~/.claude.json`) | 🔜 | — |
@@ -408,14 +408,14 @@ Codex refresh `https://auth.openai.com/oauth/token`; Codex usage
 | P8 (later) | `--restart-remote-control`: tmux transport, RC attestation, fake-tmux + 10 screen fixtures, version pin policy | 🔜 not scheduled | — |
 | P9 (later) | Linux: process backend (procfs), platform refusals (keychain unsupported, `--remove-stale` exit 1), CI on `ubuntu-26.04`; Phase 2 credentials stay NO-GO until re-decided | 🔜 not scheduled | — |
 
-Current point: **P1 / W1 running (four lanes in parallel); next boundary is the W1 exit gate, then W2 spikes.**
+Current point: **P1 / W1 and P2 / W2 running together (eight lanes); next boundary is the W1 exit gate, then the four spike verdicts.**
 
 ### Wave table (P1–P7)
 
 | Wave | Lanes (parallel) | Depends on | Exit gate |
 |---|---|---|---|
 | W1 | `foundation-cli` (cobra tree, flags, duration grammar, exit constants, completions), `foundation-errs-config` (errs, paths, registry, modes, `.config.lock`, namespace lock), `foundation-testutil` (fixtures/schemas/goldens copy + header-strip script, temp tree, fake-bin install, golden/schema helpers), `foundation-ci` (`.github/workflows/ci.yaml`) | — | section 12 gates green; `agentctl --help` and `completions` goldens match `tests/cli_smoke.rs` modulo binary name |
-| W2 | `spike-httptrace`, `spike-jsontext`, `spike-darwin-proc`, `spike-memguard` | W1 | table tests green; verdict in `docs/research/agctl-spikes.md`; no-go stops the dependent waves and goes back to the user |
+| W2 | `spike-httptrace`, `spike-jsontext`, `spike-darwin-proc`, `spike-memguard` | W1 for the gate; started in parallel with W1 on 2026-10-05 by the user's decision (eight lanes at once) | table tests green; one verdict file per spike, `docs/research/agctl-spike-{httptrace,jsontext,darwin-proc,memguard}.md`; no-go stops the dependent waves and goes back to the user |
 | W3 | `claude-secret-read` (security_cli, location, reader), `claude-credentials-namespace` (credentials, namespace NFC+SHA-256, claims), `claude-usage` (usage HTTP + model + cache), `render-table` (table, reset, row) | W1 | unit + golden tests; `fake-security.sh` argv log equals Rust e2e expectations |
 | W4 | `claude-status` (discovery, status pass, JSON v1, partial exit), `claude-accounts-read` | W3 | e2e goldens (normalised + exact-byte); `status.v1.json` validation |
 | W5 | `claude-watch` (tui + watch loop + log buffer), `claude-login` (PKCE, loopback, browser opener), `claude-file-store` (secret_file, file_store, pending, audit), `claude-import-accounts-write` | W4 | e2e + frame-dump goldens; `tests/e2e_login.rs`, `e2e_import.rs`, `e2e_accounts.rs` parity |
@@ -742,6 +742,7 @@ go test -tags agentctl_testing -race -count=1 ./...
 | Plan approval (execution session) | approve via team vs ralph vs critic first vs changes | approve via team |
 | Worker model after the 15:30 frontmatter change | restore `astra-ultrafast` vs keep `astra-fast` | keep `astra-fast` as the files say |
 | Codex trailer on lane commits | add `Co-Authored-By: Codex` vs Fable + session only | add it |
+| W2 start | run the spikes now alongside W1 (eight lanes) vs wait for the W1 gate | run now; the W1 gate still bounds W3+ |
 
 Lead decisions (not asked, recorded for review): Rust implementation normative over its
 comments; testing endpoints fail closed for both providers; `time` with the system zone
@@ -778,3 +779,5 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
 - 2026-10-05 16:50:36 JST: plan approved by the user (team); P0 closed, P1/W1 started;
   worker model kept at the frontmatter's `astra-fast`; Codex trailer added to lane
   commits; package-layout facts for embed, build tags and `TestMain` recorded in 17.
+- 2026-10-05 17:37:20 JST: W2 spikes started alongside W1 on the user's instruction to maximise
+  parallelism (eight lanes); one verdict file per spike instead of a shared one.
