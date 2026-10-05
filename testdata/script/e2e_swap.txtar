@@ -1,4 +1,9 @@
-# A namespaced forward swap parks the displaced pair beside its own store.
+# Provenance: tests/e2e_swap.rs (forward, undo, forget and read-only remote-control cases); tests/e2e_isolate.rs is covered by e2e_isolate.txtar.
+# a_swap_adopts_the_displaced_credential_into_the_adopted_copy_never_the_store
+# a_swap_touches_nothing_outside_the_namespace_root
+# use_live_json_carries_the_lock_timings_and_never_a_token
+# a_namespace_swap_is_unchanged_by_the_profile
+# a_namespace_swap_never_touches_claude_json
 swapfixture namespace
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -10,7 +15,7 @@ swap-check 1 0 0
 swap-io 3 0 0
 swap-tree
 
-# A first item write records no keychain baseline and removes only the shadow.
+# a_first_write_records_a_null_from_digest8_and_removes_the_shadowing_store
 swapfixture first-write
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -21,7 +26,7 @@ exists $SWAP_STORE/.credentials.adopted.json
 ! stderr SENTINEL
 swap-check 1 0 0
 
-# A duplicate in unmigrated plaintext does not implicitly migrate the store.
+# re_swapping_the_credential_an_unmigrated_store_already_holds_writes_nothing
 swapfixture unmigrated-duplicate
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -31,7 +36,10 @@ exists $SWAP_STORE/.credentials.json
 ! stderr SENTINEL
 swap-check 0 0 0
 
-# JSON is a plan, never consent; declining never rotates or adopts a pair.
+# a_json_inspection_nobody_confirmed_writes_no_credential_anywhere
+# a_swap_nobody_confirmed_leaves_the_store_exactly_as_it_was
+# a_swap_nobody_confirmed_makes_no_refresh_post_at_all
+# use_live_json_prints_the_plan_and_still_prompts
 swapfixture json-inspect
 exec expectexit 20 agentctl claude use $INCOMING --live --json
 stdout '"kind": "plan"'
@@ -41,7 +49,8 @@ exists $SWAP_STORE/.credentials.json
 ! stderr SENTINEL
 swap-check 0 0 0
 
-# Refresh occurs after consent and preserves the minted pair in its own home.
+# an_applied_swap_saves_the_refreshed_credential_back_to_the_incoming_store
+# a_swap_that_writes_the_refresh_back_touches_nothing_outside_the_namespace_root
 swapfixture refresh
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -50,7 +59,7 @@ stdout '"outcome": "applied"'
 swap-check 1 1 0
 swap-tree
 
-# An expired migrated incoming item is not rotated by this swap.
+# an_expired_incoming_credential_in_a_migrated_store_is_refused_before_the_post
 swapfixture migrated-expired
 exec expectexit 21 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "needs_refresh"'
@@ -58,7 +67,7 @@ stdout '"outcome": "needs_refresh"'
 ! stderr SENTINEL
 swap-check 0 0 0
 
-# A fresh migrated incoming grant needs no refresh and remains admissible.
+# a_fresh_credential_in_a_migrated_incoming_store_needs_no_refresh_and_proceeds
 swapfixture migrated-fresh
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -66,7 +75,7 @@ stdout '"outcome": "applied"'
 ! stderr SENTINEL
 swap-check 1 0 0
 
-# The missing plaintext source is correctly distinguished from a missing login.
+# a_migrated_incoming_store_says_why_instead_of_sending_the_user_to_login
 swapfixture incoming-keychain-only
 exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
 stdout 'credential lives in its keychain item'
@@ -74,7 +83,8 @@ stdout 'credential lives in its keychain item'
 ! stderr SENTINEL
 swap-check 0 0 0
 
-# Definite failure has its own status and retains the parked outgoing grant.
+# a_failed_write_audits_failed_issues_no_verify_read_and_leaves_p_adopted
+# a_failed_write_has_its_own_outcome_and_exit_code_and_the_audit_agrees
 swapfixture failed-write
 exec expectexit 19 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "failed"'
@@ -85,7 +95,8 @@ swap-check 1 0 0
 swap-audit failed 0
 swap-io 2 0 0
 
-# Empty securestorage scope selects the unsuffixed live item and config step.
+# the_scope_gate_sends_an_empty_securestorage_variable_to_the_live_store
+# one_config_write_line_follows_each_live_write_and_none_follows_a_refusal (arm: live)
 swapfixture live
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -98,7 +109,7 @@ swap-check 1 0 2
 swap-audit applied 1
 swap-config incoming
 
-# Live plaintext is never a fallback and remains byte-identical.
+# an_unmigrated_live_store_is_refused_and_its_plaintext_file_is_untouched
 swapfixture live-absent
 exec expectexit 24 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "live_item_absent"'
@@ -106,7 +117,7 @@ stdout '"reason": "live_item_absent"'
 ! stderr SENTINEL
 swap-check 0 0 0
 
-# The token override gate runs before keychain or profile reads.
+# refusal_c_names_whose_environment_was_inspected (arm: live-env-token)
 swapfixture live-env-token
 exec expectexit 11 agentctl claude use $INCOMING --live --yes --json
 stdout '"refusal": "C"'
@@ -114,7 +125,7 @@ stdout '"refusal": "C"'
 ! stderr SENTINEL
 swap-check 0 0 0
 
-# A live audit refusal precedes consent, adoption and token rotation.
+# a_refused_audit_log_refuses_the_live_swap_and_writes_nothing
 swapfixture live-audit-refused
 exec expectexit 22 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "audit_refused"'
@@ -122,7 +133,7 @@ stdout '"reason": "audit_refused"'
 ! stderr SENTINEL
 swap-check 0 0 1
 
-# Namespace writes keep the optional audit append policy.
+# a_refused_audit_log_does_not_refuse_a_namespaced_swap
 swapfixture namespace-audit-refused
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -130,7 +141,7 @@ stdout '"outcome": "applied"'
 ! stderr SENTINEL
 swap-check 1 0 0
 
-# Incoming server identity contradictions are refused before any adoption.
+# supplemental: incoming profile identity contradiction
 swapfixture live-wrong-profile
 exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
 stdout 'wrong account'
@@ -138,7 +149,8 @@ stdout 'wrong account'
 ! stderr SENTINEL
 swap-check 0 0 2
 
-# An owned incoming credential may apply without an available second profile.
+# a_live_swap_applies_when_the_incoming_accounts_profile_cannot_answer
+# a_swap_applies_when_the_incoming_profile_cannot_be_read_and_says_the_config_was_not_updated
 swapfixture live-profile-unavailable
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -147,7 +159,7 @@ stdout '"reason": "profile_unavailable"'
 ! stderr SENTINEL
 swap-check 1 0 2
 
-# A live refresh of the incoming account is never replaced by its stale copy.
+# a_live_item_holding_a_newer_copy_of_the_incoming_account_is_already_active_and_parks_nothing
 swapfixture live-newer
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -155,7 +167,7 @@ stdout '"outcome": "already_active"'
 ! stderr SENTINEL
 swap-check 0 0 1
 
-# The duplicate live return catches up config without reinstalling credentials.
+# a_live_swap_to_the_credential_already_in_the_item_is_already_active
 swapfixture live-duplicate
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -163,7 +175,7 @@ stdout '"outcome": "already_active"'
 ! stderr SENTINEL
 swap-check 0 0 1
 
-# Non-reproducible config bytes are refused independently of the item swap.
+# a_compact_claude_json_is_refused_as_not_reproducible_and_left_byte_identical
 swapfixture live-compact-config
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -172,7 +184,7 @@ stdout '"reason": "not_reproducible"'
 ! stderr SENTINEL
 swap-check 1 0 2
 
-# A busy peer does not consume an owned recovery grant or enter live plaintext.
+# supplemental: busy resolved live store retains the recovery grant
 swapfixture live-busy
 exec expectexit 16 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "busy"'
@@ -180,11 +192,11 @@ stdout '"outcome": "busy"'
 ! stderr SENTINEL
 swap-check 0 0 2
 
-# Remote-control restart remains a typed not-implemented refusal.
+# supplemental: remote-control restart remains an explicit not-implemented refusal
 exec expectexit 1 agentctl claude use $INCOMING --live --restart-remote-control
 stderr 'not implemented'
 
-# Line sizing rejects the stored source before refresh or credential writes.
+# refusal_d_on_the_stored_blob_is_decided_before_any_child_exists
 swapfixture line-too-long
 exec expectexit 12 agentctl claude use $INCOMING --live --yes --json
 stdout '"refusal": "D"'
@@ -195,7 +207,7 @@ swap-io 1 0 0
 swap-audit none 0
 ! exists $SWAP_STORE/.credentials.adopted.json
 
-# A newly minted oversized pair is saved before transport sizing refuses it.
+# refusal_d_on_the_refreshed_blob_is_decided_before_any_child_exists
 swapfixture refresh-too-long
 exec expectexit 12 agentctl claude use $INCOMING --live --yes --json
 stdout '"refusal": "D"'
@@ -206,7 +218,7 @@ swap-io 4 0 0
 swap-audit none 0
 ! exists $SWAP_STORE/.credentials.adopted.json
 
-# Timeouts release the hold and retain recovery copies with an unknown audit.
+# a_write_that_hangs_is_unknown_with_its_audit_id_and_a_released_hold
 swapfixture namespace-timeout
 exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "unknown"'
@@ -218,6 +230,7 @@ swap-audit unknown 0
 stdout '"id": "[^"]+"'
 swap-io 3 0 0
 
+# a_first_write_whose_outcome_is_unknown_keeps_the_plaintext_store_and_says_so
 swapfixture first-write-timeout
 exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "unknown"'
@@ -227,6 +240,7 @@ stdout 'was kept'
 ! stderr SENTINEL
 swap-check 1 0 0
 
+# a_live_write_that_hangs_is_unknown_with_its_audit_id_and_a_released_hold
 swapfixture live-timeout
 exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "unknown"'
@@ -238,7 +252,9 @@ swap-audit unknown 1
 stdout '"id": "[^"]+"'
 swap-io 3 0 0
 
-# A peer winning after refresh discards the swap but not the saved minted pair.
+# an_item_that_changes_before_the_hold_discards_the_swap
+# a_swap_discarded_after_the_refresh_still_leaves_the_refreshed_pair_saved
+# The peer-change discard is exercised after a refresh; the minted pair stays saved.
 swapfixture refresh-peer-change
 exec expectexit 17 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "discarded"'
@@ -246,6 +262,7 @@ stdout '"outcome": "discarded"'
 ! stderr SENTINEL
 swap-check 0 1 0
 
+# a_live_item_that_changes_before_the_hold_discards_the_swap
 swapfixture live-peer-change
 exec expectexit 17 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "discarded"'
@@ -253,7 +270,8 @@ stdout '"outcome": "discarded"'
 ! stderr SENTINEL
 swap-check 0 0 2
 
-# Outgoing identity failures refuse before adoption and quote no response body.
+# a_live_swap_whose_credential_the_profile_cannot_name_is_refused_before_any_lock
+# one_config_write_line_follows_each_live_write_and_none_follows_a_refusal (arm: live-outgoing-unavailable)
 swapfixture live-outgoing-unavailable
 exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "refused"'
@@ -261,6 +279,7 @@ stdout '"outcome": "refused"'
 ! stderr SENTINEL
 swap-check 0 0 1
 
+# a_profile_document_missing_a_member_is_unavailable_and_quotes_none_of_it
 swapfixture live-outgoing-malformed
 exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
 ! stdout 'SENTINEL-profile-body'
@@ -269,6 +288,7 @@ exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
 ! stderr SENTINEL
 swap-check 0 0 1
 
+# a_live_credential_no_record_claims_is_refused_rather_than_adopted_anywhere
 swapfixture live-unclaimed
 exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
 stdout '"refusal": "F"'
@@ -276,7 +296,7 @@ stdout '"refusal": "F"'
 ! stderr SENTINEL
 swap-check 0 0 1
 
-# Read-only session labels stay on stderr; JSON carries counts only.
+# remote_control_applied_forward_and_undo_warn_on_stderr_and_json_counts_only (arm: live-session-hints)
 swapfixture live-session-hints
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '1 Claude Code session'
@@ -286,6 +306,8 @@ stderr 'private-session-name'
 ! stderr SENTINEL
 swap-check 1 0 2
 
+# remote_control_catch_up_warns_only_when_the_config_is_updated (arm: live-catch-up-hints)
+# a_catch_up_over_a_config_that_already_names_the_account_writes_nothing
 swapfixture live-catch-up-hints
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -307,7 +329,7 @@ swap-check 0 0 2
 swap-audit none 2
 swap-config incoming
 
-# Config locks never nest in credential holds or get broken by a live swap.
+# a_held_config_lock_leaves_the_swap_applied_and_the_config_unwritten
 swapfixture live-config-busy
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -316,6 +338,7 @@ stdout '"reason": "lock_busy"'
 ! stderr SENTINEL
 swap-check 1 0 2
 
+# a_stale_config_lock_is_never_broken_and_the_swap_stands
 swapfixture live-config-stale
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -324,7 +347,7 @@ stdout '"reason": "lock_stale"'
 ! stderr SENTINEL
 swap-check 1 0 2
 
-# Config rewrites follow a symlink without replacing it.
+# a_live_swap_rewrites_oauth_account_through_the_link_and_backs_up_first
 swapfixture live-config-link
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"backup": "'
@@ -334,7 +357,8 @@ swap-check 1 0 2
 swap-audit applied 1
 swap-config incoming
 
-# A concurrent incoming-store writer survives guarded refreshed persistence.
+# a_write_back_racing_another_writer_keeps_the_other_writers_credential
+# a_refused_write_back_is_carried_in_the_json_warnings
 swapfixture refresh-save-race
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -344,7 +368,7 @@ stderr 'refreshed credential was not saved back'
 ! stderr SENTINEL
 swap-check 1 1 0
 
-# An existing namespace keychain item is an idempotent no-write return.
+# a_swap_to_the_credential_already_in_the_item_writes_nothing
 swapfixture namespace-duplicate
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -353,7 +377,7 @@ stdout '"outcome": "already_active"'
 swap-check 0 0 0
 swap-audit none 0
 
-# A non-owned securestorage override refuses before any keychain child.
+# the_oq1_precondition_refuses_a_store_agctl_does_not_own
 swapfixture namespace-unowned
 exec expectexit 15 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "refused"'
@@ -362,7 +386,7 @@ stdout '"outcome": "refused"'
 swap-check 0 0 0
 swap-audit none 0
 
-# Token overrides identify whose environment was inspected and spawn no child.
+# refusal_c_names_whose_environment_was_inspected (arm: namespace-env-token)
 swapfixture namespace-env-token
 exec expectexit 11 agentctl claude use $INCOMING --live --yes
 stdout 'own environment'
@@ -371,7 +395,7 @@ stdout 'own environment'
 swap-check 0 0 0
 swap-audit none 0
 
-# Backend uncertainty warns on stderr rather than refusing a safe namespace swap.
+# refusal_b_is_a_warning_line_and_exit_zero
 swapfixture namespace backend-warning
 exec agentctl claude use $INCOMING --live --yes
 stderr 'inspected its own environment for a secure-storage backend'
@@ -382,7 +406,7 @@ stderr 'cannot inspect the target session'
 swap-check 1 0 0
 swap-audit applied 0
 
-# An unreadable outgoing item refuses after one read and never adopts plaintext.
+# refusal_f_when_the_outgoing_credential_cannot_be_read
 swapfixture namespace-unreadable
 exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
 stdout '"refusal": "F"'
@@ -391,7 +415,7 @@ stdout '"refusal": "F"'
 swap-check 0 0 0
 swap-audit none 0
 
-# Contradictory outgoing server identity never selects an adoption destination.
+# a_live_swap_whose_credential_and_the_profile_disagree_is_refused_as_a_mismatch
 swapfixture live-outgoing-mismatch
 exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
 stdout '"refusal": "F"'
@@ -400,7 +424,7 @@ stdout '"refusal": "F"'
 swap-check 0 0 1
 swap-audit none 0
 
-# A dangling live store is unreachable, never a compromised credential hold.
+# a_dangling_live_store_is_unreachable_rather_than_a_compromised_hold
 swapfixture live-dangling
 exec expectexit 23 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "live_unreachable"'
@@ -409,7 +433,7 @@ stdout '"reason": "live_unreachable"'
 swap-check 0 0 0
 swap-audit none 0
 
-# Expired live credentials with no own audit attribution never ask a server.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: live-expired)
 swapfixture live-expired
 exec expectexit 29 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "live_token_expired"'
@@ -418,7 +442,7 @@ stdout '"reason": "live_token_expired"'
 swap-check 0 0 0
 swap-audit none 0
 
-# A declined config-only catch-up is already_active, not swap cancellation.
+# an_unconfirmed_catch_up_prints_a_config_plan_and_writes_nothing_until_yes
 swapfixture live-duplicate catchup-consent
 exec agentctl claude use $INCOMING --live --json
 stdout '"direction": "config"'
@@ -438,7 +462,7 @@ swap-check 0 0 2
 swap-audit none 1
 swap-config incoming
 
-# Repeating a live write whose config lock was busy only catches up config.
+# rerunning_a_live_swap_whose_config_write_was_skipped_catches_it_up
 swapfixture live-config-busy skipped-then-catchup
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -457,7 +481,7 @@ stdout '"outcome": "applied"'
 swap-audit applied 2
 swap-config incoming
 
-# A changed artifact under the hold causes refusal before any keychain write.
+# refusal_a_when_an_artefact_moves_under_the_hold
 swapfixture namespace compromised-hold
 env AGENTCTL_FAULT=swap_pause_in_locks
 exec expectexit 10 agentctl claude use $INCOMING --live --yes --json &drift&
@@ -471,7 +495,7 @@ stdout '"refusal": "A"'
 swap-check 0 0 0
 swap-audit none 0
 
-# SIGTERM inside an observed three-artifact hold releases the record and paths.
+# a_sigterm_inside_the_hold_releases_all_three_and_clears_the_record
 swapfixture namespace signal-hold
 env AGENTCTL_FAULT=swap_pause_in_locks
 ! exec agentctl claude use $INCOMING --live --yes --json &signalled&
@@ -484,7 +508,7 @@ swap-action signal-exit
 swap-check 0 0 0
 swap-audit none 0
 
-# A third-lock collision releases the acquired locks without stale sampling.
+# an_eexist_at_the_third_lock_restarts_without_waiting_inside_the_hold
 swapfixture namespace-storage-busy
 exec expectexit 16 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "busy"'
@@ -496,7 +520,7 @@ swap-io 1 0 0
 swap-audit none 0
 swap-tree
 
-# Doctor reports a parked copy without exposing its bytes.
+# doctor_reports_the_adopted_copy_without_printing_any_of_it
 swapfixture namespace doctor-parked
 exec agentctl claude use $INCOMING --live --yes --json
 exec agentctl claude doctor
@@ -505,7 +529,7 @@ stdout 'adopted copy'
 ! stderr SENTINEL
 swap-check 1 0 0
 
-# A leaked hold is reported as three recoverable directories, not token content.
+# doctor_names_the_three_directories_a_leaked_swap_hold_left
 swapfixture namespace doctor-leaked
 env AGENTCTL_FAULT=swap_lock_leak
 exec agentctl claude use $INCOMING --live --yes --json
@@ -525,7 +549,7 @@ swap-action held
 swap-action release-leak
 swap-check 1 0 0
 
-# Live parking preserves an independently refreshed owned grant byte-for-byte.
+# a_live_swap_parks_p_beside_its_owned_store_and_leaves_the_independent_grant_alone
 swapfixture live-independent
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -535,7 +559,7 @@ swap-check 1 0 2
 swap-io 3 0 0
 swap-audit applied 1
 
-# A missing owner namespace is created privately and contains only the parked copy.
+# a_live_swap_creates_ps_namespace_only_under_the_namespace_root
 swapfixture live-owner-missing
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -547,7 +571,7 @@ swap-io 3 0 0
 swap-audit applied 1
 swap-tree
 
-# A refused audit prevents every forward config-only return from changing files.
+# a_catch_up_with_a_refused_audit_log_takes_no_lock_and_writes_nothing_at_every_live_return (arm: live-duplicate-audit-refused)
 swapfixture live-duplicate-audit-refused
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -558,6 +582,7 @@ swap-check 0 0 1
 swap-io 1 0 0
 swap-tree
 
+# a_catch_up_with_a_refused_audit_log_takes_no_lock_and_writes_nothing_at_every_live_return (arm: live-newer-audit-refused)
 swapfixture live-newer-audit-refused
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -568,7 +593,7 @@ swap-check 0 0 1
 swap-io 1 0 0
 swap-tree
 
-# An expired attributed duplicate needs no profile and performs no config rewrite.
+# a_catch_up_for_an_expired_item_agctl_wrote_asks_no_server_and_writes_nothing
 swapfixture live-expired-own
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -579,7 +604,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# An expired attributed item can read a wrong-mode log but cannot follow a link.
+# an_expired_item_with_a_refused_audit_log_is_refused_before_any_already_active_return (arm: live-expired-audit-mode)
 swapfixture live-expired-audit-mode
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "already_active"'
@@ -590,6 +615,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
+# an_expired_item_with_a_refused_audit_log_is_refused_before_any_already_active_return (arm: live-expired-audit-symlink)
 swapfixture live-expired-audit-symlink
 exec expectexit 22 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "audit_refused"'
@@ -601,7 +627,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# Account removal sweeps adopted credentials without touching the keychain.
+# the_adopted_copy_is_removed_when_the_account_is_removed
 swapfixture namespace remove-adopted
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -621,7 +647,7 @@ cmp $UNDO_ITEM removal-before-item
 ! stdout SENTINEL
 ! stderr SENTINEL
 
-# A displaced incoming-account copy is parked beside the subject, not its refresh source.
+# an_item_holding_another_copy_of_the_incoming_account_applies_and_then_says_already_active
 swapfixture refresh incoming-copy-repeat
 undo-setup own-alias
 rm $UNDO_OWNER_DIR/.credentials.json
@@ -650,7 +676,7 @@ undo-check 1 1 0
 swap-io 7 0 0
 swap-audit applied 0
 
-# Another account's newer parked copy may not be overwritten.
+# a_kept_copy_refuses_rather_than_renaming_over_the_credential_beside_the_store
 swapfixture namespace foreign-adopted-newer
 undo-setup
 undo-blob $UNDO_ITEM incoming-session $INCOMING 1h
@@ -669,7 +695,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json newer-before-adopted
 undo-check 0 0 0
 swap-audit none 0
 
-# Identity also protects an older parked copy belonging to another account.
+# a_kept_copy_refuses_an_older_sibling_of_another_account_rather_than_replacing_it
 swapfixture namespace foreign-adopted-older
 undo-setup
 undo-blob $UNDO_ITEM incoming-session $INCOMING 1h
@@ -688,7 +714,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json older-before-adopted
 undo-check 0 0 0
 swap-audit none 0
 
-# An equal unrecorded live recovery copy needs no parking lineage.
+# a_live_equal_adopted_copy_needs_no_recorded_parking
 swapfixture live live-equal-unrecorded
 undo-setup
 cp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
@@ -706,7 +732,7 @@ undo-check 1 0 2
 swap-io 3 0 0
 swap-audit applied 1
 
-# Stop after the first acquire: only the ascending-smallest namespace may exist.
+# the_namespace_locks_are_taken_in_ascending_key_order
 swapfixture namespace namespace-order
 undo-setup
 undo-blob $UNDO_ITEM third $THIRD
@@ -737,7 +763,7 @@ cmp $UNDO_ITEM order-item-before
 undo-check 0 0 0
 swap-io 1 0 0
 
-# A third occupant is filed in its namespace, under all three namespace locks.
+# a_swap_whose_displaced_credential_belongs_to_a_third_account_locks_that_namespace
 swapfixture namespace third-namespace-lock
 undo-setup
 undo-blob $UNDO_INCOMING_DIR/.credentials.json incoming $INCOMING
@@ -764,7 +790,7 @@ undo-check 1 0 0
 swap-io 4 0 0
 swap-audit applied 0
 
-# Registry and inherited spelling agree, but neither names the derived store.
+# the_swap_refuses_when_the_store_has_moved_since_its_item_was_named
 swapfixture namespace moved-store
 undo-setup
 undo-move-record matching
@@ -789,7 +815,7 @@ cmp $UNDO_ITEM moved-item-before
 undo-check 0 0 0
 swap-io 0 0 0
 
-# Unknown incoming organization is not recorded as a real audit identity.
+# supplemental: unknown incoming organization is omitted from audit identity
 swapfixture live unknown-incoming-org
 undo-setup
 undo-org $INCOMING _unknown-org
@@ -805,7 +831,7 @@ cmp $UNDO_ITEM incoming-unknown-parked
 undo-audit-check forward:$INCOMING:- undo:$OWNER
 undo-check 2 0 4
 
-# Undo also omits an unknown organization for the restored account.
+# supplemental: unknown restored organization is omitted from audit identity
 swapfixture live unknown-restored-org
 undo-setup
 undo-org $OWNER _unknown-org
@@ -824,7 +850,7 @@ undo-credential $UNDO_ITEM incoming
 undo-audit-check forward:$INCOMING undo:$OWNER:- undo:$INCOMING
 undo-check 3 0 6
 
-# A real organization change for the same account remains a foreign login.
+# supplemental: another organization of the same account is a foreign login
 swapfixture live known-org-changed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -846,7 +872,7 @@ cmp $SWAP_AUDIT known-org-audit-before
 cmp $UNDO_OWNER_DIR/.credentials.adopted.json known-org-parked-before
 undo-check 1 0 3
 
-# A zero testing deadline still reaches profile planning, then refuses adoption.
+# expired_live_pass_refuses_f_at_adoption_in_both_directions (arm: deadline-forward)
 swapfixture live deadline-forward
 undo-setup
 undo-blob $UNDO_ITEM outgoing $OWNER
@@ -874,7 +900,7 @@ exists $LOCKS/$OWNER.$ORG.lock $LOCKS/$INCOMING.$ORG.lock
 exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
 exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
 
-# The default deadline control applies from exactly the state the refusal retained.
+# supplemental: default forward deadline applies from the state retained after refusal
 env AGENTCTL_SWAP_DEADLINE_MS=
 exec agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "applied"'
@@ -889,7 +915,7 @@ swap-io 4 0 0
 exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
 exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
 
-# A rotated live occupant makes undo adopt into the incoming namespace.
+# expired_live_pass_refuses_f_at_adoption_in_both_directions (arm: deadline-undo)
 swapfixture live deadline-undo
 undo-setup
 env LOCKS=$AGENTCTL_CONFIG_DIR/claude/.locks
@@ -919,7 +945,7 @@ exists $LOCKS/$OWNER.$ORG.lock $LOCKS/$INCOMING.$ORG.lock
 exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
 exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
 
-# Default undo control saves the rotated occupant and restores the full owner copy.
+# supplemental: default undo deadline restores the owner and saves the rotated occupant
 env AGENTCTL_SWAP_DEADLINE_MS=
 exec agentctl claude use --undo --yes --json
 stdout '"outcome": "applied"'
@@ -936,7 +962,7 @@ swap-io 9 0 0
 exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
 exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
 
-# Applied live history followed by namespace history does not replace profiling.
+# a_forward_swap_after_an_unknown_live_write_asks_the_profile_instead_of_refusing_28 (arm: unknown-after-namespace)
 swapfixture live unknown-after-namespace
 undo-setup
 undo-blob $UNDO_ITEM outgoing $OWNER
@@ -958,7 +984,7 @@ undo-check 1 0 2
 swap-io 3 0 0
 undo-audit-count 3 1 0
 
-# An unknown live write whose item still holds the displaced end is profiled.
+# a_forward_swap_after_an_unknown_live_write_asks_the_profile_instead_of_refusing_28 (arm: unknown-outgoing)
 swapfixture live unknown-outgoing
 undo-setup
 undo-blob $UNDO_ITEM outgoing $OWNER
@@ -978,7 +1004,7 @@ undo-check 1 0 2
 swap-io 3 0 0
 undo-audit-count 2 1 0
 
-# Neither digest end matches, but the current profile still identifies the owner.
+# a_forward_swap_after_an_unknown_live_write_asks_the_profile_instead_of_refusing_28 (arm: unknown-neither-end)
 swapfixture live unknown-neither-end
 undo-setup
 undo-blob $UNDO_ITEM outgoing-refreshed $OWNER
@@ -998,7 +1024,7 @@ undo-check 1 0 2
 swap-io 3 0 0
 undo-audit-count 2 1 0
 
-# A newer incoming-account occupant is already active, with only config catch-up.
+# a_forward_swap_after_an_unknown_live_write_asks_the_profile_instead_of_refusing_28 (arm: unknown-newer-incoming)
 swapfixture live unknown-newer-incoming
 undo-setup
 undo-blob $UNDO_ITEM incoming-refreshed $INCOMING newer
@@ -1022,7 +1048,7 @@ undo-check 0 0 1
 swap-io 1 0 0
 undo-audit-count 1 0 1
 
-# Stale display identity is ignored when the actual occupant has an owned record.
+# a_third_account_written_into_the_item_with_a_stale_oauth_account_is_filed_as_the_profile_says (arm: stale-display-owned)
 swapfixture live stale-display-owned
 undo-setup
 rm $UNDO_THIRD_DIR/.credentials.json
@@ -1044,7 +1070,7 @@ undo-check 1 0 2
 swap-io 3 0 0
 undo-audit-count 1 1 0
 
-# An actual unowned occupant is refused, even when display config names incoming.
+# a_third_account_written_into_the_item_with_a_stale_oauth_account_is_filed_as_the_profile_says (arm: stale-display-unowned)
 swapfixture live stale-display-unowned
 undo-setup
 undo-blob $UNDO_ITEM third -
@@ -1071,7 +1097,7 @@ undo-check 0 0 1 third-absent
 swap-check 0 0 0
 swap-io 1 0 0
 
-# Real Darwin immutable flags leave a shadow after a successful item write.
+# an_applied_swap_whose_cleanup_failed_warns_on_stderr_and_in_json (arm: cleanup-human)
 [darwin] swapfixture first-write cleanup-human
 [darwin] undo-setup
 [darwin] cp $UNDO_OWNER_DIR/.credentials.json cleanup-human-before
@@ -1092,7 +1118,7 @@ swap-io 1 0 0
 [darwin] swap-audit applied 0
 [darwin] swap-tree
 
-# The JSON outcome carries the same cleanup warning while remaining applied.
+# an_applied_swap_whose_cleanup_failed_warns_on_stderr_and_in_json (arm: cleanup-json)
 [darwin] swapfixture first-write cleanup-json
 [darwin] undo-setup
 [darwin] cp $UNDO_OWNER_DIR/.credentials.json cleanup-json-before
@@ -1115,7 +1141,7 @@ swap-io 1 0 0
 [darwin] cp stdout cleanup-json-report
 [darwin] swap-hold-json cleanup-json-report 3000
 
-# A stale break is audited even when writing the held record then refuses.
+# a_break_is_audited_even_when_the_acquire_then_fails
 swapfixture namespace break-then-acquire-fails
 undo-setup
 mkdir $SWAP_STORE/.oauth_refresh.lock
@@ -1137,7 +1163,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# A fresh peer refresh lock is waited out before taking any other peer artifact.
+# a_fresh_refresh_lock_is_waited_out_with_nothing_held
 swapfixture namespace fresh-refresh-wait
 undo-setup
 swap-peer-wait
@@ -1155,7 +1181,7 @@ swap-io 3 0 0
 swap-audit applied 0
 swap-tree
 
-# Native CPU workers run arithmetic while the real CLI holds the store.
+# the_hold_stays_within_budget_with_the_machine_busy
 swapfixture namespace machine-busy-hold
 undo-setup
 swap-load
@@ -1172,7 +1198,7 @@ swap-io 3 0 0
 swap-audit applied 0
 swap-tree
 
-# A real namespace swap leaves an adopted row that must not refresh an occupant.
+# an_occupied_item_is_never_refreshed_for_the_record_that_names_it
 swapfixture namespace status-occupied-item
 undo-setup
 swap-status-server usage
@@ -1195,7 +1221,8 @@ swap-check 1 0 0
 swap-io 6 1 1
 swap-status-posts 0
 
-# Between reads, a healthy other-account occupant is not adopted as this row.
+# an_occupant_arriving_during_the_post_is_not_adopted_as_this_rows_credential
+# The reference pauses before the migrated reread despite its function name; no POST occurs.
 refreshfixture peer-before-post
 swap-status-server usage
 swap-status-blob $REFRESH_NS/.credentials.adopted.json parked $OWNER owner@example.com fresh
@@ -1219,7 +1246,8 @@ refresh-check keychain-calls 4 7
 refresh-check peers-absent
 ! exists $REFRESH_NS/.credentials.json
 
-# Invalid-grant recovery also attributes a new occupant rather than logging out.
+# an_occupant_arriving_after_an_invalid_grant_is_not_adopted_either
+# Five migration-service reads plus one live-service read preserve the reference total of six finds.
 refreshfixture migrated
 swap-status-server invalid-grant
 swap-status-blob $REFRESH_NS/.credentials.adopted.json parked $OWNER owner@example.com fresh
@@ -1245,7 +1273,8 @@ refresh-check keychain-calls 5 8
 refresh-check peers-absent
 ! exists $REFRESH_NS/.credentials.json
 
-# A live swap breaks a stale lock at the resolved store without changing outer trees.
+# a_live_swap_writes_the_unsuffixed_item_and_locks_the_resolved_store
+# a_live_swap_touches_nothing_outside_the_namespace_root_but_the_three_artefacts
 swapfixture live live-containment
 undo-setup
 rm $HOME/.claude/.credentials.json
@@ -1276,7 +1305,7 @@ swap-io 3 0 0
 undo-check 1 0 2
 swap-audit applied 1
 
-# A vendor-held incoming namespace permits the swap but refuses refreshed save-back.
+# a_write_back_into_a_namespace_a_claude_session_holds_is_refused
 swapfixture namespace vendor-held-writeback
 undo-setup
 undo-blob $UNDO_INCOMING_DIR/.credentials.json incoming $INCOMING expired
@@ -1301,7 +1330,7 @@ swap-audit applied 0
 rm $UNDO_INCOMING_DIR/.oauth_refresh.lock
 undo-check 1 1 0
 
-# A namespace undo source must never be superseded by unrecorded live parking.
+# a_live_parking_supersedes_only_an_earlier_live_parking (arm: parking-unrecorded-namespace)
 swapfixture live parking-unrecorded-namespace
 undo-setup
 rm $UNDO_CONFIG
@@ -1325,7 +1354,7 @@ undo-check 0 0 1
 undo-audit-count 0 0 0
 swap-io 1 0 0
 
-# Identity refusal precedes live lineage even when the wrong copy has a matching audit digest.
+# a_live_parking_supersedes_only_an_earlier_live_parking (arm: parking-wrong-identity)
 swapfixture live parking-wrong-identity
 undo-setup
 rm $UNDO_CONFIG
@@ -1351,7 +1380,7 @@ undo-check 0 0 1
 undo-audit-count 1 0 0
 swap-io 1 0 0
 
-# A live parking supersedes its own earlier parking after Claude renews the live grant.
+# a_live_parking_supersedes_only_an_earlier_live_parking (arm: parking-recorded-descendant)
 swapfixture live parking-recorded-descendant
 undo-setup
 rm $UNDO_CONFIG
@@ -1379,7 +1408,7 @@ swap-hold-json next-parking-report 3000
 undo-check 3 0 6
 undo-audit-count 3 3 0
 
-# A refused audit wins before a duplicate forward config catch-up inspects a linked file.
+# a_catch_up_with_a_refused_audit_log_takes_no_lock_and_writes_nothing_at_every_live_return (arm: duplicate-forward-audit-refused)
 swapfixture live duplicate-forward-audit-refused
 undo-setup
 undo-config $OWNER link
@@ -1414,7 +1443,7 @@ exec ls -A $AGENTCTL_CONFIG_DIR/claude/.locks
 undo-check 0 0 1
 swap-io 1 0 0
 
-# Refused audit wins over the absent-file skip on the newer live grant return.
+# a_catch_up_with_a_refused_audit_log_takes_no_lock_and_writes_nothing_at_every_live_return (arm: newer-forward-audit-refused)
 swapfixture live newer-forward-audit-refused
 undo-setup
 rm $UNDO_CONFIG
@@ -1446,7 +1475,7 @@ exec ls -A $AGENTCTL_CONFIG_DIR/claude/.locks
 undo-check 0 0 1
 swap-io 1 0 0
 
-# A refused audit prevents the already-active undo return from locking or updating config.
+# a_catch_up_with_a_refused_audit_log_takes_no_lock_and_writes_nothing_at_every_live_return (arm: undo-active-audit-refused)
 swapfixture live undo-active-audit-refused
 undo-setup
 cp $UNDO_CONFIG catchup-original-config
@@ -1480,7 +1509,7 @@ undo-check 1 0 3
 undo-audit-count 1 1 0
 swap-io 4 0 0
 
-# Different organizations of one account are distinct swap and undo identities.
+# a_live_swap_between_two_orgs_of_one_account_files_the_displaced_credential_in_its_own_org
 swapfixture live same-account-two-orgs
 undo-setup
 rm $HOME/.claude/.credentials.json
@@ -1524,7 +1553,7 @@ undo-check 2 0 0
 undo-audit-count 2 2 0
 swap-io 7 0 0
 
-# Attribute expired-own-applied only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: expired-own-applied)
 swapfixture live expired-own-applied
 undo-setup
 swap-attribution-server 200
@@ -1551,7 +1580,7 @@ swap-io 3 0 0
 undo-audit-count 2 1 0
 swap-tree
 
-# Attribute expired-own-unknown only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: expired-own-unknown)
 swapfixture live expired-own-unknown
 undo-setup
 swap-attribution-server 200
@@ -1578,7 +1607,7 @@ swap-io 3 0 0
 undo-audit-count 2 1 0
 swap-tree
 
-# Attribute expired-foreign only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: expired-foreign)
 swapfixture live expired-foreign
 undo-setup
 swap-attribution-server 200
@@ -1609,7 +1638,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# Attribute expired-newer-legacy only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: expired-newer-legacy)
 swapfixture live expired-newer-legacy
 undo-setup
 swap-attribution-server 200
@@ -1641,7 +1670,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# Attribute expired-namespace-write only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: expired-namespace-write)
 swapfixture live expired-namespace-write
 undo-setup
 swap-attribution-server 200
@@ -1673,7 +1702,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# Attribute revoked-own only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: revoked-own)
 swapfixture live revoked-own
 undo-setup
 swap-attribution-server 401
@@ -1700,7 +1729,7 @@ swap-io 3 0 0
 undo-audit-count 2 1 0
 swap-tree
 
-# Attribute forbidden-own only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: forbidden-own)
 swapfixture live forbidden-own
 undo-setup
 swap-attribution-server 403
@@ -1727,7 +1756,7 @@ swap-io 3 0 0
 undo-audit-count 2 1 0
 swap-tree
 
-# Attribute unavailable-own only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: unavailable-own)
 swapfixture live unavailable-own
 undo-setup
 swap-attribution-server 500
@@ -1756,7 +1785,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# Attribute malformed-own only through the appropriate profile or recorded live write.
+# an_expired_live_credential_is_attributed_only_to_agctls_own_write (arm: malformed-own)
 swapfixture live malformed-own
 undo-setup
 swap-attribution-server malformed
@@ -1785,7 +1814,7 @@ swap-check 0 0 0
 swap-io 1 0 0
 swap-tree
 
-# A store moved after item naming is refused before any credential hold or write.
+# supplemental: store movement between item naming and namespace acquisition
 swapfixture namespace store-move-interleaving
 undo-setup
 env ORG=66666666-7777-8888-9999-000000000000
@@ -1824,9 +1853,8 @@ swap-check 0 0 0
 swap-io 1 0 0
 
 # Undo and forget.
-# Provenance: tests/e2e_swap.rs.
 
-# Namespace reversal restores the displaced pair and parks the incoming pair.
+# undo_puts_the_displaced_credential_back_and_parks_the_incoming_one
 swapfixture namespace undo-namespace
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1838,7 +1866,7 @@ undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
 undo-audit-check forward:- undo:-
 undo-check 2 0 0
 
-# A failed forward write leaves recovery intact and is not selectable.
+# undo_restores_p_after_a_write_that_failed_once_the_adoption_had_happened
 swapfixture namespace undo-failed-forward
 undo-setup
 env AGENTCTL_FAULT=swap_write_fail
@@ -1850,14 +1878,14 @@ undo-credential $UNDO_ITEM outgoing
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
 undo-check 0 0 0
 
-# An empty log is a successful no-op with no child, write, or profile request.
+# undo_with_no_reversible_entry_says_so_and_writes_nothing
 swapfixture namespace undo-empty
 undo-setup
 exec agentctl claude use --undo --yes
 stdout 'no swap to undo'
 undo-check 0 0 0
 
-# A live entry naming no retained credential refuses without a keychain read.
+# undo_of_a_live_target_entry_refuses_when_nothing_holds_the_credential_it_names
 swapfixture live undo-missing-copy
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1869,7 +1897,7 @@ stderr 'nothing to put back'
 cmp $SWAP_AUDIT before-audit
 undo-check 1 0 2
 
-# A namespaced recovery copy must match the displaced audit digest.
+# undo_refuses_when_the_adopted_copy_does_not_match_the_entry
 swapfixture namespace undo-wrong-copy
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1881,7 +1909,7 @@ cmp $SWAP_AUDIT before-audit
 undo-credential $UNDO_ITEM incoming
 undo-check 1 0 0
 
-# Reversing a first keychain write does not resurrect a plaintext store.
+# an_undo_of_a_first_write_puts_p_back_without_recreating_the_plaintext_store
 swapfixture first-write undo-first-write
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1893,7 +1921,7 @@ undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
 ! exists $UNDO_OWNER_DIR/.credentials.json
 undo-check 2 0 0
 
-# A moved export spelling refuses before any additional keychain operation.
+# the_undo_refuses_when_the_store_has_moved_since_its_item_was_named
 swapfixture namespace undo-moved-store
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1903,7 +1931,7 @@ stdout 'the store moved'
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
 undo-check 1 0 0
 
-# A peer change after the initial read discards the reversal and keeps its source.
+# an_undo_discarded_by_a_peer_write_leaves_the_restored_credential_in_the_copy
 swapfixture namespace undo-peer-write
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1918,7 +1946,7 @@ undo-credential $UNDO_ITEM incoming-peer
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
 undo-check 1 0 0
 
-# A changed lock inside the hold refuses without replacing the retained source.
+# an_undo_refused_by_a_compromised_hold_leaves_the_restored_credential_in_the_copy
 swapfixture namespace undo-compromised-hold
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1935,7 +1963,7 @@ stdout '"refusal": "A"'
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
 undo-check 1 0 0
 
-# A busy store leaves the rollback source intact.
+# an_undo_that_finds_the_store_busy_leaves_the_restored_credential_in_the_copy
 swapfixture namespace undo-busy
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1946,7 +1974,7 @@ rm $UNDO_OWNER_DIR/.oauth_refresh.lock
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
 undo-check 1 0 0
 
-# A failed reverse write retains the restoring pair and gives reverse-specific recovery.
+# an_undo_whose_write_fails_leaves_the_restored_credential_in_the_copy
 swapfixture namespace undo-write-failed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1959,7 +1987,7 @@ undo-credential $UNDO_ITEM incoming
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
 undo-check 1 0 0
 
-# An unknown reverse write does not commit the staged occupant over its source.
+# an_undo_whose_write_outcome_is_unknown_leaves_the_restored_credential_in_the_copy
 swapfixture namespace undo-write-unknown
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -1973,7 +2001,7 @@ exec expectexit 1 agentctl claude use --undo --yes
 stderr 'will not put back'
 undo-check 2 0 0
 
-# A newer displaced grant survives and can be restored without a refresh POST.
+# a_displaced_copy_newer_than_the_incoming_store_is_kept_and_an_undo_puts_it_back
 swapfixture namespace undo-newer-copy
 undo-setup
 undo-blob $UNDO_ITEM incoming-session $INCOMING newer
@@ -1984,7 +2012,7 @@ undo-credential $UNDO_ITEM incoming-session
 undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
 undo-check 2 0 0
 
-# Live identity comes from the profile again after the installed grant is refreshed.
+# a_live_swap_takes_ps_identity_from_the_profile_and_its_undo_asks_the_profile_again
 swapfixture live-compact-config undo-profile-identity
 undo-setup
 undo-blob $UNDO_ITEM outgoing -
@@ -2001,7 +2029,7 @@ undo-credential $UNDO_INCOMING_DIR/.credentials.json incoming-refreshed
 ! exists $UNDO_INCOMING_DIR/.credentials.adopted.json
 undo-check 2 0 4
 
-# Every live write records the account it installed, in both directions.
+# live_undo_entries_record_the_account_they_installed
 swapfixture live undo-installed-identity
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2009,7 +2037,7 @@ exec agentctl claude use --undo --yes --json
 undo-audit-check forward:$INCOMING undo:$OWNER
 undo-check 2 0 4
 
-# Two successive live swaps and two reversals install the matching account each time.
+# two_live_swaps_in_a_row_then_undo_then_undo_of_undo_all_apply
 swapfixture live-compact-config undo-two-live-swaps
 undo-setup
 cp $UNDO_CONFIG before-config
@@ -2028,7 +2056,7 @@ cmp $UNDO_CONFIG before-config
 undo-audit-check forward:$INCOMING forward:$THIRD undo:$INCOMING undo:$THIRD
 undo-check 4 0 8
 
-# Undo-of-undo puts back the original incoming grant and resolves later equal copies.
+# a_live_undo_of_an_undo_puts_back_what_that_undo_displaced
 swapfixture live undo-of-undo
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2043,7 +2071,7 @@ cmp $UNDO_ITEM owner-in-item
 ! exists $UNDO_OWNER_DIR/.credentials.adopted.json
 undo-check 4 0 8
 
-# Namespace refreshes beyond a 256-line window do not hide a reversible live swap.
+# the_undo_reads_the_whole_log_not_a_tail
 swapfixture live undo-whole-log
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2054,7 +2082,7 @@ stdout '"target": "live"'
 cmp $UNDO_ITEM parked-owner
 undo-check 2 0 4
 
-# An unknown undo that did not land retries the outstanding forward swap.
+# a_live_undo_after_an_unknown_undo_asks_the_profile_whose_credential_the_item_holds (arm: undo-unknown-not-landed)
 swapfixture live undo-unknown-not-landed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2064,7 +2092,7 @@ stdout '"outcome": "applied"'
 undo-credential $UNDO_ITEM outgoing
 undo-check 2 0 4
 
-# An unknown undo that already landed sees the restored identity and does not rewrite it.
+# a_live_undo_after_an_unknown_undo_asks_the_profile_whose_credential_the_item_holds (arm: undo-unknown-landed)
 swapfixture live undo-unknown-landed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2076,7 +2104,7 @@ stdout '"outcome": "already_active"'
 cmp $UNDO_ITEM before-item
 undo-check 1 0 3
 
-# A stranger after an unknown undo refuses on identity, not on a stale digest.
+# a_live_undo_after_an_unknown_undo_asks_the_profile_whose_credential_the_item_holds (arm: undo-unknown-stranger)
 swapfixture live undo-unknown-stranger
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2091,7 +2119,7 @@ cmp $UNDO_ITEM before-item
 cmp $SWAP_AUDIT before-audit
 undo-check 1 0 3
 
-# A foreign login after an applied live swap changes no recovery or config bytes.
+# a_live_undo_refuses_when_the_session_has_logged_in_as_another_account_since
 swapfixture live undo-foreign-login
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2109,7 +2137,7 @@ cmp $UNDO_INCOMING_DIR/.credentials.json before-incoming
 cmp $SWAP_AUDIT before-audit
 undo-check 1 0 3
 
-# A forward outcome recorded as unknown can be reversed after the installed account refreshes.
+# a_live_undo_of_an_unknown_swap_asks_the_profile_whose_credential_the_item_holds
 swapfixture live undo-unknown-forward
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2121,7 +2149,7 @@ undo-credential $UNDO_ITEM outgoing
 undo-credential $UNDO_INCOMING_DIR/.credentials.json incoming-refreshed
 undo-check 2 0 4
 
-# A new login as the displaced account is already active and is never misfiled as incoming.
+# a_login_as_the_displaced_account_mid_swap_is_seen_by_the_undo_and_nothing_is_misfiled
 swapfixture live undo-owner-relogin
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2137,7 +2165,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
 cmp $UNDO_INCOMING_DIR/.credentials.json before-incoming
 undo-check 1 0 3
 
-# A status refresh of the owner's own store leaves the independently parked undo source usable.
+# an_undo_after_status_refreshed_ps_owned_store_still_finds_p
 swapfixture live undo-status-refreshed-owner
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2149,7 +2177,7 @@ cmp $UNDO_ITEM parked-owner
 undo-credential $UNDO_OWNER_DIR/.credentials.json outgoing-status-refreshed
 undo-check 2 0 4
 
-# Equal copies retained by an undo permit a subsequent live swap.
+# a_live_swap_after_undo_accepts_equal_and_refreshed_copies (arm: undo-forward-equal)
 swapfixture live undo-forward-equal
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2161,7 +2189,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-item
 ! exists $UNDO_OWNER_DIR/.credentials.json
 undo-check 3 0 6
 
-# A refreshed incoming grant is filed by undo and reused by a subsequent live swap.
+# a_live_swap_after_undo_accepts_equal_and_refreshed_copies (arm: undo-forward-incoming-refreshed)
 swapfixture live undo-forward-incoming-refreshed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2173,7 +2201,7 @@ stdout '"outcome": "applied"'
 undo-credential $UNDO_ITEM incoming-refreshed
 undo-check 3 0 6
 
-# A newer owner grant after undo supersedes the recorded adopted copy without creating plaintext.
+# a_live_swap_after_undo_accepts_equal_and_refreshed_copies (arm: undo-forward-owner-refreshed)
 swapfixture live undo-forward-owner-refreshed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2186,7 +2214,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-item
 ! exists $UNDO_OWNER_DIR/.credentials.json
 undo-check 3 0 6
 
-# An unrecorded duplicate may not be replaced merely because the live owner grant is newer.
+# a_live_swap_after_undo_accepts_equal_and_refreshed_copies (arm: undo-unrecorded-duplicate)
 swapfixture live undo-unrecorded-duplicate
 undo-setup own
 cp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
@@ -2201,7 +2229,7 @@ cmp $UNDO_OWNER_DIR/.credentials.json before-owner
 cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-owner
 undo-check 0 0 1
 
-# A recorded sole adopted copy is retained even with an independent older owner store.
+# a_live_swap_after_undo_reuses_or_supersedes_a_recorded_sole_adopted_copy (arm: undo-sole-copy-reuse)
 swapfixture live undo-sole-copy-reuse
 undo-setup own
 cp $UNDO_OWNER_DIR/.credentials.json independent-owner
@@ -2217,7 +2245,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json first-refresh
 cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
 undo-check 3 0 6
 
-# A recorded sole adopted copy can be superseded after another owner refresh.
+# a_live_swap_after_undo_reuses_or_supersedes_a_recorded_sole_adopted_copy (arm: undo-sole-copy-supersede)
 swapfixture live undo-sole-copy-supersede
 undo-setup own
 cp $UNDO_OWNER_DIR/.credentials.json independent-owner
@@ -2232,7 +2260,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json second-refresh
 cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
 undo-check 3 0 6
 
-# Recorded duplicates written by undo-of-undo do not block a later owner refresh.
+# a_live_swap_after_undo_reuses_or_supersedes_a_recorded_sole_adopted_copy (arm: undo-recorded-duplicates)
 swapfixture live undo-recorded-duplicates
 undo-setup own
 undo-blob $UNDO_ITEM outgoing-first-refresh - newer
@@ -2249,7 +2277,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json second-refresh
 cmp $UNDO_OWNER_DIR/.credentials.json before-owner
 undo-check 5 0 10
 
-# Identical own and adopted candidates count as one and remove only the redundant copy.
+# a_live_undo_resolves_identical_own_and_adopted_copies
 swapfixture live undo-identical-candidates
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2262,7 +2290,7 @@ cmp $UNDO_OWNER_DIR/.credentials.json parked-owner
 ! exists $UNDO_OWNER_DIR/.credentials.adopted.json
 undo-check 2 0 4
 
-# A live reversal restores both tokens byte-for-byte without adopting into the live tree.
+# a_live_swap_is_reversed_by_undo_and_the_item_holds_p_again
 swapfixture live undo-live-byte-identical
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2274,7 +2302,7 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json parked-owner
 undo-audit-check forward:$INCOMING undo:$OWNER
 undo-check 2 0 4
 
-# A live audit target from a namespaced shell refuses before keychain, profile, or config work.
+# an_undo_of_a_live_entry_from_a_namespaced_shell_refuses_e
 swapfixture live undo-namespace-override
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2292,7 +2320,7 @@ cmp $SWAP_AUDIT before-audit
 cmp $UNDO_ITEM before-item
 undo-check 1 0 2
 
-# An expired adopted source is refreshed and persisted before the live reversal writes.
+# a_live_undo_refreshes_an_expired_credential_and_persists_it (arm: undo-refresh-adopted)
 swapfixture live undo-refresh-adopted
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2304,7 +2332,7 @@ undo-credential $UNDO_ITEM outgoing-rotated
 cmp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
 undo-check 2 1 4
 
-# The own-store source also persists a refresh instead of discarding the rotated pair.
+# a_live_undo_refreshes_an_expired_credential_and_persists_it (arm: undo-refresh-own)
 swapfixture live undo-refresh-own
 undo-setup own
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2317,7 +2345,7 @@ undo-credential $UNDO_ITEM outgoing-rotated
 cmp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.json
 undo-check 2 1 4
 
-# A post-refresh adopted writeback failure warns in both streams but still installs the usable pair.
+# a_live_undo_whose_refreshed_credential_cannot_be_saved_warns_on_stderr_and_in_json
 swapfixture live undo-refresh-adopted-save-failed
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2333,7 +2361,7 @@ undo-credential $UNDO_ITEM outgoing-rotated
 cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
 undo-check 2 1 4
 
-# A pending write beside an adopted source refuses before rotating its refresh token.
+# a_live_undo_whose_adopted_copy_cannot_take_a_refresh_is_refused_before_the_post
 swapfixture live undo-refresh-pending
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2355,7 +2383,7 @@ cmp $UNDO_OWNER_DIR/.credentials.json.pending before-pending
 cmp $UNDO_OWNER_DIR/.credentials.adopted.json before-adopted
 undo-check 1 0 3
 
-# Migration does not shadow an adopted source; it can still be refreshed and persisted.
+# a_live_undo_of_a_migrated_namespaces_parked_credential_refreshes_and_persists
 swapfixture live undo-refresh-migrated-adopted
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2369,7 +2397,7 @@ undo-credential $UNDO_ITEM outgoing-rotated
 cmp $UNDO_ITEM $UNDO_OWNER_DIR/.credentials.adopted.json
 undo-check 2 1 4
 
-# Canonical migration forbids an own-store refresh writeback, but the live item receives the pair.
+# a_live_undo_from_ps_own_store_whose_refresh_cannot_be_saved_warns_on_stderr_and_in_json
 swapfixture live undo-refresh-own-migrated
 undo-setup own-alias
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2384,7 +2412,7 @@ undo-credential $UNDO_ITEM outgoing-rotated
 cmp $UNDO_OWNER_DIR/.credentials.json before-owner
 undo-check 2 1 4
 
-# A later live parking supersedes the adopted pair that a refreshing undo wrote back.
+# a_live_parking_supersedes_the_copy_an_undo_refreshed_and_wrote_back
 swapfixture live undo-refreshed-parking-superseded
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2401,7 +2429,8 @@ cmp $UNDO_OWNER_DIR/.credentials.adopted.json descendant
 cmp $UNDO_OWNER_DIR/.credentials.json independent-owner
 undo-check 3 1 6
 
-# An unavailable restored-account profile cannot block a reversal already authorized by item identity.
+# a_live_undo_applies_when_the_restored_accounts_profile_cannot_answer
+# one_config_write_line_follows_each_live_write_and_none_follows_a_refusal (arm: undo-restored-profile-down)
 swapfixture live undo-restored-profile-down
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2412,7 +2441,7 @@ stdout '"reason": "profile_unavailable"'
 undo-credential $UNDO_ITEM outgoing
 undo-check 2 0 4
 
-# The reverse config rewrite uses the restored profile, preserves a symlink, and backs up both inputs.
+# a_live_undo_rewrites_oauth_account_with_the_restored_accounts_profile
 swapfixture live undo-config-profile
 undo-setup
 undo-config $OWNER link
@@ -2424,7 +2453,7 @@ stdout '"outcome": "applied"'
 undo-config-check $OWNER initial-config forward-config
 undo-check 2 0 4
 
-# A skipped reverse config write names a forward catch-up that updates config without another swap.
+# an_undo_whose_config_write_was_skipped_is_caught_up_by_use_live_of_the_restored_account
 swapfixture live undo-config-catch-up
 undo-setup own
 undo-config $OWNER link
@@ -2441,7 +2470,7 @@ stdout '"outcome": "already_active"'
 undo-config-check $OWNER
 undo-check 2 0 5
 
-# Remote-control warnings remain human-named on stderr and counts-only in JSON.
+# remote_control_applied_forward_and_undo_warn_on_stderr_and_json_counts_only (arm: undo-remote-json-config)
 swapfixture live undo-remote-json-config
 undo-setup
 undo-remote seed
@@ -2460,7 +2489,7 @@ stdout -count=1 '1 Claude Code session had Remote Control on'
 undo-remote check
 undo-check 2 0 4
 
-# Remote-control completion does not depend on a config file being present.
+# remote_control_applied_forward_and_undo_warn_on_stderr_and_json_counts_only (arm: undo-remote-json-absent)
 swapfixture live undo-remote-json-absent
 undo-setup
 rm $UNDO_CONFIG
@@ -2482,7 +2511,7 @@ stdout -count=1 '1 Claude Code session had Remote Control on'
 undo-remote check
 undo-check 2 0 4
 
-# Human forward and reverse output warns once while retaining the registry tree.
+# remote_control_applied_forward_and_undo_warn_on_stderr_and_json_counts_only (arm: undo-remote-human-config)
 swapfixture live undo-remote-human-config
 undo-setup
 undo-remote seed
@@ -2498,7 +2527,7 @@ stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Re
 undo-remote check
 undo-check 2 0 4
 
-# Human warnings also survive absent config in both directions.
+# remote_control_applied_forward_and_undo_warn_on_stderr_and_json_counts_only (arm: undo-remote-human-absent)
 swapfixture live undo-remote-human-absent
 undo-setup
 rm $UNDO_CONFIG
@@ -2515,7 +2544,7 @@ stderr -count=1 'warning: 1 Claude Code session \(`undo-remote-session`\) had Re
 undo-remote check
 undo-check 2 0 4
 
-# Absent registry and disabled Remote Control do not produce completion warnings.
+# remote_control_completion_is_silent_without_an_applied_change (arm: undo-remote-silent-absent)
 swapfixture live undo-remote-silent-absent
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2524,6 +2553,7 @@ stdout '"outcome": "applied"'
 ! stderr 'had Remote Control'
 undo-check 1 0 2
 
+# remote_control_completion_is_silent_without_an_applied_change (arm: undo-remote-silent-off)
 swapfixture live undo-remote-silent-off
 undo-setup
 undo-remote off
@@ -2534,7 +2564,7 @@ stdout '"outcome": "applied"'
 undo-remote check
 undo-check 1 0 2
 
-# The environment gate precedes both registry scanning and completion advice.
+# remote_control_completion_is_silent_without_an_applied_change (arm: undo-remote-silent-env)
 swapfixture live-env-token undo-remote-silent-env
 undo-setup
 undo-remote seed
@@ -2545,7 +2575,7 @@ stdout '"outcome": "refused"'
 undo-remote check
 undo-check 0 0 0
 
-# Nonterminal cancellation never names sessions or emits completion advice in either direction.
+# remote_control_completion_is_silent_without_an_applied_change (arm: undo-remote-silent-cancel)
 swapfixture live undo-remote-silent-cancel
 undo-setup
 undo-remote seed
@@ -2571,7 +2601,7 @@ exec expectexit 20 agentctl claude use --undo
 undo-remote check
 undo-check 1 0 6
 
-# An unknown write must not claim Remote Control stopped after an applied change.
+# remote_control_completion_is_silent_without_an_applied_change (arm: undo-remote-silent-unknown)
 swapfixture live undo-remote-silent-unknown
 undo-setup
 undo-remote seed
@@ -2583,7 +2613,7 @@ stdout '"outcome": "unknown"'
 undo-remote check
 undo-check 1 0 2
 
-# An already-current account/config does not repeat completion warnings.
+# remote_control_completion_is_silent_without_an_applied_change (arm: undo-remote-silent-current)
 swapfixture live undo-remote-silent-current
 undo-setup
 undo-remote seed
@@ -2597,7 +2627,7 @@ stdout '"reason": "already_current"'
 undo-remote check
 undo-check 1 0 3
 
-# Config catch-up warns for its applied rewrite, but the next already-current pass stays silent.
+# remote_control_catch_up_warns_only_when_the_config_is_updated (arm: undo-remote-catch-up)
 swapfixture live undo-remote-catch-up
 undo-setup
 rm $UNDO_CONFIG
@@ -2625,7 +2655,7 @@ stdout '"reason": "already_current"'
 undo-remote check
 undo-check 1 0 4
 
-# Missing session registries are silent; unreadable ones advise only live passes after the env gate.
+# remote_control_unreadable_registry_is_a_note_only_for_live_passes_after_env_gate (arm: undo-remote-unreadable-absent)
 swapfixture live undo-remote-unreadable-absent
 undo-setup
 exec agentctl claude use $INCOMING --live --yes --json
@@ -2633,6 +2663,7 @@ exec agentctl claude use $INCOMING --live --yes --json
 ! stderr 'session registry|had Remote Control'
 undo-check 1 0 2
 
+# remote_control_unreadable_registry_is_a_note_only_for_live_passes_after_env_gate (arm: undo-remote-unreadable-live)
 swapfixture live undo-remote-unreadable-live
 undo-setup
 undo-remote seed
@@ -2646,6 +2677,7 @@ exec /bin/chmod 700 $HOME/.claude/sessions
 undo-remote check
 undo-check 1 0 2
 
+# remote_control_unreadable_registry_is_a_note_only_for_live_passes_after_env_gate (arm: undo-remote-unreadable-namespace)
 swapfixture namespace undo-remote-unreadable-namespace
 undo-setup
 undo-remote seed
@@ -2657,6 +2689,7 @@ exec /bin/chmod 700 $HOME/.claude/sessions
 undo-remote check
 undo-check 1 0 0
 
+# remote_control_unreadable_registry_is_a_note_only_for_live_passes_after_env_gate (arm: undo-remote-unreadable-env)
 swapfixture live-env-token undo-remote-unreadable-env
 undo-setup
 undo-remote seed
