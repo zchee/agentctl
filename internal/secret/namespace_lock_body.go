@@ -89,8 +89,8 @@ func writeBody(ctx context.Context, guard *LockGuard) error {
 		return &LockUnavailableError{Reason: fmt.Sprintf("could not serialize the lock body: %v", err), Err: err}
 	}
 
-	if err := replaceContents(guard.file, encoded); err != nil {
-		return &LockUnavailableError{Reason: fmt.Sprintf("could not write `%s`: %v", guard.path, err), Err: err}
+	if err := replaceContents(guard.File(), encoded); err != nil {
+		return &LockUnavailableError{Reason: fmt.Sprintf("could not write `%s`: %v", guard.Path(), err), Err: err}
 	}
 	return nil
 }

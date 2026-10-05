@@ -27,9 +27,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/lockfile"
 )
 
 // RegistryVersion is the schema version of a registry with Claude accounts
@@ -516,11 +515,11 @@ func UpdateRegistry(ctx context.Context, p *Paths, f func(*Registry)) error {
 	}
 
 	lockPath := p.ConfigLock()
-	guard, err := lockRegistry(ctx, lockPath, time.Now().Add(RegistryLockWait))
+	guard, err := lockfile.Lock(ctx, lockPath, time.Now().Add(RegistryLockWait))
 	if err != nil {
 		return errs.NewRefused(0, fmt.Sprintf("could not lock `%s`: %v", lockPath, err))
 	}
-	defer func() { _ = guard.Close() }()
+	defer func() { _ = guard.Release() }()
 
 	registry, err := LoadRegistry(ctx, p)
 	if err != nil {
@@ -641,93 +640,6 @@ func (r *Registry) ResolveID(id string) (*AccountRecord, error) {
 		return nil, errs.NewConfig(fmt.Sprintf("`%s` matches %d accounts; use one of: %s", id, len(matches), strings.Join(candidates, ", ")))
 	}
 }
-
-// lockRegistry takes the exclusive flock on the configuration lock,
-// creating the file at 0600 if needed and never unlinking it: flock locks
-// an inode, and a recreated lock file is a second inode two processes
-// could hold at once. Contention retries every 250 ms until deadline;
-// every other errno fails closed. The parent directory is resolved
-// normally, because the store root is a path the user names and may
-// legitimately be a symbolic link.
-func lockRegistry(ctx context.Context, path string, deadline time.Time) (*os.File, error) {
-	file, err := openRegistryLock(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var timer *time.Timer
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
-	for {
-		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		switch {
-		case err == nil:
-			return file, nil
-		case errors.Is(err, unix.EWOULDBLOCK):
-		default:
-			_ = file.Close()
-			return nil, fmt.Errorf("could not lock `%s`: %w", path, err)
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			_ = file.Close()
-			return nil, ctxErr
-		}
-		if !time.Now().Before(deadline) {
-			_ = file.Close()
-			return nil, errors.New("another process holds the configuration lock")
-		}
-		if timer == nil {
-			timer = time.NewTimer(registryLockRetry)
-		} else {
-			timer.Reset(registryLockRetry)
-		}
-		select {
-		case <-ctx.Done():
-			_ = file.Close()
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-// registryLockRetry is how often a blocked registry lock retries.
-const registryLockRetry = 250 * time.Millisecond
-
-// openRegistryLock opens the configuration lock file, creating it at 0600
-// when it is not there yet. The create is split behind an exclusive
-// create so a racing creator is read as "somebody just made it", and a
-// planted symbolic link is refused on the no-follow open.
-func openRegistryLock(path string) (*os.File, error) {
-	for range registryLockCreateAttempts {
-		fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		switch {
-		case err == nil:
-			return os.NewFile(uintptr(fd), path), nil
-		case errors.Is(err, unix.ENOENT):
-		case errors.Is(err, unix.ELOOP), errors.Is(err, unix.EMLINK):
-			return nil, fmt.Errorf("`%s` is a symbolic link; refusing to lock through it", path)
-		default:
-			return nil, fmt.Errorf("could not open `%s`: %w", path, err)
-		}
-		fd, err = unix.Open(path, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC, uint32(FileMode))
-		switch {
-		case err == nil:
-			return os.NewFile(uintptr(fd), path), nil
-		case errors.Is(err, unix.EEXIST):
-		default:
-			return nil, fmt.Errorf("could not open `%s`: %w", path, err)
-		}
-	}
-	return nil, fmt.Errorf("could not open `%s`: it kept being created and removed underneath us", path)
-}
-
-// registryLockCreateAttempts is how many times opening the configuration
-// lock re-looks before giving up while another process is creating the
-// same file.
-const registryLockCreateAttempts = 8
 
 // writeThenRename writes bytes to tmp at 0600, flushes it to stable
 // storage, renames it over target, and pins the target's mode.

@@ -25,18 +25,24 @@ import (
 	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
+
+	"github.com/zchee/agentctl/internal/lockfile"
 )
 
 func TestDocumentedTimings(t *testing.T) {
 	t.Parallel()
 
+	// The wait is the registry's own budget; the retry interval and the
+	// create-attempt bound come with the shared flock implementation the
+	// registry locks through, and are asserted here because this is the
+	// budget the registry's callers experience.
 	tests := map[string]struct {
 		got  time.Duration
 		want time.Duration
 	}{
 		"success: registry wait":            {got: RegistryLockWait, want: 5 * time.Second},
-		"success: registry retry":           {got: registryLockRetry, want: 250 * time.Millisecond},
-		"success: registry create attempts": {got: time.Duration(registryLockCreateAttempts), want: 8},
+		"success: registry retry":           {got: lockfile.RetryInterval, want: 250 * time.Millisecond},
+		"success: registry create attempts": {got: time.Duration(lockfile.CreateAttempts), want: 8},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

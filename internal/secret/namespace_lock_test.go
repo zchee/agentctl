@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -425,72 +424,5 @@ func TestASecondProcessHoldingTheLockBlocksUntilItExits(t *testing.T) {
 	defer func() { _ = guard.Release() }()
 }
 
-func TestAnUnsupportedFlockFailsClosed(t *testing.T) {
-	// Not parallel: it swaps the package's flock function, and the swap
-	// must not overlap any other test.
-	original := flock
-	t.Cleanup(func() { flock = original })
-	flock = func(fd, how int) error {
-		if how&unix.LOCK_UN != 0 {
-			return original(fd, how)
-		}
-		return unix.ENOTSUP
-	}
-
-	locksDir := filepath.Join(t.TempDir(), ".locks")
-	start := time.Now()
-	_, err := Acquire(t.Context(), locksDir, "acct.org.lock", time.Now().Add(10*time.Second))
-	if _, ok := errors.AsType[*LockUnavailableError](err); !ok {
-		t.Fatalf("Acquire() = %v, want a lock-unavailable error: a filesystem without flock never authorises a write", err)
-	}
-	if !errors.Is(err, unix.ENOTSUP) {
-		t.Errorf("the underlying errno should survive: %v", err)
-	}
-	if elapsed := time.Since(start); elapsed >= 5*time.Second {
-		t.Errorf("only contention may retry; ENOTSUP waited %v", elapsed)
-	}
-}
-
-func TestManyGoroutinesRacingToCreateOneFreshLockFileAllOpenIt(t *testing.T) {
-	t.Parallel()
-
-	// A regression test for a fault a single-shot test misses: the
-	// kernel's openat does not retry its lookup when another thread wins
-	// an O_CREAT race on this platform, so a combined create returns
-	// ENOENT — not EEXIST — for a large fraction of the racers. The split
-	// open-then-create keeps every racer successful.
-	const workers = 8
-	const rounds = 60
-
-	for round := range rounds {
-		dir := t.TempDir()
-		path := filepath.Join(dir, ".config.lock")
-		dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-		if err != nil {
-			t.Fatalf("round %d: Open(%q) = %v", round, dir, err)
-		}
-
-		var wg sync.WaitGroup
-		failures := make(chan error, workers)
-		for range workers {
-			wg.Go(func() {
-				file, err := openLockFile(dirFD, ".config.lock", path)
-				if err != nil {
-					failures <- err
-					return
-				}
-				_ = file.Close()
-			})
-		}
-		wg.Wait()
-		close(failures)
-		_ = unix.Close(dirFD)
-
-		for err := range failures {
-			t.Errorf("round %d: %v", round, err)
-		}
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("round %d: the lock file should have been created: %v", round, err)
-		}
-	}
-}
+// The flock fail-closed seam and the split-create race live with the
+// shared flock implementation; see the lockfile package's tests.
