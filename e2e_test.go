@@ -50,6 +50,7 @@ func TestScripts(t *testing.T) {
 	testscript.Run(t, testscript.Params{
 		Dir:                 "testdata/script",
 		Setup:               testutil.ScriptSetup,
+		Cmds:                testutil.ScriptCmds(),
 		RequireExplicitExec: true,
 	})
 }

@@ -1,0 +1,164 @@
+# Empty-store output is compared after EOF normalization and byte for byte.
+# expected.stdout was captured with `agctl claude status` in an isolated empty
+# config/home using fixtures/fake-security.sh. Executable:
+# /Users/zchee/rust/src/github.com/zchee/agctl/target/debug/agctl
+# Frozen checkout: dbf6aeab84dfbe2465de496316d7bf6780940a60.
+statusfixture empty
+exec expectexit 2 agentctl claude status
+stderr '1 shown account\(s\) could not be read'
+! stderr 'sk-ant|SENTINEL'
+status-check normalized stdout expected.stdout
+cmp stdout expected.stdout
+status-check read-only
+usage-calls 0 0 0
+
+# Reset columns select the requested zone, even when usage comes from cache.
+statusfixture owned
+env TZ=Asia/Tokyo
+exec agentctl claude status --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout '5h reset'
+stdout 'Weekly reset'
+! stdout 'Next reset'
+status-check resets stdout Asia/Tokyo
+cp stdout tokyo.stdout
+env TZ=UTC
+exec agentctl claude status --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+status-check resets stdout UTC
+! cmp stdout tokyo.stdout
+usage-calls 1 0 0
+status-check read-only
+
+# JSON retains each window's UTC instant, including the earliest next reset.
+env TZ=Asia/Tokyo
+exec agentctl claude status --json --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+status-check json-resets stdout 1
+cp stdout resets.json
+exec schema status.v1.json resets.json
+status-check read-only
+
+# A rate limit survives two further processes without discarding cached usage.
+usage-status 429
+exec expectexit 2 agentctl claude status --no-cache --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'rate-limited \(retry in 30s\)'
+stdout 'showing the cached value'
+stdout '21'
+usage-calls 2 0 0
+exec expectexit 2 agentctl claude status --no-cache --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+stdout 'rate-limited'
+usage-calls 2 0 0
+status-check read-only
+
+# An expired live credential spends neither a usage nor a refresh request.
+statusfixture expired-live
+exec expectexit 2 agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+stdout 'expired \(read-only'
+usage-calls 0 0 0
+status-check read-only
+
+# A locked item read never falls through to the planted plaintext identity.
+statusfixture locked-live
+exec expectexit 2 agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+stdout 'keychain locked'
+! stdout '99999999-9999-9999-9999-999999999999'
+! stdout 'sk-ant|SENTINEL'
+usage-calls 0 0 0
+status-check read-only
+
+# A configuration-directory credential cannot borrow the live file's identity.
+statusfixture unknown
+exec expectexit 2 agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+stdout 'identity unknown'
+status-check unknown stdout
+usage-calls 0 0 0
+status-check read-only
+
+# A canonical-path sibling with different tokens stays hidden until requested.
+# The diagnostic-command assertion is deferred until that command is wired.
+statusfixture sibling
+exec agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+! stdout 'stale sibling of live'
+stdout '1 entry hidden \(--all\)'
+exec agentctl claude status --all
+! stderr 'sk-ant|SENTINEL'
+stdout 'stale sibling of live'
+exec agentctl claude accounts list --all
+! stderr 'sk-ant|SENTINEL'
+stdout 'stale sibling of live'
+status-check read-only
+
+# Identical credentials under the canonical-path name fold into the live row.
+statusfixture identical
+exec agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+! stdout 'hidden \(--all\)'
+! stdout 'stale sibling'
+usage-calls 1 0 0
+status-check read-only
+
+# Only the owned twin receives the same-identity note, not an unrelated row.
+statusfixture twins
+exec agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+stdout -count=1 'same identity as live'
+stdout 'owner@example.com.*same identity as live'
+! stdout 'sk-ant|SENTINEL'
+status-check read-only
+
+# Every JSON row answers the identity question; only the owned twin names live.
+exec agentctl claude status --json
+! stderr 'sk-ant|SENTINEL'
+status-check identity stdout 3
+cp stdout twins.json
+exec schema status.v1.json twins.json
+status-check read-only
+
+# The identity table folds two sources to one row and adds a Kind column.
+statusfixture identity
+exec agentctl claude status
+! stderr 'sk-ant|SENTINEL'
+stdout -count=2 'owner@example.com'
+! stdout '\| Kind'
+! stdout 'live\+owned'
+exec agentctl claude status --by-identity
+! stderr 'sk-ant|SENTINEL'
+stdout -count=1 'owner@example.com'
+stdout 'Kind'
+stdout 'live\+owned'
+! stdout 'same identity as live'
+! stdout 'sk-ant|SENTINEL'
+status-check read-only
+
+# The same flag leaves the JSON document unchanged except for generation time.
+exec agentctl claude status --json
+! stderr 'sk-ant|SENTINEL'
+cp stdout plain.json
+exec agentctl claude status --json --by-identity
+! stderr 'sk-ant|SENTINEL'
+status-check identity stdout 2
+cp stdout folded.json
+status-check same-json plain.json folded.json
+exec schema status.v1.json folded.json
+status-check read-only
+
+# A hanging keychain subprocess is killed instead of holding the pass open.
+statusfixture hanging
+exec expectexit 2 agentctl claude status --timeout 1s
+! stderr 'sk-ant|SENTINEL'
+stdout 'keychain timeout'
+status-check bounded
+usage-calls 0 0 0
+status-check read-only
+
+-- expected.stdout --
+ Account | Org          | Plan | 5h | Weekly | Fable (weekly) | Credits | 5h reset | Weekly reset | State                                                    
+---------+--------------+------+----+--------+----------------+---------+----------+--------------+----------------------------------------------------------
+ live    | _unknown-org | —    | —  | —      | —              | —       | —        | —            | needs login (keychain service `Claude Code-credentials`) 
