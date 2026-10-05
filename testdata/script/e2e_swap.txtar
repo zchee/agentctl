@@ -1172,6 +1172,79 @@ swap-io 3 0 0
 swap-audit applied 0
 swap-tree
 
+# A real namespace swap leaves an adopted row that must not refresh an occupant.
+swapfixture namespace status-occupied-item
+undo-setup
+swap-status-server usage
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp $UNDO_OWNER_DIR/.credentials.adopted.json status-original-parked
+swap-status-blob $UNDO_ITEM occupant $THIRD third@example.com expired
+cp $UNDO_ITEM status-occupied-before
+swap-status-list $UNDO_OWNER_DIR
+exec agentctl claude status --json --refresh --account $OWNER
+cp stdout status-occupied-report
+swap-status-row status-occupied-report $OWNER third@example.com
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM status-occupied-before
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json status-original-parked
+! exists $UNDO_OWNER_DIR/.credentials.json
+undo-check 1 0 0
+swap-check 1 0 0
+swap-io 6 1 1
+swap-status-posts 0
+
+# Between reads, a healthy other-account occupant is not adopted as this row.
+refreshfixture peer-before-post
+swap-status-server usage
+swap-status-blob $REFRESH_NS/.credentials.adopted.json parked $OWNER owner@example.com fresh
+cp $REFRESH_NS/.credentials.adopted.json status-before-post-parked
+exec agentctl claude status --json --refresh --timeout 30s --account owner@example.com &statusprepost&
+refresh-action wait-pause
+swap-status-blob $REFRESH_ITEM occupant $THIRD third@example.com fresh
+cp $REFRESH_ITEM status-before-post-item
+refresh-action resume
+wait statusprepost
+cp stdout status-before-post-report
+swap-status-row status-before-post-report $OWNER third@example.com
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $REFRESH_ITEM status-before-post-item
+cmp $REFRESH_NS/.credentials.adopted.json status-before-post-parked
+refresh-calls 0 0 0
+swap-status-posts 0
+refresh-check read-only
+refresh-check keychain-calls 4 7
+refresh-check peers-absent
+! exists $REFRESH_NS/.credentials.json
+
+# Invalid-grant recovery also attributes a new occupant rather than logging out.
+refreshfixture migrated
+swap-status-server invalid-grant
+swap-status-blob $REFRESH_NS/.credentials.adopted.json parked $OWNER owner@example.com fresh
+cp $REFRESH_NS/.credentials.adopted.json status-invalid-grant-parked
+env AGENTCTL_FAULT=pause_before_invalid_grant_reread
+exec agentctl claude status --json --refresh --timeout 30s --account owner@example.com &statusinvalid&
+refresh-action wait-pause
+swap-status-posts 1
+swap-status-blob $REFRESH_ITEM occupant $THIRD third@example.com fresh
+cp $REFRESH_ITEM status-invalid-grant-item
+refresh-action resume
+wait statusinvalid
+cp stdout status-invalid-grant-report
+swap-status-row status-invalid-grant-report $OWNER third@example.com
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $REFRESH_ITEM status-invalid-grant-item
+cmp $REFRESH_NS/.credentials.adopted.json status-invalid-grant-parked
+refresh-calls 0 0 0
+swap-status-posts 1
+refresh-check read-only
+refresh-check keychain-calls 5 8
+refresh-check peers-absent
+! exists $REFRESH_NS/.credentials.json
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
