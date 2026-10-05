@@ -1,0 +1,228 @@
+# Provenance: tests/e2e_isolate.rs; shell oracles captured from the reference
+# binary. The explanatory OAuth comment omits the reference's private ledger
+# suffix; every other byte is compared after substituting fixture paths.
+
+# exec_delivers_exactly_the_expected_environment_delta
+isolatefixture environment empty
+env CLAUDE_CODE_OAUTH_TOKEN=sk-ant-inherited
+env ISOLATE_MARKER=marker-value
+exec agentctl claude exec account -- /usr/bin/env
+stdout 'CLAUDE_SECURESTORAGE_CONFIG_DIR='
+stdout 'CLAUDE_CONFIG_DIR='
+stdout 'ISOLATE_MARKER=marker-value'
+! stdout 'CLAUDE_CODE_OAUTH_TOKEN'
+! stderr 'sk-ant'
+isolate-check unchanged
+
+# exec_runs_the_child_without_a_shell_and_writes_no_credential
+isolatefixture arguments empty
+exec agentctl claude exec account -- capture 'a b' '$HOME' '*' '; touch semicolon-ran' '`touch backtick-ran`'
+cmp $ARGV_LOG arguments.txt
+! exists semicolon-ran
+! exists backtick-ran
+isolate-check unchanged
+
+# a_sigterm_to_exec_kills_the_child_it_registered
+isolatefixture signals empty
+exec /bin/sh signal-check.sh
+stdout 'all children reaped'
+! stderr 'sk-ant'
+
+# env_matches_the_golden_string_for_every_shell
+isolatefixture rendering empty
+exec agentctl claude env account --shell bash
+cp stdout bash.actual
+isolate-check env bash.actual posix.env
+exec agentctl claude env account --shell zsh
+cp stdout zsh.actual
+isolate-check env zsh.actual posix.env
+exec agentctl claude env account --shell fish
+cp stdout fish.actual
+isolate-check env fish.actual fish.env
+
+# no_mcp_omits_the_symlink_the_flag_and_the_alias_together
+isolatefixture nomcp empty
+exec agentctl claude env account --no-mcp
+! stdout '(alias claude=|--mcp-config)'
+exec agentctl claude exec account --no-mcp -- claude
+cmp $ARGV_LOG empty.txt
+isolate-check layout no-mcp
+
+# refuses_when_the_recorded_hash_disagrees_with_the_spelling
+isolatefixture badhash badhash
+exec expectexit 1 agentctl claude env account
+stderr 'deadbeef'
+! stderr 'sk-ant'
+
+# mcp_config_is_appended_to_argv_only_when_the_command_is_named_claude
+isolatefixture mcp empty
+exec agentctl claude exec account -- claude
+exec /bin/cat $ARGV_LOG
+stdout '^--mcp-config\n'
+stdout '/mcp.json'
+exec agentctl claude exec account -- notclaude
+cmp $ARGV_LOG empty.txt
+
+# the_symlink_target_is_exact_and_nothing_unexpected_is_created
+isolatefixture exact empty
+exec agentctl claude exec account -- /usr/bin/true
+isolate-check layout empty
+
+# symlinks_every_tier_1_and_tier_2_entry_and_leaves_tier_3_alone
+isolatefixture full full
+exec agentctl claude exec account -- /usr/bin/true
+isolate-check layout full
+isolate-check unchanged
+
+# fresh_context_omits_tier_2_but_keeps_tier_1
+isolatefixture fresh full
+exec agentctl claude exec account --fresh-context -- /usr/bin/true
+isolate-check layout fresh
+
+# no_regular_file_under_the_session_directory_contains_mcp_servers_or_oauth_account
+isolatefixture seed empty
+exec agentctl claude exec account -- /usr/bin/true
+isolate-check seed
+isolate-check layout empty
+isolate-check unchanged
+
+# refuses_a_foreign_occupant_at_a_tier_1_path_naming_it
+isolatefixture occupant occupant
+exec expectexit 1 agentctl claude env account
+stderr 'settings.json'
+isolate-check unchanged
+
+# refuses_a_symlinked_session_directory_and_leaves_its_target_untouched
+isolatefixture symlink symlink
+exec expectexit 1 agentctl claude env account
+stderr 'plain directory'
+! exists $ISOLATE_ROOT/outside/.claude.json
+! exists $ISOLATE_ROOT/outside/mcp.json
+isolate-check unchanged
+
+# never_rewrites_the_seed_once_claude_code_has_extended_it
+isolatefixture extended empty
+exec agentctl claude exec account -- /usr/bin/true
+cp extended.json $SESSION/.claude.json
+exec mtime $SESSION/.claude.json
+cp stdout before.mtime
+exec agentctl claude exec account -- /usr/bin/true
+exec mtime $SESSION/.claude.json
+cmp stdout before.mtime
+cmp $SESSION/.claude.json extended.json
+
+# the_audit_log_records_no_write_to_the_seeded_config
+isolatefixture audit linked
+exec agentctl claude env account
+isolate-check seed
+isolate-check unchanged
+cp extended.json $SESSION/.claude.json
+exec agentctl claude env account
+isolate-check unchanged
+! exists $AGENTCTL_CONFIG_DIR/backups
+
+# a_session_seed_is_read_under_the_config_lock_and_releases_it
+isolatefixture linked linked
+exec agentctl claude env account
+isolate-check seed
+isolate-check lock
+isolate-check unchanged
+cp $SESSION/.claude.json original-seed.json
+cp malformed.txt $LIVE
+exec agentctl claude env account
+cmp $SESSION/.claude.json original-seed.json
+isolate-check lock
+! exists $HOME/.claude-real/.claude.json.lock
+! exists $AGENTCTL_CONFIG_DIR/backups
+
+# a_held_config_lock_never_blocks_seeding_and_is_left_alone
+isolatefixture busy busy
+exec agentctl claude env account
+isolate-check seed
+isolate-check lock
+isolate-check unchanged
+isolatefixture stale stale
+exec agentctl claude env account
+isolate-check seed
+isolate-check lock
+isolate-check unchanged
+
+# Isolated use accepts the default synonym and prints paths before launching.
+isolatefixture use empty
+exec agentctl claude use account --new-only --yes --json
+stdout '"securestorage_dir"'
+stdout '"session_path"'
+stdout '"mcp_config"'
+exec /bin/cat $ARGV_LOG
+stdout '^--mcp-config\n'
+exec agentctl claude use account --no-mcp --json
+stdout '"mcp_config": null'
+cmp $ARGV_LOG empty.txt
+exec expectexit 37 agentctl claude exec account -- /bin/sh -c 'exit 37'
+! stderr '.'
+exec expectexit 143 agentctl claude exec account -- /bin/sh -c 'kill -TERM $$'
+! stderr '.'
+
+# Deferred: forget_removes_the_session_and_leaves_the_namespace_and_lock_untouched;
+# forget_without_yes_and_no_terminal_removes_nothing;
+# forget_an_account_with_no_session_is_a_no_op;
+# forget_removes_a_symlinked_session_directory_without_removing_what_it_points_at.
+# All four require the session deletion handler, which is deliberately separate
+# from isolated launches. Until that handler lands, refuse rather than delete.
+exec expectexit 1 agentctl claude use --forget account --yes
+stderr 'not implemented'
+exists $SESSION/.claude.json
+exec expectexit 1 agentctl claude use account --live
+stderr 'not implemented'
+exec expectexit 1 agentctl claude use --undo
+stderr 'not implemented'
+
+-- arguments.txt --
+a b
+$HOME
+*
+; touch semicolon-ran
+`touch backtick-ran`
+-- empty.txt --
+-- extended.json --
+{"hasCompletedOnboarding":true,"theme":"dark","lastOnboardingVersion":"9.9.9"}
+-- malformed.txt --
+{not json
+-- posix.env --
+export CLAUDE_SECURESTORAGE_CONFIG_DIR='@NAMESPACE@'
+export CLAUDE_CONFIG_DIR='@SESSION@'
+# CLAUDE_CODE_OAUTH_TOKEN would bypass this session's stored credential
+unset CLAUDE_CODE_OAUTH_TOKEN
+alias claude='claude --mcp-config '\''@SESSION@/mcp.json'\'''
+# an alias only reaches an interactive shell; a script started from one will not inherit it
+-- fish.env --
+set -gx CLAUDE_SECURESTORAGE_CONFIG_DIR '@NAMESPACE@'
+set -gx CLAUDE_CONFIG_DIR '@SESSION@'
+# CLAUDE_CODE_OAUTH_TOKEN would bypass this session's stored credential
+set -e CLAUDE_CODE_OAUTH_TOKEN
+function claude
+    command claude --mcp-config '@SESSION@/mcp.json' $argv
+end
+# a fish function only reaches an interactive shell; a script started from one will not inherit it
+-- signal-check.sh --
+#!/bin/sh
+set -eu
+for round in 1 2 3 4; do
+  pidfile="$ISOLATE_ROOT/child-$round.pid"
+  agentctl claude exec account -- /bin/sh -c 'printf "%s\n" $$ > "$1"; exec /bin/sleep 30 </dev/null >/dev/null 2>&1' sh "$pidfile" &
+  parent=$!
+  trap 'kill -KILL "$parent" 2>/dev/null || true' EXIT
+  waitfor "$pidfile"
+  child=$(cat "$pidfile")
+  kill -TERM "$parent"
+  status=0
+  wait "$parent" || status=$?
+  test "$status" = 143
+  if kill -0 "$child" 2>/dev/null; then
+    kill -KILL "$child" 2>/dev/null || true
+    printf 'child survived parent exit\n' >&2
+    exit 1
+  fi
+  trap - EXIT
+done
+printf 'all children reaped\n'
