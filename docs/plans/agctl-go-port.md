@@ -1,6 +1,6 @@
 # Plan: port agctl (Rust) to agentctl (Go)
 
-- Status: **pending approval** (planning only; no source edits, no execution started)
+- Status: **approved 2026-10-05 (user, "approve via team"); P1 in progress**
 - Written: 2026-10-05; last revised 2026-10-05 15:52:37 JST (`date`; earlier revisions in the
   changelog, section 21)
 - Session: https://claude.ai/code/session_019Gqsu3YqQoibgVecjoSu1o
@@ -49,7 +49,8 @@ marked provisional at `src/provider/claude/remote_control.rs:62-65`).
 | JSON Schema in tests | `github.com/santhosh-tekuri/jsonschema/v6` | handoff |
 | JSON | `encoding/json/v2` + `encoding/json/jsontext`; `omitzero`, never `omitempty` | handoff + Go.md |
 | HTTP | `net/http` + `net/http/httptrace`; no wrapper library; refresh-POST outcome classification re-derived and table-tested before use (section 9, W2) | handoff |
-| Worker model | every worker via `~/.claude/agents/codex-*` on `claude-gpt-6-astra-ultrafast[1m]`; `codex-explore` / `codex-writer` stay on `claude-gpt-5.6-luna-fast[1m]` (accepted) | user, 2026-10-05 |
+| Worker model | every worker via `~/.claude/agents/codex-*`; the frontmatter model is authoritative (the Agent tool cannot pass a gateway model id). P0 lanes ran on `claude-gpt-6-astra-ultrafast[1m]`; the frontmatter was changed to `claude-gpt-6-astra-fast[1m]` at 15:30 JST and the user kept that for P1 onwards; `codex-explore` / `codex-writer` stay on `claude-gpt-5.6-luna-fast[1m]` (accepted) | user, 2026-10-05 (twice) |
+| Commit trailers for lane commits | `Co-Authored-By: Codex <noreply@openai.com>` + `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` + `Claude-Session`; the astra lanes count as a cross-vendor codex lane | user, 2026-10-05 |
 | Security review routing | astra `codex-security-reviewer`, overriding the global opus rule for this project; the lead never runs the review itself | user, 2026-10-05 |
 | Commit cadence | `/commit` + `git push` after each small task; planning artefacts mirrored from `.omc/plans/`, `.omc/research/` to tracked `docs/plans/`, `docs/research/` (`.omc/` is globally gitignored) | user, 2026-10-05 |
 | Comments | no "ported from agctl" or source-reference comments in Go code; comments state the reason in plain words | user |
@@ -396,8 +397,8 @@ Codex refresh `https://auth.openai.com/oauth/token`; Codex usage
 
 | Phase | Description | Status | Landed |
 |---|---|---|---|
-| P0 | Planning: this document; research mirrored to `docs/research/` | 🔶 in progress | `34585b7` (inventory reports) |
-| P1 | Foundation: module skeleton, `internal/cli` tree + duration grammar + completions, `internal/errs`, `internal/config` (paths, registry, locks), `internal/testutil`, fixtures/schemas/goldens copied, CI | 🔜 | — |
+| P0 | Planning: this document; research mirrored to `docs/research/` | ✅ done | `34585b7`, `0957188`, `3a35bd7`, `60b5e9a`; handoff `b6df779` |
+| P1 | Foundation: module skeleton, `internal/cli` tree + duration grammar + completions, `internal/errs`, `internal/config` (paths, registry, locks), `internal/testutil`, fixtures/schemas/goldens copied, CI | 🔶 in progress (W1 started 2026-10-05) | — |
 | P2 | Spikes with go/no-go gates: refresh-POST outcome classification on `net/http`+`httptrace`; byte-exact `~/.claude.json` edit by span splicing; Darwin process observation via `sysctl KERN_PROC`; memguard lifecycle under the signal handler and mlock limits | 🔜 | — |
 | P3 | Claude read path: `security(1)` reader, credentials, namespace, discovery, usage + cache, render tables/reset/JSON v1, `status`, `accounts list/show` | 🔜 | — |
 | P4 | Claude `watch` (Bubble Tea v2), `login` (PKCE + loopback), `import --from keychain`, `accounts remove/relocate/forget/unforget`, file store + pending replay | 🔜 | — |
@@ -407,7 +408,7 @@ Codex refresh `https://auth.openai.com/oauth/token`; Codex usage
 | P8 (later) | `--restart-remote-control`: tmux transport, RC attestation, fake-tmux + 10 screen fixtures, version pin policy | 🔜 not scheduled | — |
 | P9 (later) | Linux: process backend (procfs), platform refusals (keychain unsupported, `--remove-stale` exit 1), CI on `ubuntu-26.04`; Phase 2 credentials stay NO-GO until re-decided | 🔜 not scheduled | — |
 
-Stop point: **paused before P1; resumes on user approval of this plan.**
+Current point: **P1 / W1 running (four lanes in parallel); next boundary is the W1 exit gate, then W2 spikes.**
 
 ### Wave table (P1–P7)
 
@@ -701,8 +702,17 @@ go test -tags agentctl_testing -race -count=1 ./...
 - Run from `/Users/zchee/go/src/github.com/zchee/agentctl` with absolute paths; never `cd`.
 - Every timestamp from `date`; no plan markers (wave/lane IDs) in code, comments or commit
   messages; commit messages state the behaviour or constraint.
-- `/commit` (gpg-signed, `-F` file, intent line, 72 columns, Fable + session trailers) and
-  `git push origin main` when a lane's gate is green; one commit per task.
+- `/commit` (gpg-signed, `-F` file, intent line, 72 columns gated with `exit 1`; trailers
+  Codex + Fable + session, section 2) and `git push origin main` when a lane's gate is
+  green; one commit per task; `git pull --rebase origin main` before every push, never a
+  force-push.
+- Package layout facts the lanes must respect: `//go:embed` cannot cross package
+  directories and `testdata/` cannot be a package, so the schemas and fixtures live in root
+  packages `schemas/` and `fixtures/` with an `embed.go` each (embed drops the executable
+  bit; the install helper restores 0755 on the three scripts); goldens under
+  `testdata/golden/` are located through a repo-root helper in `internal/testutil`. E2E
+  files carry `//go:build agentctl_testing` so the untagged gate stays green; one
+  `TestMain` per package (the root package's belongs to the e2e harness).
 - Shut each lane down in the turn its report is accepted; check for stray `.omc`
   directories (`fd -H -I -t d '^\.omc$'`) before every commit.
 - Deliver reports via SendMessage to the lead's teammate name (`team-lead`), not `main`.
@@ -729,6 +739,9 @@ go test -tags agentctl_testing -race -count=1 ./...
 | `AGENTCTL_LOG` grammar | slog levels vs full `RUST_LOG` | slog levels only |
 | Test tooling | teatest + own harness vs teatest + testscript vs no teatest | teatest/v2 + testscript |
 | 73-column commit subject | amend + force-with-lease vs leave | amended |
+| Plan approval (execution session) | approve via team vs ralph vs critic first vs changes | approve via team |
+| Worker model after the 15:30 frontmatter change | restore `astra-ultrafast` vs keep `astra-fast` | keep `astra-fast` as the files say |
+| Codex trailer on lane commits | add `Co-Authored-By: Codex` vs Fable + session only | add it |
 
 Lead decisions (not asked, recorded for review): Rust implementation normative over its
 comments; testing endpoints fail closed for both providers; `time` with the system zone
@@ -762,3 +775,6 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
 - 2026-10-05 (after `3a35bd7`): fake executables are the verbatim fixture scripts, Go
   registers only helper commands; sysctl field map spelled out (real UID via
   `Eproc.Pcred.P_ruid`, 16-byte `P_comm` limit); remaining crate mappings listed in 4.1.
+- 2026-10-05 16:50:36 JST: plan approved by the user (team); P0 closed, P1/W1 started;
+  worker model kept at the frontmatter's `astra-fast`; Codex trailer added to lane
+  commits; package-layout facts for embed, build tags and `TestMain` recorded in 17.
