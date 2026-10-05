@@ -99,3 +99,38 @@ package (config→secret would cycle) · `KeychainLineLimit` lives in `internal/
    per plan section 8; `claude-file-store` is already done, so W5 has three lanes.
 5. Update plan section 8 and the changelog at every boundary; mirror to `.omc/plans/`;
    commit; push.
+
+## Addendum (2026-10-05 21:02:05 JST): what the dying lanes reported after the restart decision
+
+- **Root cause of the lane failures: the account's session limit** ("You've hit your
+  session limit · resets 9:20pm (Asia/Tokyo)"), not a per-request rate limit. Start the
+  new session after 21:20 JST, and keep the lane count lower (about five) at first.
+- **Ready for a lead commit (gated by their owners, uncommitted because both lanes
+  refuse to commit on `main`):**
+  - runtime-core: FIFO cleanup (`internal/runtime/cleanup/*`) and the forced signal
+    exit (`internal/runtime/signals/signals.go`, new `deferral*.go`,
+    `constants_test.go`, `main.go` lines for `controller.Execute`). Scoped race
+    tests pass on both tags (count=3 tagged), lint 0, vet clean, binary scan proves the
+    deferral env literal is absent from the release build. Commit subjects to write
+    by the lead; keep `main.go`'s `app.Handlers` wiring (claude-status's,
+    also uncommitted) in the same tree state.
+  - claude-file-store: `internal/secret/audit.go` (32 lines, all 10 required
+    lock-break members + 3 per sample refused when missing/null) and
+    `internal/secret/audit_required_test.go` (40 cases). Both tags pass for those
+    tests; zero diagnostics.
+- **Two defects found, unfixed:**
+  1. `testdata/script/cli_smoke.txtar:63` still expects `claude status` to exit 1
+     (unwired handler); with `app.Handlers` wired it exits 2 (unreadable accounts).
+     The status lane must update that expectation when it lands the wiring.
+  2. `internal/secret/audit.go`: concurrent first creation of the audit log returns
+     ENOENT from `OpenAuditLogAt` (reproduced 50× with `-race` on the unchanged
+     file; test `TestAuditConcurrentAppendersNeverInterleaveHalfLines` loses one of 16
+     writers). Pre-existing in `0e2c63c`/`db49114`; fix in the file-store resume lane.
+- claude-peer-locks: `Acquire` was renamed `AcquirePeerLocks` in the tree (uncommitted);
+  its in-flight files still fail vet (`LockSubject` undefined, duplicate
+  `selfStartIdentity`) at the moment of the restart. Also seven pre-existing lint
+  findings in the secret package (ptr inline calls, unused `reasonPtr`, De Morgan)
+  outside any lane's diff; give them to the peer-locks resume lane.
+- Resume order correction: land runtime-core's and file-store's ready commits FIRST
+  (one small lead or executor lane running their gates), then status (handlers field,
+  `main.go`, printer, smoke fix, txtar), then accounts txtar, then peer-locks.
