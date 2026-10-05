@@ -44,6 +44,7 @@ func loginFixture(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) != 1 {
 		ts.Fatalf("usage: loginfixture <case>")
 	}
+	ctx := ts.Value(scriptContextKey{}).(context.Context)
 	kind := args[0]
 	root := ts.MkAbs(filepath.Join("login-cases", kind))
 	home, store := filepath.Join(root, "home"), filepath.Join(root, "config")
@@ -128,7 +129,7 @@ func loginFixture(ts *testscript.TestScript, neg bool, args []string) {
 		path := filepath.Join(store, "claude", Acct, Org, ".credentials.json")
 		prior, _ = os.ReadFile(path)
 		priorInfo, _ = os.Stat(path)
-		loginProcess(ts, args[0], exit, args[2:], kind == "wrong-state")
+		loginProcess(ctx, ts, args[0], exit, args[2:], kind == "wrong-state")
 	})
 	ts.SetCmd("login-check", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 2 {
@@ -238,8 +239,8 @@ func loginFixture(ts *testscript.TestScript, neg bool, args []string) {
 	})
 }
 
-func loginProcess(ts *testscript.TestScript, mode string, wantExit int, flags []string, wrongState bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+func loginProcess(ctx context.Context, ts *testscript.TestScript, mode string, wantExit int, flags []string, wrongState bool) {
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	binary, err := os.Executable()
 	ts.Check(err)

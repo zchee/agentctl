@@ -23,11 +23,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
 	"golang.org/x/sys/unix"
 )
+
+type scriptContextKey struct{}
 
 // ScriptSetup prepares one script's isolated world: an owned
 // config/home/bin tree beside the extracted script files, the fake
@@ -35,6 +38,7 @@ import (
 // closed, and the identity pinned. The binary under test is already on
 // PATH, registered by the same TestMain that passes this to the runner.
 func ScriptSetup(env *testscript.Env) error {
+	env.Values[scriptContextKey{}] = env.T().(testing.TB).Context()
 	root := filepath.Join(env.WorkDir, ".harness")
 	for _, relative := range []string{"config", "home", "bin", "keychain-items"} {
 		if err := os.MkdirAll(filepath.Join(root, relative), 0o755); err != nil {

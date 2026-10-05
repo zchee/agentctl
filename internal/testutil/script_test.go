@@ -16,6 +16,8 @@ package testutil
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -25,7 +27,41 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rogpeppe/go-internal/testscript"
 )
+
+func TestScriptSetupSharesTestContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "context.txtar"), []byte("check-context\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var scriptContext context.Context
+	testscript.Run(t, testscript.Params{
+		Dir: dir,
+		Setup: func(env *testscript.Env) error {
+			if err := ScriptSetup(env); err != nil {
+				return err
+			}
+			scriptTest := env.T().(testing.TB)
+			scriptContext = scriptTest.Context()
+			scriptTest.Cleanup(func() {
+				if !errors.Is(scriptContext.Err(), context.Canceled) {
+					scriptTest.Error("script context was not canceled before test cleanup")
+				}
+			})
+			return nil
+		},
+		Cmds: map[string]func(*testscript.TestScript, bool, []string){
+			"check-context": func(ts *testscript.TestScript, _ bool, _ []string) {
+				ctx, ok := ts.Value(scriptContextKey{}).(context.Context)
+				if !ok || ctx != scriptContext || ctx.Err() != nil {
+					ts.Fatalf("script commands did not receive the enclosing test context")
+				}
+			},
+		},
+	})
+}
 
 // runHelper runs one helper program function with captured streams.
 func runHelper(run func(args []string, stdout, stderr io.Writer) int, args ...string) (int, string, string) {
