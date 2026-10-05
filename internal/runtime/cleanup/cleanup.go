@@ -22,10 +22,8 @@
 // such action registers an undo function here; the signal path runs them all
 // once on its way out.
 //
-// Entries run in reverse registration order, because later registrations
-// depend on earlier state the way deferred calls do: a terminal restore
-// registered after a temporary file must not run before that file is gone,
-// and undoing in acquisition order would reverse that dependency.
+// Entries run in registration order. Callers register dependent cleanup
+// actions in the order they must complete.
 //
 // Failures inside an entry are deliberately contained. The run happens on
 // the way out of the process with no caller left to handle an error, so a
@@ -97,7 +95,7 @@ func (r *Registry) Unregister(token Token) bool {
 	return len(r.entries) != before
 }
 
-// Run executes every registered entry once, newest first, and empties the
+// Run executes every registered entry once, oldest first, and empties the
 // registry.
 //
 // Entries are taken out under the lock before any of them runs, so the lock
@@ -109,7 +107,7 @@ func (r *Registry) Run() {
 	taken := r.entries
 	r.entries = nil
 	r.mu.Unlock()
-	for _, e := range slices.Backward(taken) {
+	for _, e := range taken {
 		runRecovering(e.fn)
 	}
 }

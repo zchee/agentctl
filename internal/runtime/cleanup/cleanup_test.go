@@ -37,13 +37,13 @@ func TestRegistryRun(t *testing.T) {
 		arrange func(t *testing.T, r *cleanup.Registry, log *[]string)
 		want    []string
 	}{
-		"success: entries run newest first": {
+		"success: entries run oldest first": {
 			arrange: func(t *testing.T, r *cleanup.Registry, log *[]string) {
 				appendEntry(r, log, "first")
 				appendEntry(r, log, "second")
 				appendEntry(r, log, "third")
 			},
-			want: []string{"third", "second", "first"},
+			want: []string{"first", "second", "third"},
 		},
 		"success: a withdrawn entry does not run": {
 			arrange: func(t *testing.T, r *cleanup.Registry, log *[]string) {
@@ -54,7 +54,7 @@ func TestRegistryRun(t *testing.T) {
 					t.Fatal("Unregister reported no entry removed for a live token")
 				}
 			},
-			want: []string{"kept late", "kept early"},
+			want: []string{"kept early", "kept late"},
 		},
 		"success: a panicking entry does not stop the others": {
 			arrange: func(t *testing.T, r *cleanup.Registry, log *[]string) {
@@ -62,7 +62,7 @@ func TestRegistryRun(t *testing.T) {
 				r.Register(func() { panic("one entry failing") })
 				appendEntry(r, log, "third")
 			},
-			want: []string{"third", "first"},
+			want: []string{"first", "third"},
 		},
 		"success: an empty registry runs nothing": {
 			arrange: func(t *testing.T, r *cleanup.Registry, log *[]string) {},
