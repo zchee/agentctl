@@ -49,48 +49,52 @@ func register(c composer) {
 // Handlers connects the available commands to their application services.
 // Each invocation resolves its own store after the global flags are parsed.
 func Handlers(deps Dependencies) cli.Handlers {
-	handlers := readHandlers(deps)
+	var handlers cli.Handlers
 	for _, compose := range composers {
 		compose(deps, &handlers)
 	}
 	return handlers
 }
 
-// readHandlers composes the read-only commands that landed first.
-func readHandlers(deps Dependencies) cli.Handlers {
-	return cli.Handlers{
-		ClaudeStatus: func(ctx context.Context, globals cli.Globals, opts cli.ClaudeStatusOptions) error {
-			timeout := opts.Timeout
-			if timeout <= 0 {
-				timeout = cli.HTTPTimeoutDefault
-			}
-			env := claude.EnvFromProcess()
-			status := &commands.Status{
-				Reader: secret.NewReader(),
-				Client: claude.NewUsageClientFromEnv(timeout),
-				Env:    &env,
-				Stdout: deps.Stdout,
-			}
-			return status.Run(ctx, globals, opts)
-		},
-		ClaudeAccountsList: func(ctx context.Context, globals cli.Globals, opts cli.ClaudeAccountsListOptions) error {
-			accounts, err := accountsFor(ctx, globals, deps.Stdout)
-			if err != nil {
-				return err
-			}
-			ctx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
-			defer cancel()
-			return accounts.List(ctx, opts.All)
-		},
-		ClaudeAccountsShow: func(ctx context.Context, globals cli.Globals, opts cli.ClaudeAccountsShowOptions) error {
-			accounts, err := accountsFor(ctx, globals, deps.Stdout)
-			if err != nil {
-				return err
-			}
-			ctx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
-			defer cancel()
-			return accounts.Show(ctx, opts.ID)
-		},
+func init() {
+	register(readHandlers)
+}
+
+// readHandlers composes the read-only commands that landed first. It sets
+// its own fields one by one: package initialisers run in file order, so a
+// family whose file sorts earlier has already filled its fields here.
+func readHandlers(deps Dependencies, handlers *cli.Handlers) {
+	handlers.ClaudeStatus = func(ctx context.Context, globals cli.Globals, opts cli.ClaudeStatusOptions) error {
+		timeout := opts.Timeout
+		if timeout <= 0 {
+			timeout = cli.HTTPTimeoutDefault
+		}
+		env := claude.EnvFromProcess()
+		status := &commands.Status{
+			Reader: secret.NewReader(),
+			Client: claude.NewUsageClientFromEnv(timeout),
+			Env:    &env,
+			Stdout: deps.Stdout,
+		}
+		return status.Run(ctx, globals, opts)
+	}
+	handlers.ClaudeAccountsList = func(ctx context.Context, globals cli.Globals, opts cli.ClaudeAccountsListOptions) error {
+		accounts, err := accountsFor(ctx, globals, deps.Stdout)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
+		defer cancel()
+		return accounts.List(ctx, opts.All)
+	}
+	handlers.ClaudeAccountsShow = func(ctx context.Context, globals cli.Globals, opts cli.ClaudeAccountsShowOptions) error {
+		accounts, err := accountsFor(ctx, globals, deps.Stdout)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
+		defer cancel()
+		return accounts.Show(ctx, opts.ID)
 	}
 }
 
