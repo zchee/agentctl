@@ -22,9 +22,30 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
 )
+
+func TestDocumentedTimings(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		got  time.Duration
+		want time.Duration
+	}{
+		"success: registry wait":            {got: RegistryLockWait, want: 5 * time.Second},
+		"success: registry retry":           {got: registryLockRetry, want: 250 * time.Millisecond},
+		"success: registry create attempts": {got: time.Duration(registryLockCreateAttempts), want: 8},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gocmp.Diff(tt.want, tt.got); diff != "" {
+				t.Errorf("documented lock budget mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
 func testStore(t *testing.T) *Paths {
 	t.Helper()
