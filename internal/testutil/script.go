@@ -97,7 +97,41 @@ func ScriptCommands() map[string]func() {
 		"waitfor":    wrap(waitforMain),
 		"schema":     wrap(schemaMain),
 		"golden":     wrap(goldenMain),
+		"expectexit": wrap(expectexitMain),
 	}
+}
+
+// expectexitMain runs the command in args[1:] with both streams forwarded
+// and fails unless its exit status equals args[0]. The script language can
+// only say "zero" or "not zero" about a command's status, and the exit
+// contract is about which non-zero code came back.
+func expectexitMain(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		say(stderr, "usage: expectexit <code> <command> [args...]\n")
+		return 2
+	}
+	want, err := strconv.Atoi(args[0])
+	if err != nil || want < 0 || want > 255 {
+		say(stderr, "expectexit: `%s` is not an exit status\n", args[0])
+		return 2
+	}
+	cmd := exec.Command(args[1], args[2:]...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	got := 0
+	if err := cmd.Run(); err != nil {
+		exitErr, ok := errors.AsType[*exec.ExitError](err)
+		if !ok || exitErr.ExitCode() < 0 {
+			say(stderr, "expectexit: %v\n", err)
+			return 1
+		}
+		got = exitErr.ExitCode()
+	}
+	if got != want {
+		say(stderr, "expectexit: `%s` exited %d, want %d\n", args[1], got, want)
+		return 1
+	}
+	return 0
 }
 
 // flockholdMain takes the exclusive lock on args[0] and holds it: for

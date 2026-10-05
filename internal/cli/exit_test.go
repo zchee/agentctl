@@ -15,6 +15,8 @@
 package cli
 
 import (
+	"os"
+	"syscall"
 	"testing"
 )
 
@@ -140,3 +142,34 @@ func TestSwapExitCodesAreUniqueAndRetireTwentyFiveTwentySixAndTwentyEight(t *tes
 		t.Fatalf("remote_control_not_disconnected = %d, want 30", SwapExitRCNotDisconnected)
 	}
 }
+
+func TestSignalExitCode(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		signal os.Signal
+		want   int
+	}{
+		"success: TERM exits 143":                 {signal: syscall.SIGTERM, want: 143},
+		"success: HUP exits 129":                  {signal: syscall.SIGHUP, want: 129},
+		"success: INT exits 130":                  {signal: syscall.SIGINT, want: 130},
+		"error: a signal with no number is fatal": {signal: namelessSignal{}, want: 1},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := SignalExitCode(tt.signal); got != tt.want {
+				t.Errorf("SignalExitCode(%v) = %d, want %d", tt.signal, got, tt.want)
+			}
+		})
+	}
+}
+
+// namelessSignal is an os.Signal that is not a POSIX signal, the shape a
+// platform-specific notification would take.
+type namelessSignal struct{}
+
+func (namelessSignal) String() string { return "nameless" }
+func (namelessSignal) Signal()        {}

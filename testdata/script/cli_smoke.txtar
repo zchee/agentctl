@@ -48,3 +48,14 @@ stderr 'unknown command'
 
 ! exec agentctl claude bogus
 stderr 'agentctl claude --help'
+
+# The exit contract, by number rather than by zero/non-zero: a usage
+# error exits 2 whether it is an unknown shell, an unknown command or a
+# rejected flag, and a parsed command whose implementation has not
+# arrived exits 1, the fatal status.
+exec expectexit 2 agentctl completions tcsh
+exec expectexit 2 agentctl bogus
+exec expectexit 2 agentctl claude bogus
+exec expectexit 2 agentctl claude status --timeout nonsense
+exec expectexit 1 agentctl claude status
+exec expectexit 0 agentctl --version

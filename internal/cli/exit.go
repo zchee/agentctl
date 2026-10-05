@@ -14,6 +14,23 @@
 
 package cli
 
+import (
+	"os"
+	"syscall"
+)
+
+// SignalExitCode returns the process exit status for a run ended by sig:
+// 128 plus the signal's number, the shell convention for a signal death,
+// so TERM exits 143, HUP 129 and INT 130. A value that carries no POSIX
+// signal number maps to 1, the fatal exit, because dying to an unnameable
+// signal is a run that produced nothing useful.
+func SignalExitCode(sig os.Signal) int {
+	if number, ok := sig.(syscall.Signal); ok && number > 0 {
+		return 128 + int(number)
+	}
+	return 1
+}
+
 // Exit codes for the refusals and outcomes of a `claude use` credential
 // swap. Each one gets its own message and its own exit code, so a script
 // can act on one without parsing English.

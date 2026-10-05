@@ -54,7 +54,7 @@ func run() int {
 	// for HUP, 130 for INT), and a NotifyContext cannot say which one it
 	// saw, so the signal is recorded here and the context cancelled by
 	// hand.
-	var fired atomic.Int32
+	var fired atomic.Pointer[os.Signal]
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
 	go func() {
@@ -62,9 +62,7 @@ func run() int {
 		if !ok {
 			return
 		}
-		if number, isPosix := sig.(syscall.Signal); isPosix {
-			fired.Store(int32(number))
-		}
+		fired.Store(&sig)
 		cancel()
 	}()
 
@@ -73,8 +71,8 @@ func run() int {
 
 	// A run that was cancelled by a signal exits with the signal's own
 	// status, whatever the command returned on its way out.
-	if number := fired.Load(); number != 0 {
-		return 128 + int(number)
+	if sig := fired.Load(); sig != nil {
+		return cli.SignalExitCode(*sig)
 	}
 	if err == nil {
 		return errs.ExitOK

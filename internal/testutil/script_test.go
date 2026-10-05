@@ -37,7 +37,7 @@ func runHelper(run func(args []string, stdout, stderr io.Writer) int, args ...st
 func TestScriptCommandsRegistersEveryHelper(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"drainpipes", "flockhold", "golden", "mtime", "schema", "sigterm", "waitfor"}
+	want := []string{"drainpipes", "expectexit", "flockhold", "golden", "mtime", "schema", "sigterm", "waitfor"}
 	commands := ScriptCommands()
 	got := make([]string, 0, len(commands))
 	for name := range commands {
@@ -292,5 +292,58 @@ func TestEveryUsageMessageEndsWithARealNewline(t *testing.T) {
 				t.Errorf("stderr = %q holds a literal backslash-n", stderr)
 			}
 		})
+	}
+}
+
+func TestExpectexitMain(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		args     []string
+		wantCode int
+	}{
+		"success: a clean command and an expectation of zero": {
+			args:     []string{"0", "/usr/bin/true"},
+			wantCode: 0,
+		},
+		"success: a failing command whose status was expected": {
+			args:     []string{"1", "/usr/bin/false"},
+			wantCode: 0,
+		},
+		"error: a status other than the expected one": {
+			args:     []string{"3", "/usr/bin/false"},
+			wantCode: 1,
+		},
+		"error: a command that cannot be started": {
+			args:     []string{"0", "/no/such/command"},
+			wantCode: 1,
+		},
+		"error: an expectation that is not a status": {
+			args:     []string{"many", "/usr/bin/true"},
+			wantCode: 2,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			code, _, stderr := runHelper(expectexitMain, tt.args...)
+			if code != tt.wantCode {
+				t.Errorf("expectexit%v = %d, want %d; stderr: %s", tt.args, code, tt.wantCode, stderr)
+			}
+		})
+	}
+}
+
+func TestExpectexitForwardsTheChildsStreams(t *testing.T) {
+	t.Parallel()
+
+	code, stdout, _ := runHelper(expectexitMain, "0", "/bin/echo", "forwarded")
+	if code != 0 {
+		t.Fatalf("expectexit = %d, want 0", code)
+	}
+	if !strings.Contains(stdout, "forwarded") {
+		t.Errorf("stdout = %q, want the child's output forwarded", stdout)
 	}
 }
