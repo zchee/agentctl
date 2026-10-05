@@ -1071,6 +1071,47 @@ undo-check 0 0 1 third-absent
 swap-check 0 0 0
 swap-io 1 0 0
 
+# Real Darwin immutable flags leave a shadow after a successful item write.
+[darwin] swapfixture first-write cleanup-human
+[darwin] undo-setup
+[darwin] cp $UNDO_OWNER_DIR/.credentials.json cleanup-human-before
+[darwin] swap-immutable $UNDO_OWNER_DIR/.credentials.json
+[darwin] exec agentctl claude use $INCOMING --live --yes
+[darwin] stdout 'swapped:'
+[darwin] stderr 'remove it by hand'
+[darwin] stderr '\.credentials\.json'
+[darwin] ! stdout 'remove it by hand'
+[darwin] ! stdout SENTINEL
+[darwin] ! stderr SENTINEL
+[darwin] cmp $UNDO_OWNER_DIR/.credentials.json cleanup-human-before
+[darwin] undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+[darwin] undo-credential $UNDO_ITEM incoming
+[darwin] undo-check 1 0 0
+[darwin] swap-check 1 0 0
+[darwin] swap-io 3 0 0
+[darwin] swap-audit applied 0
+[darwin] swap-tree
+
+# The JSON outcome carries the same cleanup warning while remaining applied.
+[darwin] swapfixture first-write cleanup-json
+[darwin] undo-setup
+[darwin] cp $UNDO_OWNER_DIR/.credentials.json cleanup-json-before
+[darwin] swap-immutable $UNDO_OWNER_DIR/.credentials.json
+[darwin] exec agentctl claude use $INCOMING --live --yes --json
+[darwin] stdout '"outcome": "applied"'
+[darwin] stdout '"note": ".*remove it by hand'
+[darwin] stdout '\.credentials\.json'
+[darwin] ! stdout SENTINEL
+[darwin] ! stderr SENTINEL
+[darwin] cmp $UNDO_OWNER_DIR/.credentials.json cleanup-json-before
+[darwin] undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json outgoing
+[darwin] undo-credential $UNDO_ITEM incoming
+[darwin] undo-check 1 0 0
+[darwin] swap-check 1 0 0
+[darwin] swap-io 3 0 0
+[darwin] swap-audit applied 0
+[darwin] swap-tree
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
