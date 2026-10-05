@@ -789,6 +789,63 @@ cmp $UNDO_ITEM moved-item-before
 undo-check 0 0 0
 swap-io 0 0 0
 
+# Unknown incoming organization is not recorded as a real audit identity.
+swapfixture live unknown-incoming-org
+undo-setup
+undo-org $INCOMING _unknown-org
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+undo-audit-check forward:$INCOMING:-
+cp $UNDO_OWNER_DIR/.credentials.adopted.json incoming-unknown-parked
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM incoming-unknown-parked
+undo-audit-check forward:$INCOMING:- undo:$OWNER
+undo-check 2 0 4
+
+# Undo also omits an unknown organization for the restored account.
+swapfixture live unknown-restored-org
+undo-setup
+undo-org $OWNER _unknown-org
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp $UNDO_OWNER_DIR/.credentials.adopted.json restored-unknown-parked
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_ITEM restored-unknown-parked
+undo-audit-check forward:$INCOMING undo:$OWNER:-
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+undo-credential $UNDO_ITEM incoming
+undo-audit-check forward:$INCOMING undo:$OWNER:- undo:$INCOMING
+undo-check 3 0 6
+
+# A real organization change for the same account remains a foreign login.
+swapfixture live known-org-changed
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+undo-audit-check forward:$INCOMING
+undo-blob $UNDO_ITEM incoming-session -
+cp other-org.txt $UNDO_PROFILE_CONTROL
+cp $UNDO_ITEM known-org-item-before
+cp $UNDO_CONFIG known-org-config-before
+cp $SWAP_AUDIT known-org-audit-before
+cp $UNDO_OWNER_DIR/.credentials.adopted.json known-org-parked-before
+exec expectexit 27 agentctl claude use --undo --yes --json
+stdout '"reason": "live_undo_foreign_login"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM known-org-item-before
+cmp $UNDO_CONFIG known-org-config-before
+cmp $SWAP_AUDIT known-org-audit-before
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json known-org-parked-before
+undo-check 1 0 3
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
@@ -1634,6 +1691,8 @@ exec /bin/chmod 700 $HOME/.claude/sessions
 undo-remote check
 undo-check 0 0 0
 
+-- other-org.txt --
+other-incoming-org
 -- profile-down --
 down-owner
 -- remote-unreadable-note --

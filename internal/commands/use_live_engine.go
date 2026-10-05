@@ -361,7 +361,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	var incomingIdentity *secret.IncomingIdentity
 	restored := ""
 	if swap.live {
-		incomingIdentity = &secret.IncomingIdentity{AccountUUID: incoming.record.AccountUUID, OrganizationUUID: new(incoming.record.OrganizationUUID)}
+		incomingIdentity = useIncomingIdentity(incoming.record)
 		if incoming.direction == secret.DirectionUndo && incoming.source.kind == useSourceAdopted {
 			restored = dir
 		}
@@ -378,6 +378,14 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		}
 	}
 	return report
+}
+
+func useIncomingIdentity(record *config.AccountRecord) *secret.IncomingIdentity {
+	identity := &secret.IncomingIdentity{AccountUUID: record.AccountUUID}
+	if record.OrganizationUUID != config.UnknownOrg {
+		identity.OrganizationUUID = new(record.OrganizationUUID)
+	}
+	return identity
 }
 
 func (swap useLiveSwap) noteUse(ctx context.Context, warnings *[]string, message string) {

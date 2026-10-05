@@ -217,7 +217,11 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		say(w, `{"account":{"uuid":%q,"email":"user@example.invalid"},"organization":{"uuid":%q,"name":"Example"}}`, account, Org)
+		organization := Org
+		if strings.TrimSpace(string(mode)) == "other-incoming-org" && account == incoming {
+			organization = "77777777-7777-4777-8777-777777777777"
+		}
+		say(w, `{"account":{"uuid":%q,"email":"user@example.invalid"},"organization":{"uuid":%q,"name":"Example"}}`, account, organization)
 	}))
 	ts.Defer(server.Close)
 	ts.Setenv("AGENTCTL_CLAUDE_TOKEN_URL", server.URL+"/token")
@@ -339,7 +343,7 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 	})
 	ts.SetCmd("undo-audit-check", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) < 1 {
-			ts.Fatalf("usage: undo-audit-check <direction:account|direction:->...")
+			ts.Fatalf("usage: undo-audit-check <direction:account[:organization|-]|direction:->...")
 		}
 		var writes []map[string]any
 		for line := range strings.SplitSeq(ts.ReadFile(ts.Getenv("SWAP_AUDIT")), "\n") {
@@ -367,12 +371,48 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 				}
 			}
 			if account != "-" {
+				account, org, explicit := strings.Cut(account, ":")
+				var organization any = Org
+				if explicit {
+					organization = org
+					if org == "-" {
+						organization = nil
+					}
+				}
 				identity, ok := writes[i]["incoming_identity"].(map[string]any)
-				if !ok || len(identity) != 2 || identity["account_uuid"] != account || identity["organization_uuid"] != Org {
+				if !ok || len(identity) != 2 || identity["account_uuid"] != account || identity["organization_uuid"] != organization {
 					ts.Fatalf("audit write %d has wrong installed identity", i)
 				}
 			}
 		}
+	})
+	ts.SetCmd("undo-org", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 2 || args[0] != owner && args[0] != incoming {
+			ts.Fatalf("usage: undo-org <owner|incoming account UUID> <organization>")
+		}
+		var current map[string]any
+		ts.Check(json.Unmarshal([]byte(ts.ReadFile(registryPath)), &current))
+		for _, value := range current["accounts"].([]any) {
+			account := value.(map[string]any)
+			if account["account_uuid"] != args[0] {
+				continue
+			}
+			oldDir := filepath.Join(configDir, "claude", args[0], account["organization_uuid"].(string))
+			newDir := filepath.Join(configDir, "claude", args[0], args[1])
+			ts.Check(os.Rename(oldDir, newDir))
+			account["organization_uuid"] = args[1]
+			kind := account["kind"].(map[string]any)
+			spelling := ExportSpelling(newDir)
+			kind["export_spelling"], kind["export_sha8"] = spelling, Sha8(spelling)
+			if args[0] == owner {
+				ownerDir = newDir
+				ts.Setenv("UNDO_OWNER_DIR", newDir)
+			} else {
+				incomingDir = newDir
+				ts.Setenv("UNDO_INCOMING_DIR", newDir)
+			}
+		}
+		write(registryPath, document(current))
 	})
 	ts.SetCmd("undo-move-record", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) > 1 || len(args) == 1 && args[0] != "matching" {
