@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zchee/agctl/schemas/doctor.v1.json",
   "title": "agctl claude doctor isolation report, version 1",
-  "description": "The `isolation`/`isolation_policy` half of `agctl claude doctor`'s report (plan AC58). Not yet reachable through a CLI flag; this schema is what a future `doctor --json` would emit, and is validated today against the type `render::json::DoctorReport` builds directly. It carries no token material: nothing here is read from a credential, only from `.claude.json`, a symlink target, and a settings file.",
+  "description": "The `isolation`/`isolation_policy` half of `agctl claude doctor`'s report. Not yet reachable through a CLI flag; this schema is what a future `doctor --json` would emit, and is validated today against the type `render::json::DoctorReport` builds directly. It carries no token material: nothing here is read from a credential, only from `.claude.json`, a symlink target, and a settings file.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "isolation", "isolation_policy"],

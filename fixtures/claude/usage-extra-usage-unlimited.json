@@ -1,5 +1,5 @@
 {
-  "_comment": "SYNTHETIC. Hand-written for plan section 3.8 and AC22/AC23: credits enabled on an account with no monthly ceiling, so `monthly_limit` is null while `used_credits` is a real figure. The credits cell must read `$12.34 / Unlimited` — an absent ceiling is not a zero one. `utilization` is null because the server cannot compute a percentage of no limit, so no percentage is shown either. Derived from the shape of fixtures/claude/usage-extra-usage-enabled.json; the credit figures are invented. Not captured from the API.",
+  "_comment": "SYNTHETIC. Hand-written for the unlimited extra-usage case: credits enabled on an account with no monthly ceiling, so `monthly_limit` is null while `used_credits` is a real figure. The credits cell must read `$12.34 / Unlimited` — an absent ceiling is not a zero one. `utilization` is null because the server cannot compute a percentage of no limit, so no percentage is shown either. Derived from the shape of fixtures/claude/usage-extra-usage-enabled.json; the credit figures are invented. Not captured from the API.",
   "five_hour": {
     "utilization": 21.0,
     "resets_at": "2026-09-08T03:29:59.817079+00:00",

@@ -5,7 +5,7 @@
 # Pending writes are staged through rename_fail, except the first-write and
 # removed-current vectors, whose metadata cannot be produced by a refresh.
 
-# ac7_two_concurrent_refreshes_make_exactly_one_post
+# two_concurrent_refreshes_make_exactly_one_post
 refreshfixture delayed
 exec agentctl claude status --refresh --no-cache --account owner@example.com &first&
 refresh-action wait-post
@@ -20,9 +20,9 @@ refresh-calls 2 1 0
 refresh-check atomic
 refresh-check stored rotated
 
-# ac7_a_lock_held_past_the_deadline_makes_the_second_process_busy
-# ac27_sigterm_during_a_held_refresh_exits_143_and_releases_the_lock
-# ac48_the_lock_body_names_the_process_holding_it
+# a_lock_held_past_the_deadline_makes_the_second_process_busy
+# sigterm_during_a_held_refresh_exits_143_and_releases_the_lock
+# the_lock_body_names_the_process_holding_it
 refreshfixture blocked
 ! exec agentctl claude status --refresh --timeout 60s --account owner@example.com &holder&
 refresh-action wait-post
@@ -58,7 +58,7 @@ refresh-calls 0 0 0
 cmp $REFRESH_NS/.storage-write unchanged
 refresh-check file-unchanged
 
-# ac21_a_claude_lock_in_the_namespace_refuses_the_refresh
+# a_claude_lock_in_the_namespace_refuses_the_refresh
 refreshfixture session
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -67,7 +67,7 @@ refresh-calls 0 0 0
 refresh-check namespace .credentials.json .oauth_refresh.lock
 refresh-check file-unchanged
 
-# ac21_a_session_appearing_after_the_post_discards_the_refresh
+# a_session_appearing_after_the_post_discards_the_refresh
 refreshfixture session-after-post
 ! exec agentctl claude status --refresh --account owner@example.com &session&
 refresh-action wait-pause
@@ -81,7 +81,7 @@ refresh-calls 0 1 0
 refresh-check namespace .credentials.json .oauth_refresh.lock
 refresh-check file-unchanged
 
-# ac33a_an_unchanged_file_replays_its_pending_without_a_post
+# an_unchanged_file_replays_its_pending_without_a_post
 refreshfixture owned
 env AGENTCTL_FAULT=rename_fail
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
@@ -97,7 +97,7 @@ refresh-calls 2 1 0
 refresh-check stored rotated
 refresh-check namespace .credentials.json
 
-# ac33b_a_changed_file_discards_its_pending_and_refreshes_again
+# a_changed_file_discards_its_pending_and_refreshes_again
 refreshfixture pending-changed
 env AGENTCTL_FAULT=rename_fail
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
@@ -113,7 +113,7 @@ refresh-calls 2 2 0
 refresh-check stored rotated
 refresh-check namespace .credentials.json
 
-# ac33c_a_pending_past_its_expiry_is_replayed_and_then_refreshed
+# a_pending_past_its_expiry_is_replayed_and_then_refreshed
 refreshfixture pending-expired
 env AGENTCTL_FAULT=rename_fail
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
@@ -128,7 +128,7 @@ refresh-calls 2 2 0
 refresh-check stored rotated
 refresh-check namespace .credentials.json
 
-# ac33d_a_pending_without_metadata_is_invalid
+# a_pending_without_metadata_is_invalid
 refreshfixture pending-invalid
 env AGENTCTL_FAULT=rename_fail
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
@@ -143,7 +143,7 @@ stdout 'pending discarded: invalid'
 refresh-calls 2 2 0
 refresh-check namespace .credentials.json
 
-# ac33e_a_symlinked_pending_is_invalid
+# a_symlinked_pending_is_invalid
 refreshfixture pending-symlink
 env AGENTCTL_FAULT=rename_fail
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
@@ -159,7 +159,7 @@ refresh-calls 2 2 0
 refresh-check namespace .credentials.json
 cmp $REFRESH_ROOT/untouched untouched
 
-# ac33f_a_first_write_pending_replays_onto_an_empty_namespace
+# a_first_write_pending_replays_onto_an_empty_namespace
 refreshfixture pending-first
 exec agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -168,7 +168,7 @@ refresh-calls 1 0 0
 refresh-check stored pending
 refresh-check namespace .credentials.json
 
-# ac33g_a_pending_whose_file_was_removed_is_discarded
+# a_pending_whose_file_was_removed_is_discarded
 refreshfixture pending-removed
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -176,7 +176,7 @@ stdout 'needs login'
 refresh-calls 0 0 0
 refresh-check namespace
 
-# ac33h_a_migrated_namespace_discards_its_pending
+# a_migrated_namespace_discards_its_pending
 refreshfixture pending-migrated
 env AGENTCTL_FAULT=rename_fail
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
@@ -193,7 +193,7 @@ refresh-check namespace .credentials.json
 refresh-check file-unchanged
 refresh-check read-only
 
-# ac65_a_migrated_namespace_refreshes_its_own_keychain_item_in_place
+# a_migrated_namespace_refreshes_its_own_keychain_item_in_place
 refreshfixture migrated
 exec agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -208,7 +208,7 @@ refresh-check keychain-calls 6 11
 refresh-check namespace
 refresh-check peers-absent
 
-# ac65_a_peer_refresh_before_the_post_is_adopted_and_costs_no_grant
+# a_peer_refresh_before_the_post_is_adopted_and_costs_no_grant
 refreshfixture peer-before-post
 exec agentctl claude status --json --refresh --account owner@example.com &peer&
 refresh-action wait-pause
@@ -225,7 +225,7 @@ refresh-check read-only
 refresh-check peers-absent
 ! exists $REFRESH_ROOT/config/claude/keychain-writes.jsonl
 
-# ac65_an_invalid_grant_after_a_peer_refresh_adopts_rather_than_asking_for_a_login
+# an_invalid_grant_after_a_peer_refresh_adopts_rather_than_asking_for_a_login
 refreshfixture invalid-grant-peer
 exec agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -237,8 +237,8 @@ refresh-check read-only
 refresh-check peers-absent
 ! exists $REFRESH_ROOT/config/claude/keychain-writes.jsonl
 
-# ac65_a_refusal_after_the_post_records_the_discarded_refresh
-# ac65_a_contended_store_reports_busy_and_writes_nothing
+# a_refusal_after_the_post_records_the_discarded_refresh
+# a_contended_store_reports_busy_and_writes_nothing
 refreshfixture migrated-contended
 exec expectexit 2 agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -250,7 +250,7 @@ refresh-check read-only
 refresh-check audit discarded
 refresh-check peers-absent
 
-# ac65_the_hold_creates_three_locks_and_a_changed_item_discards_the_refresh
+# the_hold_creates_three_locks_and_a_changed_item_discards_the_refresh
 refreshfixture peer-after-post
 ! exec agentctl claude status --refresh --account owner@example.com &changed&
 refresh-action wait-pause
@@ -266,7 +266,7 @@ refresh-check read-only
 refresh-check audit discarded
 refresh-check peers-leaked
 
-# ac66_a_fresh_migrated_namespace_is_no_longer_terminal
+# a_fresh_migrated_namespace_is_no_longer_terminal
 refreshfixture migrated-fresh
 exec agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -280,7 +280,7 @@ refresh-check read-only
 refresh-check namespace
 refresh-check peers-absent
 
-# ac65_an_item_under_the_canonical_spelling_is_never_refreshed
+# an_item_under_the_canonical_spelling_is_never_refreshed
 refreshfixture migrated-canonical
 exec agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -291,7 +291,7 @@ refresh-calls 0 0 0
 refresh-check read-only
 refresh-check peers-absent
 
-# ac65_a_blob_over_the_stdin_limit_spawns_no_write
+# a_blob_over_the_stdin_limit_spawns_no_write
 refreshfixture large-line
 exec expectexit 2 agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'

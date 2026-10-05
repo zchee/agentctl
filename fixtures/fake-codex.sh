@@ -10,11 +10,11 @@
 # it through CODEX_HOME; it never looks at, let alone touches, a home it was
 # not given.
 #
-# WITH NO KNOBS SET it reproduces what fact F81 measured a NORMAL, successful
-# `codex login` to leave behind at alpha.12 — see "the residue" below. That is
+# WITH NO KNOBS SET it reproduces what a NORMAL, successful `codex login`
+# was measured to leave behind at alpha.12 — see "the residue" below. That is
 # deliberate: the residue includes an unheld `tmp/arg0/codex-arg0<rand>/.lock`,
 # and a survivor check that treated a lock file's existence as evidence would
-# refuse every real login (ledger #310). The happy-path test only proves what
+# refuse every real login. The happy-path test only proves what
 # it claims if the happy path leaves a real login's mess behind.
 #
 #   AGCTL_FAKE_CODEX_LOG        append `arg`, `cwd`, `env`, `residue` and `exit`
@@ -42,12 +42,12 @@
 #   AGCTL_FAKE_CODEX_SENTINEL   a directory OUTSIDE the scratch: link it from
 #                               inside the residue, so a cleanup that followed
 #                               a link would reach it. A knob, not default
-#                               residue: F81 measured links to FILES
+#                               residue: measured links to FILES
 #
 
 # There is deliberately no knob that swaps `auth.json` after this process
 # exits. That used to exist and never fired inside its window (a 0.2 s timer
-# against an agctl that had already removed the scratch). The AC126 test now
+# against an agctl that had already removed the scratch). The swap test now
 # does the swap itself, while agctl waits at a `testing` pause point.
 #
 # THE ENVIRONMENT RECORD IS NAMES ONLY, except for the three variables whose
@@ -55,7 +55,7 @@
 # every value would be a fixture that writes secrets to a file the moment
 # somebody runs it with a real environment.
 
-# The modes fact F81 measured a real login to leave: `drwx------` and
+# The modes a measured real login leaves: `drwx------` and
 # `-rw-------`. Set before anything is created.
 umask 077
 
@@ -97,7 +97,7 @@ if [ -n "${AGCTL_FAKE_CODEX_DAEMON_DIR:-}" ] && [ -n "${CODEX_HOME:-}" ]; then
 	mkdir -p "$CODEX_HOME/app-server-daemon"
 fi
 
-# The residue, exactly as fact F81 measured it: a `tmp/arg0/codex-arg0<rand>/`
+# The residue, exactly as measured: a `tmp/arg0/codex-arg0<rand>/`
 # directory holding a 0-byte `.lock` and three symlinks, plus a login log. The
 # `residue` record is what lets the happy-path test prove it ran against this
 # mess rather than against an empty home.
@@ -150,7 +150,7 @@ if [ -z "${AGCTL_FAKE_CODEX_NO_RESIDUE:-}" ] && [ -n "${CODEX_HOME:-}" ]; then
 fi
 
 # A child that stored its credential in the keychain despite being asked not
-# to (fact F95): one `Codex Auth` record appended to the fake `security` dump,
+# to: one `Codex Auth` record appended to the fake `security` dump,
 # in `security(1)`'s own format, between agctl's two listings.
 if [ -n "${AGCTL_FAKE_CODEX_KEYCHAIN_GAIN:-}" ]; then
 	gained_account="${AGCTL_FAKE_CODEX_KEYCHAIN_GAIN_ACCOUNT:-cli|0123456789abcdef}"
@@ -170,7 +170,7 @@ fi
 
 # An entry named `*.lock` that is NOT a regular file, so the post-exit survey
 # reports an odd lock. The NAME is the test's, so a test can plant one agctl
-# would never have written (review S37-b1b, F2).
+# would never have written.
 if [ -n "${AGCTL_FAKE_CODEX_ODD_LOCK:-}" ] && [ -n "${CODEX_HOME:-}" ]; then
 	mkdir -p "$CODEX_HOME/$AGCTL_FAKE_CODEX_ODD_LOCK"
 fi

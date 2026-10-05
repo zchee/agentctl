@@ -1,5 +1,5 @@
 {
-  "_comment": "SYNTHETIC. Hand-written for plan AC3: an account whose response carries no `limits[]` array, so the legacy `five_hour` / `seven_day` / `seven_day_<model>` keys are the only source of windows. The percentages mirror fixtures/claude/usage-2026-09-08.json so the two mappings can be compared directly. Not captured from the API.",
+  "_comment": "SYNTHETIC. Hand-written for the legacy-only case: an account whose response carries no `limits[]` array, so the legacy `five_hour` / `seven_day` / `seven_day_<model>` keys are the only source of windows. The percentages mirror fixtures/claude/usage-2026-09-08.json so the two mappings can be compared directly. Not captured from the API.",
   "five_hour": {
     "utilization": 21.0,
     "resets_at": "2026-09-08T03:29:59.817079+00:00",

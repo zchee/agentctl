@@ -1,5 +1,5 @@
 {
-  "_comment": "SYNTHETIC. Hand-written for plan section 3.8: neither `extra_usage` nor `spend` appears anywhere in the body, which is what an older response shape looks like. The credits column reads `n/a` and — unlike fixtures/claude/usage-spend-without-extra-usage.json — nothing is warned about, because there is no figure being withheld. Not captured from the API.",
+  "_comment": "SYNTHETIC. Hand-written for the no-credits case: neither `extra_usage` nor `spend` appears anywhere in the body, which is what an older response shape looks like. The credits column reads `n/a` and — unlike fixtures/claude/usage-spend-without-extra-usage.json — nothing is warned about, because there is no figure being withheld. Not captured from the API.",
   "five_hour": {
     "utilization": 21.0,
     "resets_at": "2026-09-08T03:29:59.817079+00:00",

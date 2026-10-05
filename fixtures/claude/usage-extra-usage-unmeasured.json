@@ -1,5 +1,5 @@
 {
-  "_comment": "SYNTHETIC. Hand-written for plan section 3.8 and AC23: credits enabled and capped, but the server sent no `used_credits`. The whole cell must read an em dash rather than `— / $5000.00`, because putting a ceiling next to a figure that does not exist reads as a spend of zero. Derived from the shape of fixtures/claude/usage-extra-usage-enabled.json. Not captured from the API.",
+  "_comment": "SYNTHETIC. Hand-written for the unmeasured extra-usage case: credits enabled and capped, but the server sent no `used_credits`. The whole cell must read an em dash rather than `— / $5000.00`, because putting a ceiling next to a figure that does not exist reads as a spend of zero. Derived from the shape of fixtures/claude/usage-extra-usage-enabled.json. Not captured from the API.",
   "five_hour": {
     "utilization": 4.0,
     "resets_at": "2026-09-08T16:50:00.309254+00:00",

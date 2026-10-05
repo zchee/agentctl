@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/zchee/agctl/schemas/codex-doctor.v1.json",
   "title": "agctl codex doctor report, version 1",
-  "description": "What `agctl codex doctor --json` emits (plan section 3.3, AC108). Every string here is an identifier agctl validated, a path agctl derived, a word this build compiled in, or a rendered number: no member name, no configuration value and no line of `config.toml` reaches a field, and no token, key or claim outside the allowlist appears anywhere (invariants I24 and I31).",
+  "description": "What `agctl codex doctor --json` emits. Every string here is an identifier agctl validated, a path agctl derived, a word this build compiled in, or a rendered number: no member name, no configuration value and no line of `config.toml` reaches a field, and no token, key or claim outside the allowlist appears anywhere by invariant.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -43,7 +43,7 @@
       "items": { "$ref": "#/$defs/orphan" }
     },
     "unnameable_orphans": {
-      "description": "How many further entries under the Codex tree were found under a name agctl would not have written. A COUNT: an entry's name is a directory name read off disk, and anything running as the user can create one (review S35 C3).",
+      "description": "How many further entries under the Codex tree were found under a name agctl would not have written. A COUNT: an entry's name is a directory name read off disk, and anything running as the user can create one.",
       "type": "integer",
       "minimum": 0
     },
@@ -74,7 +74,7 @@
           "items": { "type": "string" }
         },
         "error": {
-          "description": "Why the home could not be resolved (fact F86).",
+          "description": "Why the home could not be resolved.",
           "type": ["string", "null"]
         }
       }
@@ -104,7 +104,7 @@
           "type": "boolean"
         },
         "profiles_consulted": {
-          "description": "Always false: a profile cannot set the store key (fact F84).",
+          "description": "Always false: a profile cannot set the store key.",
           "const": false
         },
         "base_url": {
@@ -112,7 +112,7 @@
           "type": ["string", "null"]
         },
         "config_note": {
-          "description": "What was wrong with `config.toml` — the line NUMBER only, never its text (invariant I31, plan AC116).",
+          "description": "What was wrong with `config.toml` — the line NUMBER only, never its text by invariant.",
           "type": ["string", "null"]
         }
       }
@@ -201,7 +201,7 @@
           ]
         },
         "missing_known_members": {
-          "description": "Members of fact F61's field set the document does not have. The names come from this build's own list.",
+          "description": "Members of the measured field set the document does not have. The names come from this build's own list.",
           "type": "array",
           "items": { "type": "string" }
         },
@@ -225,7 +225,7 @@
       ],
       "properties": {
         "multi_auth_present": {
-          "description": "Whether the live home has a `multi-auth/` directory. Its contents are never listed and never read (open question U32).",
+          "description": "Whether the live home has a `multi-auth/` directory. Its contents are never listed and never read deliberately.",
           "type": "boolean"
         },
         "switcher_items": {
@@ -239,7 +239,7 @@
           "minimum": 0
         },
         "unexplained_removals": {
-          "description": "The manual removal command for each listed `Codex Auth` item that agctl's own write log records a refused login child as having gained, and whose account is spelled `cli|` plus sixteen lowercase hexadecimal digits. Both halves are required: an account is an attribute any application can set, so a command is built only from a string agctl itself could have written (review S35 C1), and an item agctl cannot show it caused is very often another Codex home's working credential, so removing it would be data loss (plan section 3.3).",
+          "description": "The manual removal command for each listed `Codex Auth` item that agctl's own write log records a refused login child as having gained, and whose account is spelled `cli|` plus sixteen lowercase hexadecimal digits. Both halves are required: an account is an attribute any application can set, so a command is built only from a string agctl itself could have written, and an item agctl cannot show it caused is very often another Codex home's working credential, so removing it would be data loss.",
           "type": "array",
           "items": {
             "type": "string",
@@ -352,7 +352,7 @@
           "enum": ["namespace without record", "record without auth.json", "stale scratch"]
         },
         "subject": {
-          "description": "The directory name, or the `<user>+<acct>` pair it concerns — rendered only when it is spelled the way agctl spells one, anything else being counted in `unnameable_orphans` instead (review S35 C3).",
+          "description": "The directory name, or the `<user>+<acct>` pair it concerns — rendered only when it is spelled the way agctl spells one, anything else being counted in `unnameable_orphans` instead.",
           "type": "string"
         },
         "age": { "type": ["string", "null"] }

@@ -159,7 +159,7 @@ usage-calls 0 0 0
 status-check read-only
 
 # Additional coverage from tests/e2e_status.rs at the frozen checkout above.
-# ac6_an_expired_owned_credential_is_refreshed_and_replaced_atomically
+# an_expired_owned_credential_is_refreshed_and_replaced_atomically
 refreshfixture owned
 exec agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -170,7 +170,7 @@ refresh-check atomic
 refresh-check namespace .credentials.json
 refresh-check read-only
 
-# ac31_a_hanging_security_times_out_and_owned_rows_still_refresh
+# a_hanging_security_times_out_and_owned_rows_still_refresh
 refreshfixture hanging-owned
 exec expectexit 2 agentctl claude status --refresh
 ! stderr 'sk-ant|SENTINEL'
@@ -182,7 +182,7 @@ refresh-check stored rotated
 refresh-check bounded
 refresh-check read-only
 
-# ac32_a_locked_keychain_stops_keychain_rows_and_not_owned_ones
+# a_locked_keychain_stops_keychain_rows_and_not_owned_ones
 refreshfixture locked-owned
 exec expectexit 2 agentctl claude status --refresh
 ! stderr 'sk-ant|SENTINEL'
@@ -192,7 +192,7 @@ refresh-check stored rotated
 ! grep 'find-generic-password' $REFRESH_ROOT/security.log
 refresh-check read-only
 
-# ac34_a_migrated_namespace_is_read_from_the_keychain_and_never_written
+# a_migrated_namespace_is_read_from_the_keychain_and_never_written
 refreshfixture migrated-with-file
 exec agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -202,7 +202,7 @@ refresh-check file-unchanged
 refresh-check namespace .credentials.json
 refresh-check read-only
 
-# ac48_a_symlink_at_the_lock_path_stops_the_refresh
+# a_symlink_at_the_lock_path_stops_the_refresh
 refreshfixture lock-symlink
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
@@ -211,7 +211,7 @@ refresh-calls 0 0 0
 refresh-check file-unchanged
 ! exists $REFRESH_ROOT/elsewhere
 
-# ac48_an_unavailable_flock_stops_the_refresh
+# an_unavailable_flock_stops_the_refresh
 refreshfixture flock-unavailable
 exec expectexit 2 agentctl claude status --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'

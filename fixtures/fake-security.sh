@@ -69,7 +69,7 @@ find-generic-password)
     exit 44
     ;;
 -i)
-    # The write transport (fact F42): one command line on stdin, nothing
+    # The write transport: one command line on stdin, nothing
     # secret in argv. This is the stand-in's only mutating path, and it is
     # deliberately strict — a line it does not recognise runs nothing.
     input=$(cat)
@@ -98,7 +98,7 @@ find-generic-password)
     hexlen=$(printf '%s' "$hex" | wc -c | tr -d ' ')
 
     # Logged redacted at the source, before anything else can go wrong with
-    # the line: the log is what plan AC59 and AC61 read, and a stand-in that
+    # the line: the log is what the write-log tests read, and a stand-in that
     # wrote the hex would put a credential in the test output.
     if [ -n "${AGCTL_FAKE_SECURITY_LOG:-}" ]; then
         printf 'add-generic-password -U -a "%s" -s "%s" -X <REDACTED:%s>\n' \
@@ -150,9 +150,9 @@ find-generic-password)
     ;;
 delete-generic-password)
     # Refused rather than unimplemented, and refused loudly: agctl issues
-    # no delete anywhere (fact F43), so this arriving means a code path exists
+    # no delete anywhere, so this arriving means a code path exists
     # that should not. The invocation is already in the log by the time this
-    # runs, which is what plan AC61 counts.
+    # runs, which is what the write-log test counts.
     printf 'security: this stand-in refuses to delete an item; agctl has no delete path\n' >&2
     exit 1
     ;;
