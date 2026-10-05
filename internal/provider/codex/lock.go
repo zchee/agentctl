@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/zchee/agentctl/internal/config"
+	"github.com/zchee/agentctl/internal/runtime/lockorder"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -31,6 +32,7 @@ var errInvalidProof = errors.New("the Codex namespace proof is invalid or its lo
 type lockState struct {
 	mu            sync.Mutex
 	guard         *secret.LockGuard
+	ctx           context.Context
 	user, account string
 	released      atomic.Bool
 }
@@ -66,7 +68,16 @@ func acquireCodex(ctx context.Context, paths *config.Paths, user, account string
 	if err != nil {
 		return nil, err
 	}
-	return &Lock{state: &lockState{guard: guard, user: user, account: account}}, nil
+	return &Lock{state: &lockState{guard: guard, ctx: lockorder.WithOwned(ctx, lockorder.CodexNamespace), user: user, account: account}}, nil
+}
+
+// Context carries the ownership witness for calls made while the lock is held.
+// After Release, callers must return to their parent context.
+func (l *Lock) Context() context.Context {
+	if l == nil || l.state == nil {
+		return nil
+	}
+	return l.state.ctx
 }
 
 // Path returns the held lock's path, or an empty string for a zero proof.

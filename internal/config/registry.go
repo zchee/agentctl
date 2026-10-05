@@ -29,6 +29,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/lockfile"
+	"github.com/zchee/agentctl/internal/runtime/lockorder"
 )
 
 // RegistryVersion is the schema version of a registry with Claude accounts
@@ -520,6 +521,9 @@ func UpdateRegistry(ctx context.Context, p *Paths, f func(*Registry)) error {
 	}
 
 	lockPath := p.ConfigLock()
+	if err := lockorder.Check(ctx, lockorder.ConfigLock); err != nil {
+		return err
+	}
 	guard, err := lockfile.Lock(ctx, lockPath, time.Now().Add(RegistryLockWait))
 	if err != nil {
 		return errs.NewRefused(0, fmt.Sprintf("could not lock `%s`: %v", lockPath, err))
