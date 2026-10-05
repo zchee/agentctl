@@ -25,6 +25,7 @@ exists $SWAP_STORE/.credentials.adopted.json
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 0
+swap-audit applied 0 no-item
 
 # re_swapping_the_credential_an_unmigrated_store_already_holds_writes_nothing
 swapfixture unmigrated-duplicate
@@ -37,10 +38,25 @@ exists $SWAP_STORE/.credentials.json
 swap-check 0 0 0
 
 # a_json_inspection_nobody_confirmed_writes_no_credential_anywhere
+swapfixture json-inspect
+! exists $SWAP_THIRD_STORE
+exec expectexit 20 agentctl claude use $INCOMING --live --json
+stdout '"kind": "plan"'
+stdout '"outcome": "cancelled"'
+stdout '"refusal": null'
+stdout '"adopted_to": null'
+! exists $SWAP_THIRD_STORE
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 0 0 0
+swap-io 2 0 0
+swap-audit none 0
+swap-tree no-new-credential
+
 # a_swap_nobody_confirmed_leaves_the_store_exactly_as_it_was
 # a_swap_nobody_confirmed_makes_no_refresh_post_at_all
 # use_live_json_prints_the_plan_and_still_prompts
-swapfixture json-inspect
+swapfixture declined-expired
 exec expectexit 20 agentctl claude use $INCOMING --live --json
 stdout '"kind": "plan"'
 stdout '"outcome": "cancelled"'
@@ -48,6 +64,9 @@ exists $SWAP_STORE/.credentials.json
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 0
+swap-io 1 0 0
+swap-audit none 0
+swap-tree no-new-credential
 
 # an_applied_swap_saves_the_refreshed_credential_back_to_the_incoming_store
 # a_swap_that_writes_the_refresh_back_touches_nothing_outside_the_namespace_root
@@ -375,12 +394,17 @@ stdout '"outcome": "already_active"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 0
+swap-io 1 0 0
 swap-audit none 0
 
 # the_oq1_precondition_refuses_a_store_agctl_does_not_own
 swapfixture namespace-unowned
 exec expectexit 15 agentctl claude use $INCOMING --live --yes --json
 stdout '"outcome": "refused"'
+stdout '"reason": "not_owned"'
+stdout '"refusal": null'
+stdout 'not a store agentctl owns'
+stdout $SWAP_ROOT/unowned
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 0
@@ -404,6 +428,7 @@ stderr 'cannot inspect the target session'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 1 0 0
+swap-io 3 0 0
 swap-audit applied 0
 
 # refusal_f_when_the_outgoing_credential_cannot_be_read

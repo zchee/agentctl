@@ -66,7 +66,7 @@ func TestUseOutcomeJSONReferenceOrder(t *testing.T) {
 				outcome: claude.SwapOutcome{Kind: claude.SwapRefused, Refusal: claude.SwapRefusal{Kind: claude.SwapEnvToken}},
 				target:  new("namespace:6a38ef6e"),
 				service: "Claude Code-credentials-6a38ef6e",
-				note:    new("`CLAUDE_CODE_OAUTH_TOKEN` is set in agctl's own environment, which short-circuits every credential store; unset it and run this again"),
+				note:    new("`CLAUDE_CODE_OAUTH_TOKEN` is set in agentctl's own environment, which short-circuits every credential store; unset it and run this again"),
 			},
 			want: `{
   "kind": "outcome",
@@ -89,7 +89,7 @@ func TestUseOutcomeJSONReferenceOrder(t *testing.T) {
     "break": null
   },
   "warnings": [],
-  "note": "` + "`CLAUDE_CODE_OAUTH_TOKEN`" + ` is set in agctl's own environment, which short-circuits every credential store; unset it and run this again",
+  "note": "` + "`CLAUDE_CODE_OAUTH_TOKEN`" + ` is set in agentctl's own environment, which short-circuits every credential store; unset it and run this again",
   "refusal": "C",
   "config": null
 }
@@ -105,7 +105,7 @@ func TestUseOutcomeJSONReferenceOrder(t *testing.T) {
 				auditID:     new("2026-10-05T21:30:55.941888Z#26589"),
 				adoptedTo:   new(".credentials.adopted.json"),
 				lock:        useLockReport{HoldMS: new(uint64(78)), BudgetMS: new(uint64(3000))},
-				warnings:    []string{"agctl inspected its own environment for a secure-storage backend and found none; it cannot inspect the target session's"},
+				warnings:    []string{"agentctl inspected its own environment for a secure-storage backend and found none; it cannot inspect the target session's"},
 				config:      &claude.ConfigReport{Outcome: secret.ConfigApplied, Backup: new(".claude.json.backup.1791235855951"), HoldMS: new(uint64(22))},
 			},
 			want: `{
@@ -129,7 +129,7 @@ func TestUseOutcomeJSONReferenceOrder(t *testing.T) {
     "break": null
   },
   "warnings": [
-    "agctl inspected its own environment for a secure-storage backend and found none; it cannot inspect the target session's"
+    "agentctl inspected its own environment for a secure-storage backend and found none; it cannot inspect the target session's"
   ],
   "note": null,
   "refusal": null,

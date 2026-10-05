@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"io/fs"
 	"net/http"
@@ -52,6 +53,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		live, absent, duplicate, expired, migrated, incomingAbsent, envToken, auditRefused, declined, failed, mismatch, profileUnavailable, newer, compact, busy bool
 		lineLong, rotateLong, timeout, peerChange, outgoingUnavailable, outgoingMalformed, missingClaim, sessions, configBusy, configStale, configLink, saveRace bool
 		unowned, unreadable, outgoingMismatch, dangling, outgoingExpired                                                                                         bool
+		third                                                                                                                                                    bool
 		storageBusy, independent, ownerMissing, configAbsent, auditSymlink, ownAudit, alternateSpelling                                                          bool
 	}{
 		"namespace-storage-busy":       {storageBusy: true},
@@ -73,7 +75,8 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		"first-write":                  {absent: true},
 		"unmigrated-duplicate":         {absent: true, duplicate: true},
 		"refresh":                      {expired: true},
-		"json-inspect":                 {expired: true, declined: true},
+		"json-inspect":                 {third: true, declined: true},
+		"declined-expired":             {expired: true, declined: true},
 		"migrated-expired":             {expired: true, migrated: true},
 		"migrated-fresh":               {migrated: true},
 		"incoming-keychain-only":       {migrated: true, incomingAbsent: true},
@@ -182,7 +185,17 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		spelling := ExportSpelling(dir)
 		return map[string]any{"account_uuid": account, "organization_uuid": Org, "kind": map[string]any{"kind": "owned", "export_spelling": spelling, "export_sha8": Sha8(spelling)}, "forgotten": false, "created_at": time.Now().UTC().Format(time.RFC3339)}
 	}
-	write(filepath.Join(configDir, "config.json"), document(map[string]any{"version": 1, "accounts": []any{owned(owner, ownerDir), owned(incoming, incomingExport)}, "forgotten_services": []string{}}))
+	registryPath := filepath.Join(configDir, "config.json")
+	records := []any{owned(owner, ownerDir), owned(incoming, incomingExport)}
+	if test.third {
+		third := "55555555-5555-4555-8555-555555555555"
+		thirdDir := filepath.Join(configDir, "claude", third, Org)
+		records = append(records, owned(third, thirdDir))
+		outgoingBlob = blob("third", third, FreshAt())
+		ts.Setenv("SWAP_THIRD_STORE", filepath.Join(thirdDir, ".credentials.json"))
+	}
+	registryBefore := document(map[string]any{"version": 1, "accounts": records, "forgotten_services": []string{}})
+	write(registryPath, registryBefore)
 	service := MigrationService(ownerDir)
 	if test.live {
 		service = LiveService
@@ -223,13 +236,17 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	} else if !test.configAbsent {
 		write(configPath, configBody)
 	}
+	var configLockMtime time.Time
 	if test.configBusy || test.configStale {
 		lock := configPath + ".lock"
 		ts.Check(os.Mkdir(lock, 0o700))
 		if test.configStale {
-			old := time.Now().Add(-time.Hour)
+			old := time.Now().Add(-time.Minute)
 			ts.Check(os.Chtimes(lock, old, old))
 		}
+		info, err := os.Stat(lock)
+		ts.Check(err)
+		configLockMtime = info.ModTime()
 	}
 	if test.sessions {
 		write(filepath.Join(liveDir, "sessions", "session.json"), document(map[string]any{"pid": os.Getpid(), "name": "private-session-name", "bridgeSessionId": "bridge"}))
@@ -411,8 +428,8 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		}
 	})
 	ts.SetCmd("swap-audit", func(ts *testscript.TestScript, neg bool, args []string) {
-		if neg || len(args) != 2 {
-			ts.Fatalf("usage: swap-audit <write-outcome|none> <config-count>")
+		if neg || len(args) < 2 || len(args) > 3 || len(args) == 3 && args[2] != "no-item" {
+			ts.Fatalf("usage: swap-audit <write-outcome|none> <config-count> [no-item]")
 		}
 		wantConfig, err := strconv.Atoi(args[1])
 		ts.Check(err)
@@ -427,12 +444,14 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 				continue
 			}
 			var row struct {
-				Event   string  `json:"event"`
-				Outcome string  `json:"outcome"`
-				TS      string  `json:"ts"`
-				PID     int     `json:"agctl_pid"`
-				After   *string `json:"after"`
-				Backup  *string `json:"backup"`
+				Event       string         `json:"event"`
+				Outcome     string         `json:"outcome"`
+				TS          string         `json:"ts"`
+				PID         int            `json:"agctl_pid"`
+				After       *string        `json:"after"`
+				Backup      *string        `json:"backup"`
+				FromDigest8 jsontext.Value `json:"from_digest8"`
+				ToDigest8   *string        `json:"to_digest8"`
 			}
 			ts.Check(json.Unmarshal([]byte(line), &row))
 			switch row.Event {
@@ -440,6 +459,9 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 				writes++
 				if row.Outcome != args[0] {
 					ts.Fatalf("write audit outcome=%s; want=%s", row.Outcome, args[0])
+				}
+				if len(args) == 3 && (!bytes.Equal(bytes.TrimSpace(row.FromDigest8), []byte("null")) || row.ToDigest8 == nil) {
+					ts.Fatalf("first-write audit must record a null from_digest8 and a non-null to_digest8")
 				}
 			case "config_write":
 				configs++
@@ -505,10 +527,42 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		}
 		return out
 	}
+	snapshotTree := func() map[string][]byte {
+		out := make(map[string][]byte)
+		for _, tree := range []string{home, configDir} {
+			ts.Check(filepath.WalkDir(tree, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					return nil
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				out[path] = data
+				return nil
+			}))
+		}
+		return out
+	}
+	var treeBefore map[string][]byte
+	if test.declined {
+		treeBefore = snapshotTree()
+	}
 	outsideBefore := snapshotOutside()
 	ts.SetCmd("swap-tree", func(ts *testscript.TestScript, neg bool, args []string) {
-		if neg || len(args) != 0 {
-			ts.Fatalf("usage: swap-tree")
+		if neg || len(args) > 1 || len(args) == 1 && (args[0] != "no-new-credential" || treeBefore == nil) {
+			ts.Fatalf("usage: swap-tree [no-new-credential]")
+		}
+		if len(args) == 1 {
+			for path, data := range snapshotTree() {
+				if !bytes.Equal(treeBefore[path], data) && bytes.Contains(data, []byte("SENTINEL")) {
+					ts.Fatalf("inspection created or rewrote credential material at %s", path)
+				}
+			}
+			return
 		}
 		if diff := gocmp.Diff(outsideBefore, snapshotOutside()); diff != "" {
 			ts.Fatalf("paths outside the namespace root changed (-before +after):\n%s", diff)
@@ -651,8 +705,10 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 			if !bytes.Equal([]byte(ts.ReadFile(configPath)), configBody) {
 				ts.Fatalf("foreign config lock did not preserve config bytes")
 			}
-			if _, err := os.Stat(configPath + ".lock"); err != nil {
-				ts.Fatalf("foreign config lock was removed: %v", err)
+			info, err := os.Stat(configPath + ".lock")
+			ts.Check(err)
+			if !info.IsDir() || !info.ModTime().Equal(configLockMtime) {
+				ts.Fatalf("foreign config lock was removed, replaced or re-stamped")
 			}
 		}
 		if test.configLink {
@@ -660,8 +716,11 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 				ts.Fatalf("config symlink was replaced")
 			}
 		}
+		if test.duplicate && !test.live && !bytes.Equal([]byte(ts.ReadFile(registryPath)), registryBefore) {
+			ts.Fatalf("already-active namespace swap changed registry bytes")
+		}
 		if test.declined || test.envToken || test.unowned || test.unreadable {
-			if !bytes.Equal([]byte(ts.ReadFile(filepath.Join(ownerDir, ".credentials.json"))), outgoingBlob) || !bytes.Equal([]byte(ts.ReadFile(filepath.Join(incomingDir, ".credentials.json"))), incomingBlob) {
+			if !bytes.Equal([]byte(ts.ReadFile(filepath.Join(ownerDir, ".credentials.json"))), ownerBlob) || !bytes.Equal([]byte(ts.ReadFile(filepath.Join(incomingDir, ".credentials.json"))), incomingBlob) {
 				ts.Fatalf("refusal or inspection changed namespace credential bytes")
 			}
 		}
