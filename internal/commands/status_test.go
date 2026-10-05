@@ -16,6 +16,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -467,6 +468,17 @@ func TestMarkSameIdentityAndFolding(t *testing.T) {
 	failing := statusRows(outcomes, true)
 	if len(failing) != 3 {
 		t.Fatalf("rows = %d, want 3: a failing live row survives the fold", len(failing))
+	}
+}
+
+func TestStatusCollectOmitsUnstartedRows(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	status := &Status{}
+	rows := []claude.AccountRow{{ID: "live", VisibleByDefault: true}}
+	outcomes := status.collect(ctx, config.NewPaths(t.TempDir()), rows, statusOptions{})
+	if len(outcomes) != 0 {
+		t.Fatalf("cancelled pass returned %d unfinished rows", len(outcomes))
 	}
 }
 

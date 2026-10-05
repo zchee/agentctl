@@ -227,18 +227,26 @@ func (s *Status) Run(ctx context.Context, globals cli.Globals, opts cli.ClaudeSt
 // account cannot block another.
 func (s *Status) collect(ctx context.Context, paths *config.Paths, rows []claude.AccountRow, options statusOptions) []rowOutcome {
 	outcomes := make([]rowOutcome, len(rows))
+	completed := make([]bool, len(rows))
 	jobs := make([]func(context.Context), 0, len(rows))
 	for i := range rows {
 		jobs = append(jobs, func(ctx context.Context) {
 			outcomes[i] = s.runRow(ctx, i, rows[i], paths, options)
+			completed[i] = true
 		})
 	}
 	runner := s.Runner
 	if runner == nil {
-		runner = BoundedRunner{Workers: DefaultMaxWorkers}
+		runner = CoordinatedRunner{}
 	}
 	runner.Run(ctx, jobs)
-	return outcomes
+	finished := outcomes[:0]
+	for i, done := range completed {
+		if done {
+			finished = append(finished, outcomes[i])
+		}
+	}
+	return finished
 }
 
 // runRow produces one row: cache, refresh barrier, fetch, normalize.

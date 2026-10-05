@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-func TestBoundedRunner(t *testing.T) {
+func TestCoordinatedRunner(t *testing.T) {
 	tests := map[string]struct {
 		workers int
 		jobs    int
@@ -34,6 +34,8 @@ func TestBoundedRunner(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			started := make(chan struct{}, tt.jobs)
 			var running, peak, ran atomic.Int64
 			var mu sync.Mutex
 			jobs := make([]func(context.Context), 0, tt.jobs)
@@ -45,30 +47,95 @@ func TestBoundedRunner(t *testing.T) {
 						peak.Store(now)
 					}
 					mu.Unlock()
-					time.Sleep(5 * time.Millisecond)
+					started <- struct{}{}
+					<-release
 					running.Add(-1)
 					ran.Add(1)
 				})
 			}
 
-			BoundedRunner{Workers: tt.workers}.Run(t.Context(), jobs)
+			finished := make(chan struct{})
+			go func() {
+				CoordinatedRunner{Workers: tt.workers}.Run(t.Context(), jobs)
+				close(finished)
+			}()
+			for range tt.wantCap {
+				select {
+				case <-started:
+				case <-time.After(5 * time.Second):
+					close(release)
+					t.Fatal("workers did not reach the expected concurrency")
+				}
+			}
+			close(release)
+			<-finished
 			if got := ran.Load(); got != int64(tt.jobs) {
 				t.Fatalf("ran = %d, want %d", got, tt.jobs)
 			}
-			if got := peak.Load(); got > int64(tt.wantCap) {
-				t.Fatalf("peak concurrency = %d, want at most %d", got, tt.wantCap)
+			if got := peak.Load(); got != int64(tt.wantCap) {
+				t.Fatalf("peak concurrency = %d, want %d", got, tt.wantCap)
 			}
 		})
 	}
 }
 
-func TestBoundedRunnerStartsNothingAfterCancellation(t *testing.T) {
+func TestCoordinatedRunnerStartsNothingAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	var ran atomic.Int64
-	BoundedRunner{}.Run(ctx, []func(context.Context){func(context.Context) { ran.Add(1) }})
+	CoordinatedRunner{}.Run(ctx, []func(context.Context){func(context.Context) { ran.Add(1) }})
 	if got := ran.Load(); got != 0 {
 		t.Fatalf("ran = %d, want 0 after cancellation", got)
+	}
+}
+
+func TestCoordinatedRunnerCancelsActiveJobsBeforeStartingQueuedJobs(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan struct{}, 12)
+	var ran, stopped atomic.Int64
+	jobs := make([]func(context.Context), 12)
+	for i := range jobs {
+		jobs[i] = func(ctx context.Context) {
+			ran.Add(1)
+			started <- struct{}{}
+			<-ctx.Done()
+			stopped.Add(1)
+		}
+	}
+	finished := make(chan struct{})
+	go func() {
+		CoordinatedRunner{}.Run(ctx, jobs)
+		close(finished)
+	}()
+	for range 4 {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the coordinator did not start four workers")
+		}
+	}
+	cancel()
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the coordinator did not drain cancelled jobs")
+	}
+	if ran.Load() != 4 || stopped.Load() != 4 {
+		t.Fatalf("ran = %d, stopped = %d; want four active jobs and no queued jobs", ran.Load(), stopped.Load())
+	}
+}
+
+func TestCoordinatedRunnerPropagatesDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	var stopped atomic.Bool
+	CoordinatedRunner{}.Run(ctx, []func(context.Context){func(ctx context.Context) {
+		<-ctx.Done()
+		stopped.Store(ctx.Err() == context.DeadlineExceeded)
+	}})
+	if !stopped.Load() {
+		t.Fatal("the active worker did not receive the deadline")
 	}
 }
 

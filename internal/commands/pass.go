@@ -17,14 +17,15 @@ package commands
 import (
 	"context"
 	"math"
-	"sync"
 	"time"
+
+	"github.com/zchee/agentctl/internal/runtime/coordinator"
 )
 
 // DefaultMaxWorkers is how many rows a pass works on at once. Four keeps
 // a dozen accounts from serializing behind one slow keychain child while
 // still bounding the subprocess and socket fan-out.
-const DefaultMaxWorkers = 4
+const DefaultMaxWorkers = coordinator.DefaultMaxWorkers
 
 // PassTimeoutMultiplier is how much longer than one request the whole
 // pass may take.
@@ -45,47 +46,39 @@ func PassBudget(timeout time.Duration) time.Duration {
 	return timeout * PassTimeoutMultiplier
 }
 
-// PassRunner runs one pass's jobs. It is the seam between a command and
-// the machinery that bounds its concurrency, so the pass logic does not
-// change when a richer coordinator — cancellation plumbing, child
-// ownership — replaces the bounded default.
+// PassRunner runs one pass's jobs with bounded concurrency.
 type PassRunner interface {
-	// Run runs every job and returns once all of them have. Each job owns
-	// its own result slot, so the runner moves no data; a job observes
-	// cancellation through the context it is handed.
+	// Run waits for all started jobs to finish. Cancellation prevents queued
+	// jobs from starting and reaches active jobs through their context.
 	Run(ctx context.Context, jobs []func(context.Context))
 }
 
-// BoundedRunner is the default runner: at most Workers jobs at once, no
-// ordering guarantee, every job started exactly once.
-type BoundedRunner struct {
+// CoordinatedRunner runs status jobs through the shared pass coordinator.
+type CoordinatedRunner struct {
 	// Workers caps the jobs in flight; zero or less means
 	// [DefaultMaxWorkers].
 	Workers int
 }
 
-var _ PassRunner = BoundedRunner{}
+var _ PassRunner = CoordinatedRunner{}
 
-// Run implements [PassRunner] with a semaphore over goroutines. A
-// cancelled context stops new jobs from starting; jobs already running
-// see the same context and finish on their own terms, which is what lets
-// the pass return whatever rows it completed.
-func (r BoundedRunner) Run(ctx context.Context, jobs []func(context.Context)) {
+// Run implements [PassRunner] with the shared cancellation and worker bounds.
+func (r CoordinatedRunner) Run(ctx context.Context, jobs []func(context.Context)) {
 	workers := r.Workers
 	if workers <= 0 {
 		workers = DefaultMaxWorkers
 	}
-	semaphore := make(chan struct{}, workers)
-	var group sync.WaitGroup
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(time.Duration(math.MaxInt64))
+	}
+	passJobs := make([]coordinator.Job[struct{}], 0, len(jobs))
 	for _, job := range jobs {
-		if ctx.Err() != nil {
-			break
-		}
-		semaphore <- struct{}{}
-		group.Go(func() {
-			defer func() { <-semaphore }()
-			job(ctx)
+		passJobs = append(passJobs, func(pass *coordinator.PassCtx) struct{} {
+			job(pass.Context())
+			return struct{}{}
 		})
 	}
-	group.Wait()
+	for range coordinator.RunPass(ctx, nil, passJobs, deadline, workers) {
+	}
 }
