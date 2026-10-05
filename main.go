@@ -25,11 +25,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/runtime/signals"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -62,32 +62,25 @@ func run() int {
 	// a normal run — rather than kill the process outright.
 	signal.Ignore(syscall.SIGPIPE)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// The exit status depends on which signal fired (143 for TERM, 129
-	// for HUP, 130 for INT), and a NotifyContext cannot say which one it
-	// saw, so the signal is recorded here and the context cancelled by
-	// hand.
-	var fired atomic.Pointer[os.Signal]
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
-	go func() {
-		sig, ok := <-signals
-		if !ok {
-			return
-		}
-		fired.Store(&sig)
-		cancel()
-	}()
+	// The controller owns the TERM/HUP/INT disposition: it cancels the
+	// command context, takes down registered children, and runs the
+	// cleanup registry. The exit status depends on which signal fired
+	// (143 for TERM, 129 for HUP, 130 for INT), so the controller records
+	// the signal and the mapping below stays the one source of the code.
+	ctx, controller := signals.Install(context.Background())
+	defer controller.Stop()
 
 	c := cli.New(cli.Handlers{})
 	err := c.Root().ExecuteContext(ctx)
 
 	// A run that was cancelled by a signal exits with the signal's own
-	// status, whatever the command returned on its way out.
-	if sig := fired.Load(); sig != nil {
-		return cli.SignalExitCode(*sig)
+	// status, whatever the command returned on its way out — but only
+	// after the teardown has finished, so the exit (and the purge the
+	// defer above runs) cannot race the child takedown or the cleanup
+	// registry.
+	if sig, ok := controller.Fired(); ok {
+		controller.Wait()
+		return cli.SignalExitCode(sig)
 	}
 	if err == nil {
 		return errs.ExitOK
