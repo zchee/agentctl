@@ -205,6 +205,7 @@ func codexImportFixture(ts *testscript.TestScript, neg bool, args []string) {
 					Email            *string `json:"email"`
 					PlanType         *string `json:"plan_type"`
 					Forgotten        bool    `json:"forgotten"`
+					CreatedAt        string  `json:"created_at"`
 					Kind             struct {
 						Kind string `json:"kind"`
 						Dir  string `json:"dir"`
@@ -217,6 +218,8 @@ func codexImportFixture(ts *testscript.TestScript, neg bool, args []string) {
 				ts.Fatalf("records=%d", len(registry.CodexAccounts))
 			}
 			row := registry.CodexAccounts[0]
+			_, err := time.Parse(time.RFC3339Nano, row.CreatedAt)
+			ts.Check(err)
 			if row.ChatGPTUserID != "user-0001" || row.ChatGPTAccountID != "11111111-2222-4333-8444-555555555555" || row.Email == nil || *row.Email != "codex-user@example.invalid" || row.PlanType == nil || *row.PlanType != "pro" || row.Forgotten || row.Kind.Kind != "home_read_only" || row.Kind.Dir != canonical {
 				ts.Fatalf("wrong metadata: %+v", row)
 			}
@@ -225,10 +228,8 @@ func codexImportFixture(ts *testscript.TestScript, neg bool, args []string) {
 					ts.Fatalf("registry contains credential material")
 				}
 			}
-			for _, name := range []string{".locks", ".scratch", ".state"} {
-				if _, err := os.Stat(filepath.Join(store, "codex", name)); !os.IsNotExist(err) {
-					ts.Fatalf("import created codex/%s", name)
-				}
+			if _, err := os.Stat(filepath.Join(store, "codex")); !os.IsNotExist(err) {
+				ts.Fatalf("import created a Codex tree: %v", err)
 			}
 		case "folded", "stale":
 			var report struct {
