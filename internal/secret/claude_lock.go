@@ -142,6 +142,18 @@ var ConfigProfile = LockProfile{
 	HoldBudget: ConfigHoldBudget,
 }
 
+// LockSubject is what one hold is about: the store directory, and which
+// tree it is in. The two travel together because the tree is checked
+// against the store directory rather than believed: a tree a caller
+// could simply assert would put the containment rule in the caller's
+// hands.
+type LockSubject struct {
+	// StoreDir is the credential store directory the locks guard.
+	StoreDir string
+	// Tree is which tree the caller believes it is in.
+	Tree Tree
+}
+
 // CompromisedError reports that a lock held by this process had its
 // modification time moved under it, so the protocol has already been
 // violated and nothing may be written.
