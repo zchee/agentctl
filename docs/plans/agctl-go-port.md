@@ -754,6 +754,7 @@ go test -tags agentctl_testing -race -count=1 ./...
 | W2 start | run the spikes now alongside W1 (eight lanes) vs wait for the W1 gate | run now; the W1 gate still bounds W3+ |
 | Two lanes self-identifying as Fable | continue with the frontmatter as authoritative vs investigate the gateway routing first | continue; report any lane that names Fable |
 | Golden file names (lane question, answered by the naming rule) | keep `agctl__` prefix vs strip it vs re-slug | strip the crate prefix only; `testdata/golden/MAPPING.md` records the correspondence |
+| memguard under a finite `RLIMIT_MEMLOCK` (v0.23.0 deadlocks in purge after a key-view allocation failure; macOS default is unlimited) | conditional GO with a startup budget check that fails fast vs NO-GO and an own wiped `Secret` type vs conditional GO with a non-mlock fallback | conditional GO: `secret.EnsureLockedMemoryBudget()` refuses with exit 1 below the measured threshold; follow-up recorded in the spike document; the check and `Purge()` are wired into `main.go` by the foundation fix lane |
 
 Lead decisions (not asked, recorded for review): Rust implementation normative over its
 comments; testing endpoints fail closed for both providers; `time` with the system zone
@@ -796,3 +797,5 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
   shared-index commit rule and the Fable self-identity note added to section 17.
 - 2026-10-05 17:54:11 JST: Darwin process-observation spike returned GO; recorded in the wave table.
 - 2026-10-05 18:07:42 JST: config-rewrite and secret-memory spikes returned GO; recorded in the wave table.
+- 2026-10-05 18:15:41 JST: memguard spike downgraded to a conditional GO (startup memlock budget check);
+  decision recorded in section 19.
