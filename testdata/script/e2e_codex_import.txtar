@@ -1,0 +1,64 @@
+# Provenance: tests/e2e_codex_import.rs; headings retain test names without numbering prefixes.
+
+# records_the_home_read_only_with_the_identity_from_its_claims
+codex-import-fixture basic
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+stdout 'codex-user@example.invalid: read-only, from'
+! stdout 'agctl-test-codex-(at|rt|ak|jwt)-|eyJ|[Bb]earer '
+! stderr 'agctl-test-codex-(at|rt|ak|jwt)-|eyJ|[Bb]earer '
+codex-import-check recorded
+
+# writes_nothing_under_the_home_it_reads
+codex-import-check unchanged
+codex-import-fixture sealed
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+codex-import-check unchanged
+codex-import-check recorded
+
+# is_idempotent
+codex-import-fixture basic
+codex-import-check snapshot
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+stdout 'already recorded; nothing was changed'
+codex-import-check repeated
+
+# dry_run_writes_nothing
+codex-import-fixture dry
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME --dry-run
+stdout '--dry-run: nothing was written'
+codex-import-check unchanged
+codex-import-check dry
+
+# the_codex_home_flag_obeys_the_same_rules_as_the_variable
+codex-import-fixture flags
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_LINK
+codex-import-check recorded
+! exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_MISSING
+stderr '--codex-home.*does not exist'
+! stderr 'CODEX_HOME'
+! exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_FILE
+stderr '--codex-home.*not a directory'
+codex-import-check unchanged
+
+# a_keyring_home_is_refused_without_reading_its_credential
+codex-import-fixture keyring
+! exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+stderr 'keyring.*nothing to import'
+! stderr 'does not parse|not a credential'
+codex-import-check refused
+
+# an_auto_home_whose_item_is_listed_is_not_read
+codex-import-fixture auto-listed
+! exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+stderr 'auto.*nothing to import'
+! stderr 'does not parse|not a credential'
+codex-import-check refused
+
+# an_auto_home_whose_item_is_not_listed_is_read
+codex-import-fixture auto-unlisted
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+stdout 'auto \(file in effect\)'
+codex-import-check recorded
+
+# an_import_creates_no_codex_tree_in_the_agctl_store
+codex-import-check recorded
