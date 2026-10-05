@@ -26,12 +26,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/runtime/cleanup"
 )
 
 // SymlinkRefusedError reports a symbolic link at a credential path, or at a
@@ -289,8 +291,8 @@ func (f *SecretFile) Remove() (bool, error) {
 // in which a crash leaves no credentials at all, so the old file stays in
 // place until the rename replaces it. A failed rename parks the bytes as
 // pending when a spec is given; with nil it is an error and the temporary
-// is removed under [StopDiscardStaged], because the caller still holds what
-// it asked to write — under [StopComplete] the staged bytes are kept.
+// is removed under either policy because the caller still holds the bytes.
+// [StopComplete] retains staged bytes only when a requested pending save fails.
 //
 // ctx is consulted only under [StopDiscardStaged], at the one point where
 // abandoning leaves the file exactly as it was found.
@@ -322,6 +324,23 @@ func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec
 
 	tmpName := f.name + ".tmp." + hex8()
 	tmpShown := filepath.Join(filepath.Dir(f.shown), tmpName)
+	if stop == StopDiscardStaged {
+		// Register before creation and retain the opened directory: cleanup
+		// must still reach the same inode after a rename or descriptor close.
+		dir, err := unix.FcntlInt(uintptr(f.dir), unix.F_DUPFD_CLOEXEC, 0)
+		if err != nil {
+			return WriteOutcome{}, errs.NewIO("could not retain the temporary file's directory", err)
+		}
+		remove := sync.OnceFunc(func() {
+			_ = unlinkAt(dir, tmpName)
+			_ = unix.Close(dir)
+		})
+		token := cleanup.Register(remove)
+		defer func() {
+			cleanup.Unregister(token)
+			remove()
+		}()
+	}
 	if err := createNewFileAt(f.dir, tmpName, doc); err != nil {
 		// EEXIST from the exclusive create means the name belongs to a
 		// file this write did not create: under StopComplete that can
