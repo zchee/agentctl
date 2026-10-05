@@ -48,6 +48,7 @@ type useLiveSwap struct {
 	live      bool
 	inherited string
 	process   SessionProcess
+	deadline  time.Time
 }
 
 type useSource struct {
@@ -67,7 +68,9 @@ type useIncoming struct {
 }
 
 func (swap useLiveSwap) swapIn(ctx context.Context, incoming useIncoming, store *config.AccountRecord, opts cli.ClaudeUseOptions) *useReport {
-	ctx, cancel := context.WithTimeout(ctx, useSwapDeadline)
+	duration := useSwapDuration()
+	swap.deadline = time.Now().Add(duration)
+	ctx, cancel := context.WithTimeout(ctx, max(useSwapDeadline, duration))
 	defer cancel()
 	var target *string
 	var warnings []string
@@ -343,6 +346,10 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	if !ok {
 		return useCannotAdopt(claude.AdoptionUnreadable, service)
 	}
+	// Planning and profile reads use their own budgets; the pass deadline
+	// first prevents mutation at the adoption boundary.
+	ctx, cancel := context.WithDeadline(ctx, swap.deadline)
+	defer cancel()
 	adopted, staged, refusal := usePerformAdoption(ctx, swap.paths, plan, displaced)
 	if refusal != "" {
 		return useCannotAdopt(refusal, service)

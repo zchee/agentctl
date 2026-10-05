@@ -846,6 +846,96 @@ cmp $SWAP_AUDIT known-org-audit-before
 cmp $UNDO_OWNER_DIR/.credentials.adopted.json known-org-parked-before
 undo-check 1 0 3
 
+# A zero testing deadline still reaches profile planning, then refuses adoption.
+swapfixture live deadline-forward
+undo-setup
+undo-blob $UNDO_ITEM outgoing $OWNER
+env ORG=66666666-7777-8888-9999-000000000000
+env LOCKS=$AGENTCTL_CONFIG_DIR/claude/.locks
+cp $UNDO_ITEM deadline-forward-item
+cp $UNDO_INCOMING_DIR/.credentials.json deadline-forward-source
+cp $UNDO_CONFIG deadline-forward-config
+env AGENTCTL_SWAP_DEADLINE_MS=0
+exec expectexit 14 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "refused"'
+stdout '"refusal": "F"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM deadline-forward-item
+cmp $UNDO_INCOMING_DIR/.credentials.json deadline-forward-source
+cmp $UNDO_CONFIG deadline-forward-config
+! exists $UNDO_OWNER_DIR/.credentials.adopted.json
+swap-audit none 0
+undo-check 0 0 2
+swap-check 0 0 0
+swap-io 1 0 0
+exists $LOCKS/$OWNER.$ORG.lock $LOCKS/$INCOMING.$ORG.lock
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
+
+# The default deadline control applies from exactly the state the refusal retained.
+env AGENTCTL_SWAP_DEADLINE_MS=
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+undo-credential $UNDO_ITEM incoming
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json deadline-forward-item
+cmp $UNDO_INCOMING_DIR/.credentials.json deadline-forward-source
+undo-audit-check forward:$INCOMING
+swap-audit applied 1
+undo-check 1 0 4
+swap-check 1 0 0
+swap-io 4 0 0
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
+
+# A rotated live occupant makes undo adopt into the incoming namespace.
+swapfixture live deadline-undo
+undo-setup
+env LOCKS=$AGENTCTL_CONFIG_DIR/claude/.locks
+exec agentctl claude use $INCOMING --live --yes --json
+undo-blob $UNDO_ITEM incoming-refreshed $INCOMING newer
+cp $UNDO_ITEM deadline-undo-item
+cp $UNDO_INCOMING_DIR/.credentials.json deadline-undo-source
+cp $UNDO_OWNER_DIR/.credentials.adopted.json deadline-undo-parked
+cp $UNDO_CONFIG deadline-undo-config
+cp $SWAP_AUDIT deadline-undo-audit
+env AGENTCTL_SWAP_DEADLINE_MS=0
+exec expectexit 14 agentctl claude use --undo --yes --json
+stdout '"outcome": "refused"'
+stdout '"refusal": "F"'
+stdout '"config": null'
+! stdout SENTINEL
+! stderr SENTINEL
+cmp $UNDO_ITEM deadline-undo-item
+cmp $UNDO_INCOMING_DIR/.credentials.json deadline-undo-source
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json deadline-undo-parked
+cmp $UNDO_CONFIG deadline-undo-config
+cmp $SWAP_AUDIT deadline-undo-audit
+undo-check 1 0 4
+swap-check 1 0 0
+swap-io 5 0 0
+exists $LOCKS/$OWNER.$ORG.lock $LOCKS/$INCOMING.$ORG.lock
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
+
+# Default undo control saves the rotated occupant and restores the full owner copy.
+env AGENTCTL_SWAP_DEADLINE_MS=
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cmp $UNDO_ITEM deadline-undo-parked
+cmp $UNDO_INCOMING_DIR/.credentials.json deadline-undo-item
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json deadline-undo-parked
+grep -count=2 '"event":"write"' $SWAP_AUDIT
+grep -count=2 '"event":"config_write"' $SWAP_AUDIT
+grep -count=1 '"direction":"undo"' $SWAP_AUDIT
+grep '"incoming_identity":\{"account_uuid":"11111111-2222-3333-4444-555555555555","organization_uuid":"66666666-7777-8888-9999-000000000000"\}' $SWAP_AUDIT
+undo-check 2 0 6
+swap-check 2 0 0
+swap-io 9 0 0
+exec flockhold $LOCKS/$OWNER.$ORG.lock 1ms
+exec flockhold $LOCKS/$INCOMING.$ORG.lock 1ms
+
 # Undo and forget.
 # Provenance: tests/e2e_swap.rs.
 
