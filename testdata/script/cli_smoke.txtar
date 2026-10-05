@@ -1,0 +1,50 @@
+# The thin surface check over the built binary: argument parsing, help,
+# version, the completion scripts and the usage-error contract, exactly
+# as a user meets them. The wider suites get one script per behaviour
+# area; this one stays the smoke test.
+
+# Help and version succeed and name the command surface.
+exec agentctl --help
+stdout 'Available Commands:'
+stdout 'claude'
+stdout 'codex'
+stdout 'completions'
+
+exec agentctl --version
+stdout 'agentctl version'
+
+# The provider group lists every subcommand.
+exec agentctl claude --help
+stdout 'status'
+stdout 'watch'
+stdout 'login'
+stdout 'accounts'
+stdout 'import'
+stdout 'doctor'
+
+# Each supported shell gets its script on stdout.
+exec agentctl completions zsh
+stdout '^#compdef agentctl'
+
+exec agentctl completions bash
+stdout '_agentctl'
+
+exec agentctl completions fish
+stdout 'complete -c agentctl'
+
+exec agentctl completions powershell
+stdout 'agentctl'
+
+# An unsupported shell is a usage error that names the supported set.
+! exec agentctl completions tcsh
+stderr 'supported shells are bash, zsh, fish, and powershell'
+
+! exec agentctl completions elvish
+stderr 'supported shells are bash, zsh, fish, and powershell'
+
+# Unknown commands are refused before anything runs.
+! exec agentctl bogus
+stderr 'unknown command'
+
+! exec agentctl claude bogus
+stderr 'agentctl claude --help'
