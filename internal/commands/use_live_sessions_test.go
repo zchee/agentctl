@@ -15,10 +15,13 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	gocmp "github.com/google/go-cmp/cmp"
@@ -35,12 +38,12 @@ func TestUseSessionHintsBoundedAndNamesStayHumanOnly(t *testing.T) {
 		name       string
 		symlink    bool
 		missing    bool
-		unreadable bool
+		unreadable string
 		count      int
 		wantName   string
 	}{
 		"success: missing registry is silent":                {missing: true},
-		"error: non-directory registry is unreadable":        {unreadable: true},
+		"error: non-directory registry is unreadable":        {unreadable: "not a directory"},
 		"success: active bridged process has sanitized name": {name: "a.json", body: fmt.Sprintf(`{"pid":%d,"bridgeSessionId":"private-id","name":"  hello`+"`"+`\nworld  "}`, os.Getpid()), count: 1, wantName: "hello'world"},
 		"success: absent pid uses numeric filename":          {name: fmt.Sprintf("%d.json", os.Getpid()), body: `{"bridgeSessionId":"private-id"}`, count: 1},
 		"success: zero pid is not a session":                 {name: "a.json", body: `{"pid":0,"bridgeSessionId":"private-id"}`},
@@ -53,7 +56,7 @@ func TestUseSessionHintsBoundedAndNamesStayHumanOnly(t *testing.T) {
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "registry")
-			if test.unreadable {
+			if test.unreadable != "" {
 				if err := os.WriteFile(dir, nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -95,6 +98,79 @@ func TestUseSessionHintsBoundedAndNamesStayHumanOnly(t *testing.T) {
 				}
 			} else if hints.consent() != "" || hints.completion(false) != "" {
 				t.Fatal("empty scan produced an advisory")
+			}
+		})
+	}
+}
+
+func TestUseSessionErrorKind(t *testing.T) {
+	tests := map[string]struct {
+		err  error
+		want string
+	}{
+		"error: missing sentinel":            {fs.ErrNotExist, "entity not found"},
+		"error: permission sentinel":         {fs.ErrPermission, "permission denied"},
+		"error: exists sentinel":             {fs.ErrExist, "entity already exists"},
+		"error: invalid sentinel":            {fs.ErrInvalid, "invalid input parameter"},
+		"error: unsupported sentinel":        {errors.ErrUnsupported, "unsupported"},
+		"error: oversized arguments":         {syscall.E2BIG, "argument list too long"},
+		"error: address in use":              {syscall.EADDRINUSE, "address in use"},
+		"error: address unavailable":         {syscall.EADDRNOTAVAIL, "address not available"},
+		"error: resource busy":               {syscall.EBUSY, "resource busy"},
+		"error: aborted connection":          {syscall.ECONNABORTED, "connection aborted"},
+		"error: refused connection":          {syscall.ECONNREFUSED, "connection refused"},
+		"error: reset connection":            {syscall.ECONNRESET, "connection reset"},
+		"error: deadlock":                    {syscall.EDEADLK, "deadlock"},
+		"error: quota":                       {syscall.EDQUOT, "quota exceeded"},
+		"error: exists errno":                {syscall.EEXIST, "entity already exists"},
+		"error: oversized file":              {syscall.EFBIG, "file too large"},
+		"error: unreachable host":            {syscall.EHOSTUNREACH, "host unreachable"},
+		"error: interrupted":                 {syscall.EINTR, "operation interrupted"},
+		"error: invalid errno":               {syscall.EINVAL, "invalid input parameter"},
+		"error: directory":                   {syscall.EISDIR, "is a directory"},
+		"error: symlink loop":                {syscall.ELOOP, "filesystem loop or indirection limit (e.g. symlink loop)"},
+		"error: missing errno":               {syscall.ENOENT, "entity not found"},
+		"error: exhausted memory":            {syscall.ENOMEM, "out of memory"},
+		"error: full storage":                {syscall.ENOSPC, "no storage space"},
+		"error: unimplemented operation":     {syscall.ENOSYS, "unsupported"},
+		"error: unsupported operation":       {syscall.EOPNOTSUPP, "unsupported"},
+		"error: too many links":              {syscall.EMLINK, "too many links"},
+		"error: invalid filename":            {syscall.ENAMETOOLONG, "invalid filename"},
+		"error: network down":                {syscall.ENETDOWN, "network down"},
+		"error: unreachable network":         {syscall.ENETUNREACH, "network unreachable"},
+		"error: disconnected":                {syscall.ENOTCONN, "not connected"},
+		"error: non-directory":               {syscall.ENOTDIR, "not a directory"},
+		"error: nonempty directory":          {syscall.ENOTEMPTY, "directory not empty"},
+		"error: broken pipe":                 {syscall.EPIPE, "broken pipe"},
+		"error: read-only storage":           {syscall.EROFS, "read-only filesystem or storage medium"},
+		"error: unseekable":                  {syscall.ESPIPE, "seek on unseekable file"},
+		"error: stale network handle":        {syscall.ESTALE, "stale network file handle"},
+		"error: timeout":                     {syscall.ETIMEDOUT, "timed out"},
+		"error: busy executable":             {syscall.ETXTBSY, "executable file busy"},
+		"error: cross-device operation":      {syscall.EXDEV, "cross-device link or rename"},
+		"error: operation in progress":       {syscall.EINPROGRESS, "in progress"},
+		"error: process descriptor limit":    {syscall.EMFILE, "too many open files"},
+		"error: system descriptor limit":     {syscall.ENFILE, "too many open files"},
+		"error: access denied":               {syscall.EACCES, "permission denied"},
+		"error: operation denied":            {syscall.EPERM, "permission denied"},
+		"error: try again":                   {syscall.EAGAIN, "operation would block"},
+		"error: would block":                 {syscall.EWOULDBLOCK, "operation would block"},
+		"error: unclassified descriptor":     {syscall.EBADF, "uncategorized error"},
+		"error: unclassified input output":   {syscall.EIO, "uncategorized error"},
+		"error: unknown errno":               {syscall.Errno(123456), "uncategorized error"},
+		"error: arbitrary payload is hidden": {errors.New("private-registry-payload"), "other error"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			for label, err := range map[string]error{
+				"direct":  test.err,
+				"wrapped": &os.PathError{Op: "readdir", Path: "private-registry-path", Err: fmt.Errorf("private-registry-context: %w", test.err)},
+			} {
+				t.Run(label, func(t *testing.T) {
+					if diff := gocmp.Diff(test.want, useSessionErrorKind(err)); diff != "" {
+						t.Fatal(diff)
+					}
+				})
 			}
 		})
 	}

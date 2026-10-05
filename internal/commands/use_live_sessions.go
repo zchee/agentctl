@@ -19,12 +19,14 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/zchee/agentctl/internal/runtime/proc"
@@ -33,13 +35,16 @@ import (
 
 type useSessionHints struct {
 	names      []string
-	unreadable bool
+	unreadable string
 }
 
 func useScanSessions(ctx context.Context, dir string) useSessionHints {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return useSessionHints{unreadable: !os.IsNotExist(err)}
+		if os.IsNotExist(err) {
+			return useSessionHints{}
+		}
+		return useSessionHints{unreadable: useSessionErrorKind(err)}
 	}
 	var result useSessionHints
 	considered := 0
@@ -95,6 +100,106 @@ func useScanSessions(ctx context.Context, dir string) useSessionHints {
 		result.names = append(result.names, name)
 	}
 	return result
+}
+
+// useSessionErrorKind reports only the failure class, never a path or error payload.
+func useSessionErrorKind(err error) string {
+	errno, ok := errors.AsType[syscall.Errno](err)
+	if !ok {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return "entity not found"
+		case errors.Is(err, fs.ErrPermission):
+			return "permission denied"
+		case errors.Is(err, fs.ErrExist):
+			return "entity already exists"
+		case errors.Is(err, fs.ErrInvalid):
+			return "invalid input parameter"
+		case errors.Is(err, errors.ErrUnsupported):
+			return "unsupported"
+		}
+		return "other error"
+	}
+	switch errno {
+	case syscall.EACCES, syscall.EPERM:
+		return "permission denied"
+	case syscall.E2BIG:
+		return "argument list too long"
+	case syscall.EADDRINUSE:
+		return "address in use"
+	case syscall.EADDRNOTAVAIL:
+		return "address not available"
+	case syscall.EBUSY:
+		return "resource busy"
+	case syscall.ECONNABORTED:
+		return "connection aborted"
+	case syscall.ECONNREFUSED:
+		return "connection refused"
+	case syscall.ECONNRESET:
+		return "connection reset"
+	case syscall.EDEADLK:
+		return "deadlock"
+	case syscall.EDQUOT:
+		return "quota exceeded"
+	case syscall.EEXIST:
+		return "entity already exists"
+	case syscall.EFBIG:
+		return "file too large"
+	case syscall.EHOSTUNREACH:
+		return "host unreachable"
+	case syscall.EINTR:
+		return "operation interrupted"
+	case syscall.EINVAL:
+		return "invalid input parameter"
+	case syscall.EISDIR:
+		return "is a directory"
+	case syscall.ELOOP:
+		return "filesystem loop or indirection limit (e.g. symlink loop)"
+	case syscall.ENOENT:
+		return "entity not found"
+	case syscall.ENOMEM:
+		return "out of memory"
+	case syscall.ENOSPC:
+		return "no storage space"
+	case syscall.ENOSYS, syscall.EOPNOTSUPP:
+		return "unsupported"
+	case syscall.EMLINK:
+		return "too many links"
+	case syscall.ENAMETOOLONG:
+		return "invalid filename"
+	case syscall.ENETDOWN:
+		return "network down"
+	case syscall.ENETUNREACH:
+		return "network unreachable"
+	case syscall.ENOTCONN:
+		return "not connected"
+	case syscall.ENOTDIR:
+		return "not a directory"
+	case syscall.ENOTEMPTY:
+		return "directory not empty"
+	case syscall.EPIPE:
+		return "broken pipe"
+	case syscall.EROFS:
+		return "read-only filesystem or storage medium"
+	case syscall.ESPIPE:
+		return "seek on unseekable file"
+	case syscall.ESTALE:
+		return "stale network file handle"
+	case syscall.ETIMEDOUT:
+		return "timed out"
+	case syscall.ETXTBSY:
+		return "executable file busy"
+	case syscall.EXDEV:
+		return "cross-device link or rename"
+	case syscall.EINPROGRESS:
+		return "in progress"
+	case syscall.EMFILE, syscall.ENFILE:
+		return "too many open files"
+	}
+	if errno == syscall.EAGAIN || errno == syscall.EWOULDBLOCK {
+		return "operation would block"
+	}
+	return "uncategorized error"
 }
 
 func (p SessionProcess) tellUseSessions(ctx context.Context, hints useSessionHints, report *useReport) {

@@ -43,6 +43,10 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 		empty              bool
 		expired            bool
 		decline            bool
+		human              bool
+		undo               bool
+		sessionHints       bool
+		registryFailure    string
 		envToken           bool
 		auditRefused       bool
 		mismatch           bool
@@ -69,6 +73,15 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 		"error: installed profile mismatch refuses before adoption":            {live: true, mismatch: true, kind: claude.SwapRefused, refusal: claude.SwapCannotAdopt, profiles: 2},
 		"success: unavailable installed profile does not block owned write":    {live: true, profileUnavailable: true, kind: claude.SwapApplied, profiles: 2, writes: 1},
 		"error: peer busy occurs only after outgoing copy is preserved":        {live: true, busy: true, kind: claude.SwapBusy, profiles: 2},
+		"error: nonterminal forward JSON cancellation hides session labels":    {live: true, decline: true, sessionHints: true, kind: claude.SwapCancelled, profiles: 1},
+		"error: nonterminal forward human cancellation hides session labels":   {live: true, decline: true, human: true, sessionHints: true, kind: claude.SwapCancelled, profiles: 1},
+		"error: nonterminal undo JSON cancellation hides session labels":       {live: true, decline: true, undo: true, sessionHints: true, kind: claude.SwapCancelled, profiles: 1},
+		"error: nonterminal undo human cancellation hides session labels":      {live: true, decline: true, undo: true, human: true, sessionHints: true, kind: claude.SwapCancelled, profiles: 1},
+		"error: unreadable registry JSON note retains permission cause":        {live: true, decline: true, registryFailure: "permission denied", kind: claude.SwapCancelled, profiles: 1},
+		"error: unreadable registry human note retains permission cause":       {live: true, decline: true, human: true, registryFailure: "permission denied", kind: claude.SwapCancelled, profiles: 1},
+		"error: non-directory registry note retains cause without its path":    {live: true, decline: true, registryFailure: "not a directory", kind: claude.SwapCancelled, profiles: 1},
+		"success: namespace never scans an unreadable live registry":           {registryFailure: "not a directory", kind: claude.SwapApplied, writes: 1},
+		"error: environment refusal suppresses unreadable registry note":       {live: true, envToken: true, registryFailure: "not a directory", kind: claude.SwapRefused, refusal: claude.SwapEnvToken},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -111,6 +124,40 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 			env.OAuthTokenSet = test.envToken
 			if test.live {
 				if err := os.Mkdir(claude.LiveStoreDir(&env), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.sessionHints {
+				dir := claude.SessionsDir(&env)
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				body := fmt.Sprintf(`{"pid":%d,"bridgeSessionId":"private-bridge-id","name":"private-session-label"}`, os.Getpid())
+				if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if hints := useScanSessions(t.Context(), dir); !gocmp.Equal(hints.names, []string{"private-session-label"}) {
+					t.Fatalf("session fixture was not recognized: %+v", hints)
+				}
+			}
+			if test.registryFailure != "" {
+				dir := claude.SessionsDir(&env)
+				if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if test.registryFailure == "permission denied" {
+					if err := os.Mkdir(dir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					defer func() {
+						if err := os.Chmod(dir, 0o700); err != nil {
+							t.Error(err)
+						}
+					}()
+					if err := os.Chmod(dir, 0); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(dir, nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -174,7 +221,12 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 			if test.live {
 				store = nil
 			}
-			report := swap.swapIn(t.Context(), useIncoming{record: incoming, direction: secret.DirectionForward, source: useSource{kind: useSourceOwn}}, store, cli.ClaudeUseOptions{Yes: !test.decline, JSON: test.decline})
+			direction := secret.DirectionForward
+			if test.undo {
+				direction = secret.DirectionUndo
+			}
+			opts := cli.ClaudeUseOptions{Yes: !test.decline, JSON: test.decline && !test.human}
+			report := swap.swapIn(t.Context(), useIncoming{record: incoming, direction: direction, source: useSource{kind: useSourceOwn}}, store, opts)
 			if diff := gocmp.Diff(test.kind, report.outcome.Kind); diff != "" {
 				t.Fatalf("outcome (-want +got): %s; report=%+v; stderr=%s", diff, report, stderr.String())
 			}
@@ -197,11 +249,46 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 				t.Fatalf("writes=%d want=%d; log=%v", writes, test.writes, fixture.SecurityLog())
 			}
 			if test.decline {
-				if !strings.Contains(stdout.String(), `"kind": "plan"`) {
+				if opts.JSON && !strings.Contains(stdout.String(), `"kind": "plan"`) {
 					t.Fatalf("missing JSON plan: %s", stdout.String())
+				}
+				if err := process.emitUse(report, opts.JSON); err != nil {
+					t.Fatal(err)
+				}
+				if report.outcome.ExitCode() != 20 || report.note == nil || !strings.Contains(*report.note, "standard input is not a terminal") || !strings.Contains(*report.note, "--yes") {
+					t.Fatalf("missing nonterminal cancellation advice: %+v", report)
+				}
+				for _, output := range []string{stdout.String(), stderr.String(), *report.note} {
+					for _, private := range []string{"private-session-label", "private-bridge-id"} {
+						if strings.Contains(output, private) {
+							t.Fatalf("nonterminal cancellation exposed %q", private)
+						}
+					}
 				}
 				if _, err := os.Stat(filepath.Join(ownerDir, secret.AdoptedFile)); !os.IsNotExist(err) {
 					t.Fatalf("adopted before consent: %v", err)
+				}
+			}
+			if test.registryFailure != "" {
+				expected := fmt.Sprintf("agentctl could not read Claude Code's session registry (%s), so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again", test.registryFailure)
+				wantCount := 1
+				if !test.live || test.envToken {
+					wantCount = 0
+				}
+				if got := strings.Count(stderr.String(), "note: "+expected+"\n"); got != wantCount {
+					t.Fatalf("registry advisory count=%d want=%d; stderr=%s", got, wantCount, stderr.String())
+				}
+				warningCount := 0
+				for _, warning := range report.warnings {
+					if warning == expected {
+						warningCount++
+					}
+					if strings.Contains(warning, claude.SessionsDir(&env)) {
+						t.Fatal("registry warning exposed its path")
+					}
+				}
+				if warningCount != wantCount {
+					t.Fatalf("registry JSON warning count=%d want=%d; warnings=%v", warningCount, wantCount, report.warnings)
 				}
 			}
 			if test.live {

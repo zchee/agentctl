@@ -32,6 +32,7 @@ import (
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/fault"
+	"github.com/zchee/agentctl/internal/runtime/tty"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -90,8 +91,8 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	var hints useSessionHints
 	if swap.live {
 		hints = useScanSessions(ctx, claude.SessionsDir(swap.env))
-		if hints.unreadable {
-			swap.noteUse(ctx, warnings, "agentctl could not read Claude Code's session registry, so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again")
+		if hints.unreadable != "" {
+			swap.noteUse(ctx, warnings, fmt.Sprintf("agentctl could not read Claude Code's session registry (%s), so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again", hints.unreadable))
 		}
 	}
 	item, err := useReadKeychain(ctx, secret.NewReader(), service)
@@ -268,8 +269,11 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		if configPath != nil {
 			configClause = claude.ConfigPlanLine(claude.ConfigShownPath(*configPath, swap.env.Home))
 		}
-		question := fmt.Sprintf("%s the credential in `%s` (digest %s) with `%s`'s (digest %s)%s? It takes effect on your next message, within 30 s; run `/model` once afterwards to refresh model access", verb, subject.storeDir, from, who, planned, configClause) + hints.consent()
+		question := fmt.Sprintf("%s the credential in `%s` (digest %s) with `%s`'s (digest %s)%s? It takes effect on your next message, within 30 s; run `/model` once afterwards to refresh model access", verb, subject.storeDir, from, who, planned, configClause)
 		in, _ := swap.process.In.(*os.File)
+		if tty.IsTerminal(in) {
+			question += hints.consent()
+		}
 		confirmed, err := (TerminalPrompt{In: in, Out: swap.process.Out}).Confirm(ctx, question)
 		if !confirmed || err != nil {
 			note := "cancelled at the confirmation prompt"
