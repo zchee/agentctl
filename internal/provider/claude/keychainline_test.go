@@ -26,9 +26,9 @@ import (
 	"github.com/zchee/agentctl/internal/errs"
 )
 
-// liveService is the live keychain item's service name, spelled out here
-// so the line vectors do not wait for the namespace rules.
-const liveService = "Claude Code-credentials"
+// liveService is the live keychain item's service name the line vectors
+// target.
+const liveService = LiveService
 
 // lineBytes captures the bytes a line puts on a pipe.
 func lineBytes(t *testing.T, line *KeychainStdinLine) []byte {
