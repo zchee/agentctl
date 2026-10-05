@@ -108,6 +108,21 @@ var organizationPlans = [4][2]string{
 // the caller can tell "the token is no longer honoured" from "the server
 // could not be asked".
 func (c *OAuthClient) ProfileOf(ctx context.Context, credentials *Credentials) (*Profile, error) {
+	document, err := c.ProfileDocument(ctx, credentials)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := ParseProfile(document)
+	if err != nil {
+		return nil, provider.NewFetchParse("the profile response could not be parsed: " + err.Error())
+	}
+	return profile, nil
+}
+
+// ProfileDocument fetches a bounded JSON profile without imposing an identity
+// schema. Callers must validate the members they use and never log the document.
+// Transport and parse failures never include unredacted response bytes.
+func (c *OAuthClient) ProfileDocument(ctx context.Context, credentials *Credentials) (jsontext.Value, error) {
 	if ctx.Err() != nil {
 		return nil, provider.NewFetchCancelled()
 	}
@@ -158,11 +173,7 @@ func (c *OAuthClient) ProfileOf(ctx context.Context, credentials *Credentials) (
 		// account's personal data.
 		return nil, provider.NewFetchParse("the profile response could not be parsed: it is not a JSON document")
 	}
-	profile, err := ParseProfile(document)
-	if err != nil {
-		return nil, provider.NewFetchParse("the profile response could not be parsed: " + err.Error())
-	}
-	return profile, nil
+	return document, nil
 }
 
 // ParseProfile holds a profile document to the required schema.
