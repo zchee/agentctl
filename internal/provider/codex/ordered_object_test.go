@@ -51,7 +51,7 @@ func TestOrderedObjectDecoders(t *testing.T) {
 			},
 		},
 		"success: escaped duplicate names share a position": {
-			input:    `{"alpha":1,"beta":2,"alpha":3}`,
+			input:    `{"alpha":1,"beta":2,"\u0061lpha":3}`,
 			wantAuth: `{"alpha":3,"beta":2}`,
 			wantUsage: usageMembers{
 				{name: "alpha", value: jsontext.Value("3")},
