@@ -29,6 +29,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/awnumar/memguard"
 	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/config"
@@ -616,6 +617,9 @@ func classifyOpen(shown string, err error) (ReadOutcome, error) {
 	return ReadOutcome{}, errs.NewIO(fmt.Sprintf("could not open `%s`", shown), err)
 }
 
+// readSecretFileBytes is replaceable only by a test in this package.
+var readSecretFileBytes = io.ReadAll
+
 // readOpened applies the regular-file and size rules to an open descriptor,
 // consuming it.
 func readOpened(fd int, shown string, limit int64) (ReadOutcome, error) {
@@ -634,11 +638,13 @@ func readOpened(fd int, shown string, limit int64) (ReadOutcome, error) {
 
 	// Bounded by one byte past the limit so a file that grew between the
 	// stat and the read is caught rather than read unboundedly.
-	bytes, err := io.ReadAll(io.LimitReader(file, limit+1))
+	bytes, err := readSecretFileBytes(io.LimitReader(file, limit+1))
 	if err != nil {
+		memguard.WipeBytes(bytes)
 		return ReadOutcome{}, errs.NewIO(fmt.Sprintf("could not read `%s`", shown), err)
 	}
 	if int64(len(bytes)) > limit {
+		memguard.WipeBytes(bytes)
 		return ReadOutcome{}, &TooLargeError{Path: shown, Size: int64(len(bytes)), Limit: limit}
 	}
 	return ReadOutcome{Present: true, Bytes: bytes, Snap: snapshotOf(info)}, nil

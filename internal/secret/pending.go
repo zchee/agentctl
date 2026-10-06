@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/awnumar/memguard"
 	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/config"
@@ -239,6 +240,7 @@ func ResolvePendingWith(dir int, shown string, spec *PendingSpec, foreignTakenOv
 	case err != nil && !cred.UnusableIsAbsent() && isOpenFailure(err):
 		return PendingDecision{}, nil, err
 	case err == nil && outcome.Present:
+		defer memguard.WipeBytes(outcome.Bytes)
 		pendingBytes = outcome.Bytes
 	}
 	var pendingDigests *Digests
@@ -252,6 +254,7 @@ func ResolvePendingWith(dir int, shown string, spec *PendingSpec, foreignTakenOv
 	case err != nil && !cred.UnusableIsAbsent() && isOpenFailure(err):
 		return PendingDecision{}, nil, err
 	case err == nil && outcome.Present:
+		defer memguard.WipeBytes(outcome.Bytes)
 		var parsed pendingMetaIn
 		if json.Unmarshal(outcome.Bytes, &parsed) == nil && parsed.CreatedAt != nil {
 			meta = &parsed
@@ -294,6 +297,7 @@ func ResolvePendingWith(dir int, shown string, spec *PendingSpec, foreignTakenOv
 	case err != nil:
 		return PendingDecision{}, nil, err
 	case outcome.Present:
+		defer memguard.WipeBytes(outcome.Bytes)
 		digests, ok := cred.Digests(outcome.Bytes)
 		switch {
 		case ok:
