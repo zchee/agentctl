@@ -1,5 +1,27 @@
 # Provenance: tests/e2e_codex_accounts_refresh.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; real loopback servers count every GET and POST, and refused actions preserve marker bytes and namespace manifests.
 
+# set_never_makes_the_next_pass_post_nothing_and_auto_restores_it
+codex-status-fixture owned-expired
+codex-manifest save $C_NAMESPACE
+exec agentctl codex accounts set $C_USER --refresh never
+codex-refresh-policy never
+! exists $C_MARKER
+codex-manifest check $C_NAMESPACE
+exec expectexit 2 agentctl codex status
+stdout 'expired'
+stdout 'agentctl codex login'
+cp stdout status-never
+cp stderr status-never-err
+codex-status-calls 0 0
+codex-status-check needles status-never status-never-err
+exec agentctl codex accounts set $C_USER --refresh auto
+codex-refresh-policy auto
+exec agentctl codex status
+codex-status-calls 1 1
+cp stdout status-auto
+cp stderr status-auto-err
+codex-status-check needles status-auto status-auto-err
+
 # set_names_a_row_it_cannot_change
 codex-status-fixture owned
 cp $C_CONFIG/config.json registry-before
