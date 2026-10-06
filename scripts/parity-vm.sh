@@ -7,8 +7,10 @@ set -euo pipefail
 export TART_NO_AUTO_PRUNE=1
 umask 077
 completed=0
+lifecycle_lock=
 finish() {
   local status=$?
+  if [[ -n "$lifecycle_lock" ]]; then rmdir "$lifecycle_lock" || status=1; fi
   if [[ "$completed" != 1 ]]; then
     printf 'FAIL parity VM: aborted before completion (exit=%s); VMs retained\n' "$status" >&2
     [[ "$status" != 0 ]] || status=1
@@ -98,6 +100,25 @@ done
 recorded_paths() {
   local kind=$1 left=$2 right=$3
   jq -ers --arg kind "$kind" --slurpfile right "$right" '
+    # Only these declared optional leaves admit null, with their non-null type.
+    def nullable:
+      if $kind == "registry" then {
+        "[].accounts.[].email": "string", "[].accounts.[].org_name": "string",
+        "[].codex_accounts.[].email": "string", "[].codex_accounts.[].plan_type": "string"
+      } elif $kind == "audit" or $kind == "claude-audit" then {
+        "[].digest8_before": "string", "[].digest8_after": "string",
+        "[].from_digest8": "string", "[].from_sha8": "string", "[].to_sha8": "string",
+        "[].hold_ms": "number", "[].after": "string"
+      } elif $kind == "claude-status" or $kind == "codex-status" then {
+        "[].rows.[].email": "string", "[].rows.[].org_name": "string",
+        "[].rows.[].identity.email": "string", "[].rows.[].identity.org_name": "string",
+        "[].rows.[].identity.plan_type": "string", "[].rows.[].windows.[].percent": "number",
+        "[].rows.[].windows.[].percent_floor": "number", "[].rows.[].windows.[].resets_at": "string",
+        "[].rows.[].credits.used_minor": "number", "[].rows.[].credits.limit_minor": "number",
+        "[].rows.[].credits.percent": "number", "[].rows.[].next_reset": "string",
+        "[].rows.[].session_reset": "string", "[].rows.[].weekly_reset": "string"
+      } + (if $kind == "codex-status" then {"[].rows.[].credits.balance": "string"} else {} end)
+      else {} end;
     def changes($a; $b; $p):
       if ($a|type) == "object" or ($b|type) == "object" then
         if ($a|type) != ($b|type) or ($a|keys) != ($b|keys) then error("structure")
@@ -105,7 +126,12 @@ recorded_paths() {
       elif ($a|type) == "array" or ($b|type) == "array" then
         if ($a|type) != ($b|type) or ($a|length) != ($b|length) then error("structure")
         else range(0; $a|length) as $i | changes($a[$i]; $b[$i]; $p + [$i]) end
-      elif $a != $b then $p | map(if type == "number" then "[]" else . end) | join(".")
+      elif $a != $b then
+        ($p | map(if type == "number" then "[]" else . end) | join(".")) as $path |
+        if ($a|type) == ($b|type) or
+          (nullable[$path] as $type | $type != null and
+            all($a, $b; type == "null" or type == $type))
+        then $path else error("scalar type") end
       else empty end;
     # Vendor identities may come from independent authorizations.
     def registry_vendor: [
@@ -226,6 +252,14 @@ fi
 for tool in tart ssh scp sshpass; do
   command -v "$tool" >/dev/null || exit 1
 done
+# Serialize decisions and marker updates made by this work directory.
+if ! mkdir "$work/lifecycle.lock"; then
+  printf 'FAIL lifecycle lock held: %s; inspect the prior invocation before retrying\n' "$work/lifecycle.lock" >&2
+  exit 1
+fi
+lifecycle_lock="$work/lifecycle.lock"
+tart_home=${TART_HOME:-$HOME/.tart}
+[[ "$tart_home" == /* ]] || exit 1
 export SSHPASS=${PARITY_SSH_PASSWORD:-admin}
 ssh_options=(-o "UserKnownHostsFile=$work/known_hosts" -o StrictHostKeyChecking=accept-new
   -o ConnectTimeout=10 -o LogLevel=ERROR -o PubkeyAuthentication=no -o PreferredAuthentications=password)
@@ -235,16 +269,60 @@ exists() {
   names=$(tart list --source local --quiet) || exit $?
   grep -Fqx -- "$1" <<< "$names"
 }
+vm_identity() {
+  local directory="$tart_home/vms/$1" identity
+  [[ -d "$directory" && ! -L "$directory" && -f "$directory/config.json" ]] || return 1
+  # Native stat avoids a GNU stat earlier on PATH interpreting -f differently.
+  identity=$(/usr/bin/stat -f '%d:%i:%B' "$directory") || return 1
+  jq -ce --arg directory "$directory" --arg identity "$identity" '
+    select((.macAddress|type) == "string" and (.ecid|type) == "string") |
+    {directory: $directory, identity: $identity, mac_address: .macAddress, ecid: .ecid}
+  ' "$directory/config.json"
+}
+snapshot_digest() {
+  local file="$work/base-state.txt"
+  [[ -f "$file" ]] || file="$work/base-state.destroyed.txt"
+  [[ -f "$file" ]] || return 1
+  shasum -a 256 "$file" | perl -ane 'print "$F[0]\n"'
+}
 owned() {
-  [[ -f "$work/vms/$1" && "$(< "$work/vms/$1")" == "$1" ]] || {
-    printf 'FAIL refusing unowned VM: %s\n' "$1" >&2
+  local name=$1 identity digest
+  if ! exists "$name" || ! identity=$(vm_identity "$name") ||
+    ! jq -e --arg name "$name" --argjson identity "$identity" '
+      .name == $name and .vm == $identity and
+      (.source|type == "string" and length > 0) and
+      (.created_at|type == "string" and length > 0) and
+      (.base_state_sha256|type == "string")
+    ' "$work/vms/$name" >/dev/null 2>&1; then
+    printf 'FAIL refusing missing or unowned VM/provenance mismatch: %s (snapshot metadata: %s)\n' "$name" "$work/base-state.txt" >&2
     exit 1
-  }
+  fi
+  digest=$(jq -r '.base_state_sha256' "$work/vms/$name")
+  if [[ -n "$digest" ]] && [[ "$digest" != "$(snapshot_digest)" ]]; then
+    printf 'FAIL VM snapshot provenance mismatch: %s (snapshot metadata: %s)\n' "$name" "$work/base-state.txt" >&2
+    exit 1
+  fi
+}
+frozen_base() {
+  if ! grep -Fqx "Base: $base" "$work/base-state.txt" || ! exists "$base"; then
+    printf 'FAIL stale snapshot metadata: %s; restore the recorded base or select a new work directory\n' "$work/base-state.txt" >&2
+    exit 1
+  fi
+  owned "$base"
+  if running "$base" || ! jq -e --arg digest "$(snapshot_digest)" \
+    '.base_state_sha256 == $digest' "$work/vms/$base" >/dev/null; then
+    printf 'FAIL stale or running snapshot base: %s; stop the recorded base before retrying\n' "$work/base-state.txt" >&2
+    exit 1
+  fi
 }
 running() {
-  local inventory
+  local inventory state
   inventory=$(tart list --source local --format json) || exit $?
-  jq -e --arg name "$1" 'any(.[]; .Name == $name and .Running == true)' <<< "$inventory" >/dev/null
+  state=$(jq -er --arg name "$1" '
+    [.[] | select(.Name == $name)] | select(length == 1) |
+    .[0].Running | select(type == "boolean") | tostring
+  ' <<< "$inventory") || exit $?
+  [[ "$state" == true ]]
 }
 connect() {
   local name=$1 attempt
@@ -264,26 +342,48 @@ connect() {
 }
 remote() { sshpass -e ssh "${ssh_options[@]}" "$ssh_user@$ip" "$@"; }
 clone() {
-  local source=$1 name=$2
-  if exists "$name"; then owned "$name"; return; fi
-  printf '%s\n' "$name" >| "$work/vms/$name"
-  tart clone "$source" "$name"
+  local source=$1 name=$2 identity digest=
+  if exists "$name"; then
+    owned "$name"
+    jq -e --arg source "$source" '.source == $source' "$work/vms/$name" >/dev/null || exit 1
+    return
+  fi
+  # An absent inventory entry revokes any stale ownership before a new attempt.
+  rm -f "$work/vms/$name"
+  tart clone "$source" "$name" || return $?
+  exists "$name" || exit 1
+  identity=$(vm_identity "$name") || exit 1
+  if [[ "$source" == "$base" ]]; then digest=$(snapshot_digest) || exit 1; fi
+  jq -n --arg name "$name" --arg source "$source" --arg created "$(date '+%Y-%m-%d %H:%M:%S %Z')" \
+    --arg digest "$digest" --argjson identity "$identity" \
+    '{name: $name, source: $source, created_at: $created, vm: $identity, base_state_sha256: $digest}' \
+    >| "$work/vms/$name.pending"
+  mv "$work/vms/$name.pending" "$work/vms/$name"
 }
 stop() {
   if running "$1"; then tart stop "$1"; fi
 }
 delete_vm() {
   local name=$1
-  owned "$name"
-  if exists "$name"; then stop "$name"; tart delete "$name"; fi
+  if exists "$name"; then
+    owned "$name"
+    stop "$name"
+    # Recheck after stopping, immediately before the only destructive Tart call.
+    owned "$name"
+    tart delete "$name"
+    if exists "$name"; then
+      printf 'FAIL deletion not verified: %s; ownership retained\n' "$name" >&2
+      exit 1
+    fi
+  fi
+  rm -f "$work/vms/$name"
   printf 'PASS destroy %s (other VMs retained)\n' "$name"
 }
 case "$command" in
   prepare)
     [[ -f "$root/go.mod" ]] || exit 1
     if [[ -f "$work/base-state.txt" ]]; then
-      owned "$base"
-      grep -Fqx "Base: $base" "$work/base-state.txt" || exit 1
+      frozen_base
       printf 'PASS base already snapshotted; leave it unchanged\n'
       completed=1
       exit 0
@@ -331,11 +431,11 @@ GUEST
     printf 'Answer guest keychain prompts; never use your daily-use account. Quit Claude Code afterwards.\n'
     printf 'Then run on the host: scripts/parity-vm.sh snapshot --base %s --work %q\n' "$base" "$work" ;;
   snapshot)
-    owned "$base"
     if [[ -f "$work/base-state.txt" ]]; then
-      grep -Fqx "Base: $base" "$work/base-state.txt" || exit 1
+      frozen_base
       printf 'PASS snapshot already recorded; base unchanged\n'
     else
+      owned "$base"
       connect "$base"
       remote 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; test ! -e ~/agentctl-parity/store && shasum -a 256 ~/agentctl-parity/bin/agctl ~/agentctl-parity/bin/agentctl && sw_vers && claude --version && codex --version' \
         >| "$work/base-state.pending"
@@ -347,12 +447,15 @@ GUEST
       stop "$base"
       printf 'Measured: %s\nBase: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$base" >> "$work/base-state.pending"
       mv "$work/base-state.pending" "$work/base-state.txt"
+      jq --arg digest "$(snapshot_digest)" '.base_state_sha256 = $digest' "$work/vms/$base" \
+        >| "$work/vms/$base.pending"
+      mv "$work/vms/$base.pending" "$work/vms/$base"
+      frozen_base
       printf 'PASS immutable starting-state snapshot recorded; run only clones after this point\n'
     fi ;;
   run|reset)
-    owned "$base"
     [[ -f "$work/base-state.txt" ]] || { printf 'FAIL snapshot the base first\n'; exit 1; }
-    grep -Fqx "Base: $base" "$work/base-state.txt" || exit 1
+    frozen_base
     if [[ "$command" == reset || "$fresh" == 1 ]]; then
       if exists "$vm"; then delete_vm "$vm"; fi
       if [[ -e "$work/captures/$implementation" ]]; then
