@@ -6,6 +6,11 @@
 # shellcheck disable=SC2016,SC1091
 set -euo pipefail
 export TART_NO_AUTO_PRUNE=1
+export GOTOOLCHAIN=go1.27.1
+# Persisted go env can carry GOEXPERIMENT; an empty override does not clear it.
+export GOENV=off
+# Caller-supplied tags must not turn the release artifact into a testing build.
+export GOFLAGS=
 umask 077
 completed=0
 lifecycle_lock=
@@ -459,8 +464,14 @@ case "$command" in
     reference=${AGCTL_BIN:-/Users/zchee/rust/src/github.com/zchee/agctl/target/debug/agctl}
     [[ "$reference" == /* && -x "$reference" ]] || exit 1
     mkdir -p "$work/bin"
-    GOTOOLCHAIN=go1.27.1 GOFLAGS='' go build -trimpath -ldflags='-s -w' -o "$work/bin/agentctl" "$root"
-    GOTOOLCHAIN=go1.27.1 go version -m "$work/bin/agentctl" >|"$work/build-info.txt"
+    go build -trimpath -ldflags='-s -w' -o "$work/bin/agentctl" "$root"
+    go version -m "$work/bin/agentctl" >|"$work/build-info.txt"
+    IFS= read -r build_version <"$work/build-info.txt"
+    if [[ "$build_version" != "$work/bin/agentctl: $GOTOOLCHAIN" ]]; then
+      printf 'FAIL artifact toolchain: expected %s, got %s\n' "$GOTOOLCHAIN" "$build_version" >&2
+      exit 1
+    fi
+    printf 'PASS artifact toolchain: %s\n' "$GOTOOLCHAIN"
     if grep -q -- '-tags=' "$work/build-info.txt"; then exit 1; fi
     cp "$reference" "$work/bin/agctl"
     shasum -a 256 "$work/bin/agctl" "$work/bin/agentctl" >|"$work/artifact-sha256.txt"

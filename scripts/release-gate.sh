@@ -6,6 +6,8 @@ set -euo pipefail
 unset CDPATH
 repo_root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 export GOTOOLCHAIN=go1.27.1
+# Persisted go env can carry GOEXPERIMENT; an empty override does not clear it.
+export GOENV=off
 # Caller-supplied tags must not turn the release artifact into a testing build.
 export GOFLAGS=
 export LC_ALL=C
@@ -122,6 +124,14 @@ for mode in release testing; do
 		printf 'PASS build %s\n' "$mode"
 	else
 		printf 'FAIL build %s\n' "$mode" >&2
+		exit 1
+	fi
+	go version -m "$work/agentctl-$mode" >|"$work/$mode-build-info"
+	IFS= read -r build_version <"$work/$mode-build-info"
+	if [ "$build_version" = "$work/agentctl-$mode: $GOTOOLCHAIN" ]; then
+		printf 'PASS toolchain %s: %s\n' "$mode" "$GOTOOLCHAIN"
+	else
+		printf 'FAIL toolchain %s: expected %s, got %s\n' "$mode" "$GOTOOLCHAIN" "$build_version" >&2
 		exit 1
 	fi
 	go -C "$repo_root" list ${args[@]+"${args[@]}"} -deps -f '{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}' ./... |
