@@ -53,7 +53,7 @@ codex-login-fixture failed
 exec expectexit 2 agentctl codex login
 cp stdout login-out.txt
 cp stderr login-err.txt
-stderr 'login exited'
+stderr '^agentctl: refused: the Codex login was refused: the login exited with exit status: 17$'
 codex-login-check refused
 
 # an_apikey_login_is_refused_because_it_has_no_usage_source

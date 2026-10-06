@@ -23,6 +23,9 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/config"
 )
@@ -68,7 +71,18 @@ func (r *PostExitReport) anomalies() []string {
 	if r.exit == nil {
 		found = append(found, "the login produced no exit status")
 	} else if !r.exit.Success() {
-		found = append(found, "the login exited with "+r.exit.String())
+		status := fmt.Sprintf("exit status: %d", r.exit.ExitCode())
+		if wait, ok := r.exit.Sys().(syscall.WaitStatus); ok && wait.Signaled() {
+			signal := wait.Signal()
+			status = fmt.Sprintf("signal: %d", signal)
+			if name := unix.SignalName(signal); name != "" {
+				status += " (" + name + ")"
+			}
+			if wait.CoreDump() {
+				status += " (core dumped)"
+			}
+		}
+		found = append(found, "the login exited with "+status)
 	}
 	if len(r.gainedCodexAuth) > 0 {
 		var named []string
