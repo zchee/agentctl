@@ -80,7 +80,13 @@ func codexInvarianceFixture(ts *testscript.TestScript, neg bool, args []string) 
 	})
 }
 
-var codexTranscriptPID = regexp.MustCompile(`pid [0-9]`)
+var (
+	codexTranscriptPID = regexp.MustCompile(`pid [0-9]`)
+	// A doctor expiry is rendered relative to the wall clock (`expired
+	// 20732d1h ago`, `in 3h12m`), so captures taken minutes apart differ
+	// whenever the clock crosses a unit boundary between them.
+	codexTranscriptCountdown = regexp.MustCompile(`\b(expired |in )[0-9]+[dhms](?:[0-9]+[hm])?\b`)
+)
 
 func normalizeCodexTranscript(text string) string {
 	if text == "" {
@@ -92,6 +98,8 @@ func normalizeCodexTranscript(text string) string {
 			line = `  "generated_at": <per-run>`
 		} else if match := codexTranscriptPID.FindStringIndex(line); match != nil {
 			line = line[:match[0]] + "<per-run>"
+		} else {
+			line = codexTranscriptCountdown.ReplaceAllString(line, "${1}<per-run>")
 		}
 		result.WriteString(line)
 		result.WriteByte('\n')
