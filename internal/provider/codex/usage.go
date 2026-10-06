@@ -153,15 +153,20 @@ func Normalize(body jsontext.Value, fetchedAt time.Time, keepRaw bool) (*Usage, 
 		}
 	}
 	if keepRaw {
+		for i, member := range object {
+			if member.name == "email" {
+				last := len(object) - 1
+				object[i] = object[last]
+				object = object[:last]
+				break
+			}
+		}
 		var buffer bytes.Buffer
 		encoder := jsontext.NewEncoder(&buffer)
 		if err := encoder.WriteToken(jsontext.BeginObject); err != nil {
 			return nil, err
 		}
 		for _, member := range object {
-			if member.name == "email" {
-				continue
-			}
 			if err := encoder.WriteToken(jsontext.String(member.name)); err != nil {
 				return nil, err
 			}
