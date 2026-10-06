@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # Disposable macOS parity guests are retained by default. Disable Tart's
 # automatic pruning because the operator keeps other VMs for end-to-end tests.
 # Single-quoted instructions are literal; remote shell expressions expand only in the guest.
@@ -51,13 +52,24 @@ command=$1
 shift
 implementation=
 case "$command" in
-  run|reset)
-    [[ $# -gt 0 ]] || { usage; exit 1; }
+  run | reset)
+    [[ $# -gt 0 ]] || {
+      usage; exit 1
+    }
     implementation=$1
     shift
-    case "$implementation" in reference|go) ;; *) usage; exit 1 ;; esac ;;
-  prepare|snapshot|compare|destroy) ;;
-  *) usage; exit 1 ;;
+    case "$implementation" in
+      reference | go)
+        ;;
+      *)
+        usage; exit 1
+        ;;
+    esac
+    ;;
+  prepare | snapshot | compare | destroy) ;;
+  *)
+    usage; exit 1
+    ;;
 esac
 base=agentctl-e2e-base
 vm=
@@ -67,18 +79,36 @@ ssh_user='admin'
 fresh=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --work|--base|--vm|--image|--ssh-user)
-      [[ $# -ge 2 && -n "$2" ]] || { usage; exit 1; }
+    --work | --base | --vm | --image | --ssh-user)
+      [[ $# -ge 2 && -n "$2" ]] || {
+        usage; exit 1
+      }
       case "$1" in
-        --work) work=$2 ;;
-        --base) base=$2 ;;
-        --vm) vm=$2 ;;
-        --image) image=$2 ;;
-        --ssh-user) ssh_user=$2 ;;
+        --work)
+          work=$2
+          ;;
+        --base)
+          base=$2
+          ;;
+        --vm)
+          vm=$2
+          ;;
+        --image)
+          image=$2
+          ;;
+        --ssh-user)
+          ssh_user=$2
+          ;;
       esac
-      shift 2 ;;
-    --fresh) fresh=1; shift ;;
-    *) usage; exit 1 ;;
+      shift 2
+      ;;
+    --fresh)
+      fresh=1
+      shift
+      ;;
+    *)
+      usage; exit 1
+      ;;
   esac
 done
 [[ "$work" == /* && "$work" != *$'\n'* && "$work" != *$'\r'* ]] || exit 1
@@ -181,20 +211,21 @@ compare_capture() {
     return
   fi
   case "$kind" in
-    claude-status|codex-status)
+    claude-status | codex-status)
       normal_kind=status
       local version=1
       [[ "$kind" != codex-status ]] || version=2
-      if ! jq -e --argjson version "$version" '.version == $version and (.rows|type == "array")' "$left" >/dev/null 2>&1 ||
-        ! jq -e --argjson version "$version" '.version == $version and (.rows|type == "array")' "$right" >/dev/null 2>&1; then
+      if ! jq -e --argjson version "$version" '.version == $version and (.rows|type == "array")' "$left" >/dev/null 2>&1 \
+        || ! jq -e --argjson version "$version" '.version == $version and (.rows|type == "array")' "$right" >/dev/null 2>&1; then
         result FAIL "$step $kind: invalid status document"
         return
-      fi ;;
+      fi
+      ;;
     claude-audit) normal_kind=audit ;;
   esac
-  normalize "$normal_kind" "$left" >| "$left.normalized"
-  normalize "$normal_kind" "$right" >| "$right.normalized"
-  if diff -u "$left.normalized" "$right.normalized" >| "$work/captures/$step.$kind.diff"; then
+  normalize "$normal_kind" "$left" >|"$left.normalized"
+  normalize "$normal_kind" "$right" >|"$right.normalized"
+  if diff -u "$left.normalized" "$right.normalized" >|"$work/captures/$step.$kind.diff"; then
     result PASS "$step $kind bytes (exit=0)"
   else
     status=$?
@@ -215,9 +246,11 @@ compare_runs() {
       if [[ ! -f "$file" ]]; then
         result FAIL "$step $implementation command: missing exit"
       else
-        code=$(< "$file")
-        if [[ "$code" == 0 ]]; then result PASS "$step $implementation command (exit=0)"
-        elif [[ "$code" =~ ^[0-9]+$ ]]; then result FAIL "$step $implementation command (exit=$code)"
+        code=$(<"$file")
+        if [[ "$code" == 0 ]]; then
+          result PASS "$step $implementation command (exit=0)"
+        elif [[ "$code" =~ ^[0-9]+$ ]]; then
+          result FAIL "$step $implementation command (exit=$code)"
         else result FAIL "$step $implementation command: invalid exit capture"; fi
       fi
     done
@@ -230,13 +263,13 @@ compare_runs() {
       recorded=$((recorded + 1))
       printf 'RECORDED %s already-active outcome; not a reversal test\n' "$implementation"
     else result FAIL "$implementation expected already-active forward outcome not observed"; fi
-    if [[ -f "$work/captures/$implementation/DONE" ]] && [[ "$(< "$work/captures/$implementation/DONE")" == "$implementation" ]]; then
+    if [[ -f "$work/captures/$implementation/DONE" ]] && [[ "$(<"$work/captures/$implementation/DONE")" == "$implementation" ]]; then
       result PASS "$implementation completed guest sequence"
     else result FAIL "$implementation missing DONE marker"; fi
     for kind in claude codex; do
       file="$work/captures/$implementation/codex-auto-$implementation.$kind-status-exit"
-      if [[ -f "$file" && "$(< "$file")" == 0 ]] &&
-        jq -e '[.rows[] | select(.state == "ok")] | length > 0' \
+      if [[ -f "$file" && "$(<"$file")" == 0 ]] \
+        && jq -e '[.rows[] | select(.state == "ok")] | length > 0' \
           "$work/captures/$implementation/codex-auto-$implementation.$kind-status" >/dev/null 2>&1; then
         result PASS "$implementation final $kind real usage success"
       else result FAIL "$implementation final $kind real usage success unavailable"; fi
@@ -258,7 +291,7 @@ done
 if ! mkdir "$work/lifecycle.lock"; then
   owner='unavailable'
   if [[ -f "$work/lifecycle.lock/owner" ]]; then
-    IFS= read -r owner < "$work/lifecycle.lock/owner" || true
+    IFS= read -r owner <"$work/lifecycle.lock/owner" || true
   fi
   printf 'FAIL lifecycle lock held: %s; owner: %s\n' "$work/lifecycle.lock" "$owner" >&2
   owner_pid=$(printf '%s\n' "$owner" | perl -ne 'print $1 if /^pid=([0-9]+) /')
@@ -270,7 +303,7 @@ if ! mkdir "$work/lifecycle.lock"; then
   exit 1
 fi
 lifecycle_lock="$work/lifecycle.lock"
-printf 'pid=%s started=%s command=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$command" >| "$lifecycle_lock/owner"
+printf 'pid=%s started=%s command=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$command" >|"$lifecycle_lock/owner"
 tart_home=${TART_HOME:-$HOME/.tart}
 [[ "$tart_home" == /* ]] || exit 1
 export SSHPASS=${PARITY_SSH_PASSWORD:-admin}
@@ -280,7 +313,7 @@ ip=
 exists() {
   local names
   names=$(tart list --source local --quiet) || exit $?
-  grep -Fqx -- "$1" <<< "$names"
+  grep -Fqx -- "$1" <<<"$names"
 }
 vm_identity() {
   local directory="$tart_home/vms/$1" identity
@@ -304,8 +337,8 @@ creation_digest() {
 }
 owned() {
   local name=$1 identity digest nonce provenance sidecar="$tart_home/vms/$1/.agentctl-parity-owner.json"
-  if ! exists "$name" || ! identity=$(vm_identity "$name") ||
-    ! jq -e --arg name "$name" --argjson identity "$identity" '
+  if ! exists "$name" || ! identity=$(vm_identity "$name") \
+    || ! jq -e --arg name "$name" --argjson identity "$identity" '
       .name == $name and .vm == $identity and
       (.source|type == "string" and length > 0) and
       (.created_at|type == "string" and length > 0) and
@@ -316,8 +349,8 @@ owned() {
   fi
   nonce=$(jq -r '.nonce // ""' "$work/vms/$name") || exit 1
   provenance=$(creation_digest "$work/vms/$name") || exit 1
-  if [[ ! "$nonce" =~ ^[0-9a-f]{32}$ || ! -f "$sidecar" || -L "$sidecar" ]] ||
-    ! jq -e --arg nonce "$nonce" --arg digest "$provenance" \
+  if [[ ! "$nonce" =~ ^[0-9a-f]{32}$ || ! -f "$sidecar" || -L "$sidecar" ]] \
+    || ! jq -e --arg nonce "$nonce" --arg digest "$provenance" \
       '.nonce == $nonce and .provenance_sha256 == $digest' "$sidecar" >/dev/null 2>&1; then
     printf 'FAIL VM creation sidecar missing or nonce/provenance mismatch: %s\n' "$name" >&2
     exit 1
@@ -346,7 +379,7 @@ running() {
   state=$(jq -er --arg name "$1" '
     [.[] | select(.Name == $name)] | select(length == 1) |
     .[0].Running | select(type == "boolean") | tostring
-  ' <<< "$inventory") || exit $?
+  ' <<<"$inventory") || exit $?
   [[ "$state" == true ]]
 }
 connect() {
@@ -354,11 +387,11 @@ connect() {
   owned "$name"
   if ! running "$name"; then
     # Detach stdin and all output so the hypervisor survives this script returning.
-    nohup tart run --no-graphics "$name" </dev/null >| "$work/$name-tart.log" 2>&1 &
+    nohup tart run --no-graphics "$name" </dev/null >|"$work/$name-tart.log" 2>&1 &
   fi
   ip=$(tart ip "$name" --wait 180)
   [[ "$ip" =~ ^[0-9a-fA-F:.]+$ ]] || exit 1
-  for ((attempt=0; attempt<30; attempt++)); do
+  for ((attempt = 0; attempt < 30; attempt++)); do
     if sshpass -e ssh "${ssh_options[@]}" "$ssh_user@$ip" true; then return; fi
     sleep 2
   done
@@ -385,11 +418,11 @@ clone() {
   jq -n --arg name "$name" --arg source "$source" --arg created "$(date '+%Y-%m-%d %H:%M:%S %Z')" \
     --arg digest "$digest" --argjson identity "$identity" --arg nonce "$nonce" \
     '{name: $name, source: $source, created_at: $created, vm: $identity, base_state_sha256: $digest, nonce: $nonce}' \
-    >| "$work/vms/$name.pending"
+    >|"$work/vms/$name.pending"
   provenance=$(creation_digest "$work/vms/$name.pending") || exit 1
   sidecar="$tart_home/vms/$name/.agentctl-parity-owner.json"
   jq -n --arg nonce "$nonce" --arg digest "$provenance" \
-    '{nonce: $nonce, provenance_sha256: $digest}' >| "$sidecar.pending"
+    '{nonce: $nonce, provenance_sha256: $digest}' >|"$sidecar.pending"
   chmod 600 "$sidecar.pending"
   mv -f "$sidecar.pending" "$sidecar"
   mv "$work/vms/$name.pending" "$work/vms/$name"
@@ -427,13 +460,13 @@ case "$command" in
     [[ "$reference" == /* && -x "$reference" ]] || exit 1
     mkdir -p "$work/bin"
     GOTOOLCHAIN=go1.27.1 GOFLAGS='' go build -trimpath -ldflags='-s -w' -o "$work/bin/agentctl" "$root"
-    GOTOOLCHAIN=go1.27.1 go version -m "$work/bin/agentctl" >| "$work/build-info.txt"
+    GOTOOLCHAIN=go1.27.1 go version -m "$work/bin/agentctl" >|"$work/build-info.txt"
     if grep -q -- '-tags=' "$work/build-info.txt"; then exit 1; fi
     cp "$reference" "$work/bin/agctl"
-    shasum -a 256 "$work/bin/agctl" "$work/bin/agentctl" >| "$work/artifact-sha256.txt"
+    shasum -a 256 "$work/bin/agctl" "$work/bin/agentctl" >|"$work/artifact-sha256.txt"
     clone "$image" "$base"
     connect "$base"
-    remote /bin/bash -s >| "$work/guest-versions.txt" 2>| "$work/provision.stderr" <<'GUEST'
+    remote /bin/bash -s >|"$work/guest-versions.txt" 2>|"$work/provision.stderr" <<'GUEST'
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export HOMEBREW_NO_AUTO_UPDATE=1
@@ -452,9 +485,9 @@ GUEST
     sshpass -e scp "${ssh_options[@]}" "$work/bin/agctl" "$work/bin/agentctl" \
       "$script_dir/parity-vm-guest.sh" "$script_dir/lib/parity-common.sh" "$ssh_user@$ip:agentctl-parity/bin/"
     remote 'chmod 700 ~/agentctl-parity/bin/* && shasum -a 256 ~/agentctl-parity/bin/agctl ~/agentctl-parity/bin/agentctl' \
-      >| "$work/guest-sha256.txt"
-    perl -ane 'print "$F[0]\n"' "$work/artifact-sha256.txt" >| "$work/host-digests.txt"
-    perl -ane 'print "$F[0]\n"' "$work/guest-sha256.txt" >| "$work/guest-digests.txt"
+      >|"$work/guest-sha256.txt"
+    perl -ane 'print "$F[0]\n"' "$work/artifact-sha256.txt" >|"$work/host-digests.txt"
+    perl -ane 'print "$F[0]\n"' "$work/guest-sha256.txt" >|"$work/guest-digests.txt"
     if ! cmp -s "$work/host-digests.txt" "$work/guest-digests.txt"; then
       printf 'FAIL copied executable SHA-256 mismatch\n' >&2
       exit 1
@@ -464,7 +497,8 @@ GUEST
     printf 'Operator: open the VM with `tart run %s` (graphics).\n' "$base"
     printf 'Inside the VM, open Terminal.app and run `claude`, then log in with disposable account A.\n'
     printf 'Answer guest keychain prompts; never use your daily-use account. Quit Claude Code afterwards.\n'
-    printf 'Then run on the host: scripts/parity-vm.sh snapshot --base %s --work %q\n' "$base" "$work" ;;
+    printf 'Then run on the host: scripts/parity-vm.sh snapshot --base %s --work %q\n' "$base" "$work"
+    ;;
   snapshot)
     if [[ -f "$work/base-state.txt" ]]; then
       frozen_base
@@ -473,23 +507,26 @@ GUEST
       owned "$base"
       connect "$base"
       remote 'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; test ! -e ~/agentctl-parity/store && shasum -a 256 ~/agentctl-parity/bin/agctl ~/agentctl-parity/bin/agentctl && sw_vers && claude --version && codex --version' \
-        >| "$work/base-state.pending"
-      perl -ne 'print "$1\n" if /^([0-9a-f]{64}) /' "$work/base-state.pending" >| "$work/snapshot-digests.txt"
+        >|"$work/base-state.pending"
+      perl -ne 'print "$1\n" if /^([0-9a-f]{64}) /' "$work/base-state.pending" >|"$work/snapshot-digests.txt"
       if ! cmp -s "$work/host-digests.txt" "$work/snapshot-digests.txt"; then
         printf 'FAIL snapshot executable SHA-256 mismatch\n' >&2
         exit 1
       fi
       stop "$base"
-      printf 'Measured: %s\nBase: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$base" >> "$work/base-state.pending"
+      printf 'Measured: %s\nBase: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$base" >>"$work/base-state.pending"
       mv "$work/base-state.pending" "$work/base-state.txt"
       jq --arg digest "$(snapshot_digest)" '.base_state_sha256 = $digest' "$work/vms/$base" \
-        >| "$work/vms/$base.pending"
+        >|"$work/vms/$base.pending"
       mv "$work/vms/$base.pending" "$work/vms/$base"
       frozen_base
       printf 'PASS immutable starting-state snapshot recorded; run only clones after this point\n'
-    fi ;;
-  run|reset)
-    [[ -f "$work/base-state.txt" ]] || { printf 'FAIL snapshot the base first\n'; exit 1; }
+    fi
+    ;;
+  run | reset)
+    [[ -f "$work/base-state.txt" ]] || {
+      printf 'FAIL snapshot the base first\n'; exit 1
+    }
     frozen_base
     if [[ "$command" == reset || "$fresh" == 1 ]]; then
       if exists "$vm"; then delete_vm "$vm"; fi
@@ -525,12 +562,15 @@ GUEST
       mkdir -p "$work/captures/$implementation"
       sshpass -e scp -r "${ssh_options[@]}" "$ssh_user@$ip:agentctl-parity/captures/." "$work/captures/$implementation/"
       printf 'PASS pulled %s captures; VM retained\n' "$implementation"
-    fi ;;
+    fi
+    ;;
   destroy)
-    if [[ -n "$vm" ]]; then delete_vm "$vm"
+    if [[ -n "$vm" ]]; then
+      delete_vm "$vm"
     else
       delete_vm "$base"
       if [[ -f "$work/base-state.txt" ]]; then mv "$work/base-state.txt" "$work/base-state.destroyed.txt"; fi
-    fi ;;
+    fi
+    ;;
 esac
 completed=1
