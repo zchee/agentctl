@@ -28,7 +28,7 @@
 set -eu
 
 ref="${1:-/Users/zchee/rust/src/github.com/zchee/agctl}"
-repo="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+repo="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 out="$repo/testdata/golden"
 mapping="$out/MAPPING.md"
 expected=14
