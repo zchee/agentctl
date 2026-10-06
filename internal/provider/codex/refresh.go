@@ -276,7 +276,7 @@ func (d *refreshDriver) evidenceGate() *RefreshStep {
 
 func (d *refreshDriver) send(credentials *LockedCredentials, grant string, resend bool) RefreshStep {
 	active := fault.Active()
-	active.PausePoint("codex_before_post_snapshot")
+	active.PausePoint(fault.CodexBeforePostSnapshot)
 	snapshot, err := d.namespace.SnapshotForPost()
 	if err != nil {
 		return RefreshStep{Kind: RefreshStepFailed, Reason: err.Error()}
@@ -300,8 +300,8 @@ func (d *refreshDriver) send(credentials *LockedCredentials, grant string, resen
 	if resend {
 		d.auditEvent(CodexEvent{Outcome: AuditResend, Digest8Before: new(grant)})
 	}
-	abortRefreshFault("codex_abort_after_marker")
-	active.PausePoint("codex_after_post_snapshot")
+	abortRefreshFault(fault.CodexAbortAfterMarker)
+	active.PausePoint(fault.CodexAfterPostSnapshot)
 	outcome := refreshOAuth(d.ctx, credentials, token, d.permit.client())
 	// Once sent, the rotated grant and its outcome must survive cancellation.
 	d.ctx = context.WithoutCancel(d.ctx)
@@ -496,7 +496,7 @@ func equalRefreshDigests(a, b *secret.Digests) bool { return a != nil && b != ni
 
 func (d *refreshDriver) landed(parked bool, earliest *EarliestRefresh) RefreshStep {
 	if parked {
-		abortRefreshFault("codex_abort_after_pending")
+		abortRefreshFault(fault.CodexAbortAfterPending)
 	}
 	if err := d.store.settleInflight(d.ctx, d.guard, earliest, nil); err != nil {
 		slog.Warn("the refresh marker could not be cleared after a landed write", "error", err)

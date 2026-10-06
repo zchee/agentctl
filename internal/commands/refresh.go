@@ -136,7 +136,7 @@ func (s *Status) underNamespaceLock(ctx context.Context, paths *config.Paths, re
 		return refreshFailure(err)
 	}
 	s.askRefreshPlan(ctx, record, current, secret.ReadTimeout)
-	fault.Active().PausePoint("before_refresh_recheck")
+	fault.Active().PausePoint(fault.BeforeRefreshRecheck)
 	observed, err := secret.Snapshot(target)
 	if err != nil || snapshot == nil || observed == nil || *snapshot != *observed || s.detectRefreshActivity(ctx, nsDir, record, listing).Kind != secret.ForeignNone {
 		return refreshRefused(claude.StateOfRefreshDiscarded(), "claude_detected")

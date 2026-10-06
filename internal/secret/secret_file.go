@@ -299,7 +299,7 @@ func (f *SecretFile) Remove() (bool, error) {
 // ctx is consulted only under [StopDiscardStaged], at the one point where
 // abandoning leaves the file exactly as it was found.
 func (f *SecretFile) Write(ctx context.Context, doc []byte, pending *PendingSpec, stop StopPolicy) (WriteOutcome, error) {
-	return f.WriteWithFaults(ctx, doc, pending, stop, WriteFaultNames{BeforeRename: "before_rename", RenameFail: "rename_fail"})
+	return f.WriteWithFaults(ctx, doc, pending, stop, WriteFaultNames{BeforeRename: fault.BeforeRename, RenameFail: fault.RenameFail})
 }
 
 // WriteFaultNames lets a writer name the pause point and rename failure its tests drive.

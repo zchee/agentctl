@@ -21,7 +21,56 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	gocmp "github.com/google/go-cmp/cmp"
 )
+
+func TestTestingFaultNames(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		name string
+		want string
+	}{
+		"success: invalid grant reread":       {name: BeforeInvalidGrantReread, want: "before_invalid_grant_reread"},
+		"success: migrated reread":            {name: BeforeMigratedReread, want: "before_migrated_reread"},
+		"success: migrated write":             {name: BeforeMigratedWrite, want: "before_migrated_write"},
+		"success: refresh recheck":            {name: BeforeRefreshRecheck, want: "before_refresh_recheck"},
+		"success: swap write pause":           {name: BeforeSwapWrite, want: "before_swap_write"},
+		"success: codex abort after marker":   {name: CodexAbortAfterMarker, want: "codex_abort_after_marker"},
+		"success: codex abort after pending":  {name: CodexAbortAfterPending, want: "codex_abort_after_pending"},
+		"success: codex after snapshot":       {name: CodexAfterPostSnapshot, want: "codex_after_post_snapshot"},
+		"success: codex before snapshot":      {name: CodexBeforePostSnapshot, want: "codex_before_post_snapshot"},
+		"success: codex error after rename":   {name: CodexErrorAfterRename, want: "codex_error_after_rename"},
+		"success: codex login after write":    {name: CodexLoginAfterWrite, want: "codex_login_after_write"},
+		"success: codex login before install": {name: CodexLoginBeforeInstall, want: "codex_login_before_install"},
+		"success: codex state before rename":  {name: CodexRefreshStateBeforeRename, want: "codex_refresh_state_before_rename"},
+		"success: codex state directory sync": {name: CodexRefreshStateDirSync, want: "codex_refresh_state_dir_sync"},
+		"success: codex state file sync":      {name: CodexRefreshStateFileSync, want: "codex_refresh_state_file_sync"},
+		"success: codex state rename":         {name: CodexRefreshStateRename, want: "codex_refresh_state_rename"},
+		"success: codex state write":          {name: CodexRefreshStateWrite, want: "codex_refresh_state_write"},
+		"success: lock contention":            {name: LockContended, want: "lock_contended"},
+		"success: lock resume":                {name: LockResumeAfterSampleB, want: "lock_resume_after_sample_b"},
+		"success: stale lock":                 {name: LockStale, want: "lock_stale"},
+		"success: swap lock leak":             {name: SwapLockLeak, want: "swap_lock_leak"},
+		"success: swap namespace acquired":    {name: SwapNamespaceAcquired, want: "swap_namespace_acquired"},
+		"success: swap pause in locks":        {name: SwapPauseInLocks, want: "swap_pause_in_locks"},
+		"success: swap write failure":         {name: SwapWriteFail, want: "swap_write_fail"},
+		"success: credential pause":           {name: BeforeRename, want: "before_rename"},
+		"success: credential failure":         {name: RenameFail, want: "rename_fail"},
+		"success: codex pause":                {name: CodexBeforeRename, want: "codex_before_rename"},
+		"success: codex login failure":        {name: CodexInstallRenameFail, want: "codex_install_rename_fail"},
+		"success: codex refresh failure":      {name: CodexRenameFail, want: "codex_rename_fail"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if diff := gocmp.Diff(test.want, test.name); diff != "" {
+				t.Errorf("testing fault name differs (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
 func TestFromList(t *testing.T) {
 	t.Parallel()

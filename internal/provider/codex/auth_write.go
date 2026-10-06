@@ -361,7 +361,7 @@ func WriteAuth(ctx context.Context, paths *config.Paths, login *VerifiedLogin, g
 	if err := login.state.doc.WriteJSONTo(&buffer); err != nil {
 		return nil, Identity{}, err
 	}
-	outcome, err := ns.file(authFile).WriteWithFaults(ctx, buffer.Bytes(), nil, secret.StopComplete, secret.WriteFaultNames{BeforeRename: "codex_before_rename", RenameFail: "codex_install_rename_fail"})
+	outcome, err := ns.file(authFile).WriteWithFaults(ctx, buffer.Bytes(), nil, secret.StopComplete, secret.WriteFaultNames{BeforeRename: fault.CodexBeforeRename, RenameFail: fault.CodexInstallRenameFail})
 	if err != nil {
 		return nil, Identity{}, err
 	}
@@ -408,11 +408,11 @@ func (n *OwnedNamespace) Write(ctx context.Context, credentials *LockedCredentia
 	if err := credentials.state.inner.WriteJSONTo(&buffer); err != nil {
 		return CodexWrite{}, err
 	}
-	outcome, err := n.ns.file(authFile).WriteWithFaults(ctx, buffer.Bytes(), refreshPendingSpec(credentials), secret.StopComplete, secret.WriteFaultNames{BeforeRename: "codex_before_rename", RenameFail: "codex_rename_fail"})
+	outcome, err := n.ns.file(authFile).WriteWithFaults(ctx, buffer.Bytes(), refreshPendingSpec(credentials), secret.StopComplete, secret.WriteFaultNames{BeforeRename: fault.CodexBeforeRename, RenameFail: fault.CodexRenameFail})
 	if err != nil {
 		return CodexWrite{}, err
 	}
-	if !outcome.SavedToPending && fault.Active().Is("codex_error_after_rename") {
+	if !outcome.SavedToPending && fault.Active().Is(fault.CodexErrorAfterRename) {
 		return CodexWrite{}, errors.New("the Codex credential could not be examined after the rename")
 	}
 	writeKind := WriteRefreshApplied

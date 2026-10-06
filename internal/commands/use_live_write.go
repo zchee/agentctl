@@ -125,7 +125,7 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 	if (observed == nil) != (input.before == nil) || observed != nil && *observed != *input.before {
 		return heldEnd(claude.SwapDiscarded, 0, "the item changed under the hold, so the swap was thrown away rather than written over a newer credential")
 	}
-	injected.WaitIf("swap_pause_in_locks")
+	injected.WaitIf(fault.SwapPauseInLocks)
 	if err := hold.DriftCheck(); err != nil {
 		return heldEnd(claude.SwapRefused, claude.SwapCompromisedHold, "the lock agentctl holds is compromised: "+err.Error())
 	}
@@ -136,7 +136,7 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 		return heldEnd(claude.SwapRefused, claude.SwapCompromisedHold, "the lock agentctl holds is compromised: "+err.Error())
 	}
 	var writeErr error
-	if injected.Is("swap_write_fail") {
+	if injected.Is(fault.SwapWriteFail) {
 		writeErr = errors.New("the write was refused by the test fault switch")
 	} else {
 		writeErr = secret.NewKeychainWriter().Write(ctx, input.subject.service, line)

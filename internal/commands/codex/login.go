@@ -157,7 +157,7 @@ func (l *Login) install(ctx context.Context, scratch *provider.LoginScratch, rep
 	}
 	defer func() { _ = guard.Release() }()
 	active := fault.Active()
-	active.PausePoint("codex_login_before_install")
+	active.PausePoint(fault.CodexLoginBeforeInstall)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -176,8 +176,8 @@ func (l *Login) install(ctx context.Context, scratch *provider.LoginScratch, rep
 	if err := guard.Release(); err != nil {
 		return err
 	}
-	if active.Is("codex_login_after_write") {
-		return errs.NewRefused(0, "stopped between the install and the registry update (injected by `codex_login_after_write`)")
+	if active.Is(fault.CodexLoginAfterWrite) {
+		return errs.NewRefused(0, "stopped between the install and the registry update (injected by `"+fault.CodexLoginAfterWrite+"`)")
 	}
 	if err := l.record(ctx, identity, opts); err != nil {
 		return err

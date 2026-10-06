@@ -227,7 +227,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 			return useRefused(claude.SwapRefusal{Kind: claude.SwapCannotAdopt, Adoption: claude.AdoptionUnreadable}, service, fmt.Sprintf("the namespace lock could not be taken: %v", err))
 		}
 		defer func() { _ = guard.Release() }()
-		fault.Active().PausePoint("swap_namespace_acquired")
+		fault.Active().PausePoint(fault.SwapNamespaceAcquired)
 	}
 	var log *os.File
 	if swap.live {
@@ -364,7 +364,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		}
 		_ = unix.Close(fd)
 	}
-	fault.Active().WaitIf("before_swap_write")
+	fault.Active().WaitIf(fault.BeforeSwapWrite)
 	var incomingIdentity *secret.IncomingIdentity
 	restored := ""
 	if swap.live {

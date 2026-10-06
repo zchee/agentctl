@@ -83,7 +83,7 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 		return refreshFailure(err)
 	}
 	injected := fault.Active()
-	injected.PausePoint("before_migrated_reread")
+	injected.PausePoint(fault.BeforeMigratedReread)
 	peer, err := s.readRefreshItem(ctx, item.service)
 	if err != nil {
 		return refreshOutcome{state: new(claude.StateOfStale()), note: "the item could not be re-read before the refresh", lockState: "none"}
@@ -101,7 +101,7 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	current, err = s.Refresher.RefreshAccess(ctx, current)
 	if err != nil {
 		if auth, ok := errors.AsType[*errs.AuthError](err); ok && auth.InvalidGrant {
-			injected.PausePoint("before_invalid_grant_reread")
+			injected.PausePoint(fault.BeforeInvalidGrantReread)
 			peer, readErr := s.readRefreshItem(ctx, item.service)
 			if readErr != nil {
 				return refreshOutcome{state: new(claude.StateOfStale()), note: "the refresh was rejected and the item could not be re-read", lockState: "none"}
@@ -139,7 +139,7 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 		}
 		return refreshFailure(err)
 	}
-	injected.PausePoint("before_migrated_write")
+	injected.PausePoint(fault.BeforeMigratedWrite)
 	dir, err := secret.OpenNamespaceDir(paths, item.nsDir)
 	if err != nil {
 		return refreshRefused(claude.StateOfError("refresh refused: "+err.Error()), "unavailable")

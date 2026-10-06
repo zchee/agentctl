@@ -19,7 +19,55 @@ package fault
 import (
 	"testing"
 	"time"
+
+	gocmp "github.com/google/go-cmp/cmp"
 )
+
+func TestReleaseFaultNamesAreEmpty(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		name string
+	}{
+		"success: invalid grant reread":       {name: BeforeInvalidGrantReread},
+		"success: migrated reread":            {name: BeforeMigratedReread},
+		"success: migrated write":             {name: BeforeMigratedWrite},
+		"success: refresh recheck":            {name: BeforeRefreshRecheck},
+		"success: swap write pause":           {name: BeforeSwapWrite},
+		"success: codex abort after marker":   {name: CodexAbortAfterMarker},
+		"success: codex abort after pending":  {name: CodexAbortAfterPending},
+		"success: codex after snapshot":       {name: CodexAfterPostSnapshot},
+		"success: codex before snapshot":      {name: CodexBeforePostSnapshot},
+		"success: codex error after rename":   {name: CodexErrorAfterRename},
+		"success: codex login after write":    {name: CodexLoginAfterWrite},
+		"success: codex login before install": {name: CodexLoginBeforeInstall},
+		"success: codex state before rename":  {name: CodexRefreshStateBeforeRename},
+		"success: codex state directory sync": {name: CodexRefreshStateDirSync},
+		"success: codex state file sync":      {name: CodexRefreshStateFileSync},
+		"success: codex state rename":         {name: CodexRefreshStateRename},
+		"success: codex state write":          {name: CodexRefreshStateWrite},
+		"success: lock contention":            {name: LockContended},
+		"success: lock resume":                {name: LockResumeAfterSampleB},
+		"success: stale lock":                 {name: LockStale},
+		"success: swap lock leak":             {name: SwapLockLeak},
+		"success: swap namespace acquired":    {name: SwapNamespaceAcquired},
+		"success: swap pause in locks":        {name: SwapPauseInLocks},
+		"success: swap write failure":         {name: SwapWriteFail},
+		"success: credential pause":           {name: BeforeRename},
+		"success: credential failure":         {name: RenameFail},
+		"success: codex pause":                {name: CodexBeforeRename},
+		"success: codex login failure":        {name: CodexInstallRenameFail},
+		"success: codex refresh failure":      {name: CodexRenameFail},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if diff := gocmp.Diff("", test.name); diff != "" {
+				t.Errorf("release fault name differs (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
 // A release build must have no way to reach an injection: the factory
 // ignores the environment, and every pause compiles to an immediate

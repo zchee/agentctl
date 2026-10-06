@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/runtime/cleanup"
+	"github.com/zchee/agentctl/internal/runtime/fault"
 	"github.com/zchee/agentctl/internal/runtime/proc"
 )
 
@@ -35,16 +36,16 @@ const ClaudeProcessName = "claude"
 // injected through [Seams].
 const (
 	// FaultLockStale makes a fresh lock eligible for the break rule.
-	FaultLockStale = "lock_stale"
+	FaultLockStale = fault.LockStale
 	// FaultLockContended makes the primary lock's first mkdir report a
 	// holder.
-	FaultLockContended = "lock_contended"
+	FaultLockContended = fault.LockContended
 	// FaultLockResumeAfterSampleB touches the sampled lock in exactly
 	// the window the third sample exists to close.
-	FaultLockResumeAfterSampleB = "lock_resume_after_sample_b"
+	FaultLockResumeAfterSampleB = fault.LockResumeAfterSampleB
 	// FaultSwapLockLeak makes a release leave the directories and the
 	// record behind, the way a crashed hold would.
-	FaultSwapLockLeak = "swap_lock_leak"
+	FaultSwapLockLeak = fault.SwapLockLeak
 )
 
 // HolderSightings is whether any same-user `claude` process is stopped.

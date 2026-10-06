@@ -22,6 +22,69 @@ import (
 	"time"
 )
 
+// Fault names live only in tagged builds so callers cannot retain
+// their strings in release artifacts.
+const (
+	// BeforeInvalidGrantReread pauses before rereading a rejected grant.
+	BeforeInvalidGrantReread = "before_invalid_grant_reread"
+	// BeforeMigratedReread pauses before rereading a migrated credential.
+	BeforeMigratedReread = "before_migrated_reread"
+	// BeforeMigratedWrite pauses before writing a migrated credential.
+	BeforeMigratedWrite = "before_migrated_write"
+	// BeforeRefreshRecheck pauses before checking a refreshed file's identity.
+	BeforeRefreshRecheck = "before_refresh_recheck"
+	// BeforeSwapWrite waits before entering a swap's write phase.
+	BeforeSwapWrite = "before_swap_write"
+	// CodexAbortAfterMarker aborts after persisting the refresh marker.
+	CodexAbortAfterMarker = "codex_abort_after_marker"
+	// CodexAbortAfterPending aborts after parking a refreshed credential.
+	CodexAbortAfterPending = "codex_abort_after_pending"
+	// CodexAfterPostSnapshot pauses after recording the refresh marker.
+	CodexAfterPostSnapshot = "codex_after_post_snapshot"
+	// CodexBeforePostSnapshot pauses before taking the refresh snapshot.
+	CodexBeforePostSnapshot = "codex_before_post_snapshot"
+	// CodexErrorAfterRename fails after replacing the refreshed credential.
+	CodexErrorAfterRename = "codex_error_after_rename"
+	// CodexLoginAfterWrite stops a login before its registry update.
+	CodexLoginAfterWrite = "codex_login_after_write"
+	// CodexLoginBeforeInstall pauses before installing a verified login.
+	CodexLoginBeforeInstall = "codex_login_before_install"
+	// CodexRefreshStateBeforeRename pauses before replacing refresh state.
+	CodexRefreshStateBeforeRename = "codex_refresh_state_before_rename"
+	// CodexRefreshStateDirSync fails the refresh-state directory flush.
+	CodexRefreshStateDirSync = "codex_refresh_state_dir_sync"
+	// CodexRefreshStateFileSync fails the refresh-state file flush.
+	CodexRefreshStateFileSync = "codex_refresh_state_file_sync"
+	// CodexRefreshStateRename fails the refresh-state rename.
+	CodexRefreshStateRename = "codex_refresh_state_rename"
+	// CodexRefreshStateWrite fails the refresh-state temporary write.
+	CodexRefreshStateWrite = "codex_refresh_state_write"
+	// LockContended makes the primary lock's first mkdir report a holder.
+	LockContended = "lock_contended"
+	// LockResumeAfterSampleB touches the lock between the last two samples.
+	LockResumeAfterSampleB = "lock_resume_after_sample_b"
+	// LockStale makes a fresh lock eligible for the break rule.
+	LockStale = "lock_stale"
+	// SwapLockLeak leaves the lock directories and record after release.
+	SwapLockLeak = "swap_lock_leak"
+	// SwapNamespaceAcquired pauses after acquiring a swap namespace lock.
+	SwapNamespaceAcquired = "swap_namespace_acquired"
+	// SwapPauseInLocks waits while holding the swap's peer locks.
+	SwapPauseInLocks = "swap_pause_in_locks"
+	// SwapWriteFail fails the swap's keychain write.
+	SwapWriteFail = "swap_write_fail"
+	// BeforeRename pauses before replacing a credential file.
+	BeforeRename = "before_rename"
+	// RenameFail forces a credential file rename to fail.
+	RenameFail = "rename_fail"
+	// CodexBeforeRename pauses before replacing a Codex credential file.
+	CodexBeforeRename = "codex_before_rename"
+	// CodexInstallRenameFail forces a Codex login install rename to fail.
+	CodexInstallRenameFail = "codex_install_rename_fail"
+	// CodexRenameFail forces a Codex refreshed credential rename to fail.
+	CodexRenameFail = "codex_rename_fail"
+)
+
 // The seam variables a tagged build reads its fault set through. Neither
 // name exists in a release build.
 const (

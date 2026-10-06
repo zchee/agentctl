@@ -84,7 +84,7 @@ func (s *RefreshStateStore) storeDurable(ctx context.Context, state RefreshState
 		return fmt.Errorf("could not protect refresh-state temporary: %w", err)
 	}
 	active := fault.Active()
-	if active.Is("codex_refresh_state_write") {
+	if active.Is(fault.CodexRefreshStateWrite) {
 		return errors.New("could not write refresh-state temporary")
 	}
 	n, err := file.Write(body)
@@ -94,7 +94,7 @@ func (s *RefreshStateStore) storeDurable(ctx context.Context, state RefreshState
 	if err != nil {
 		return fmt.Errorf("could not write refresh-state temporary: %w", err)
 	}
-	if active.Is("codex_refresh_state_file_sync") {
+	if active.Is(fault.CodexRefreshStateFileSync) {
 		return errors.New("could not flush refresh-state temporary")
 	}
 	if err := file.Sync(); err != nil {
@@ -103,17 +103,17 @@ func (s *RefreshStateStore) storeDurable(ctx context.Context, state RefreshState
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("could not close refresh-state temporary: %w", err)
 	}
-	active.PausePoint("codex_refresh_state_before_rename")
+	active.PausePoint(fault.CodexRefreshStateBeforeRename)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if active.Is("codex_refresh_state_rename") {
+	if active.Is(fault.CodexRefreshStateRename) {
 		return errors.New("could not replace Codex refresh state")
 	}
 	if err := unix.Renameat(dir, tmp, dir, s.name); err != nil {
 		return fmt.Errorf("could not replace Codex refresh state: %w", err)
 	}
-	if active.Is("codex_refresh_state_dir_sync") {
+	if active.Is(fault.CodexRefreshStateDirSync) {
 		return errors.New("could not flush Codex refresh-state directory")
 	}
 	if err := unix.Fsync(dir); err != nil {
