@@ -10,7 +10,9 @@ completed=0
 lifecycle_lock=
 finish() {
   local status=$?
-  if [[ -n "$lifecycle_lock" ]]; then rmdir "$lifecycle_lock" || status=1; fi
+  if [[ -n "$lifecycle_lock" ]]; then
+    rm -f "$lifecycle_lock/owner" && rmdir "$lifecycle_lock" || status=1
+  fi
   if [[ "$completed" != 1 ]]; then
     printf 'FAIL parity VM: aborted before completion (exit=%s); VMs retained\n' "$status" >&2
     [[ "$status" != 0 ]] || status=1
@@ -254,10 +256,21 @@ for tool in tart ssh scp sshpass; do
 done
 # Serialize decisions and marker updates made by this work directory.
 if ! mkdir "$work/lifecycle.lock"; then
-  printf 'FAIL lifecycle lock held: %s; inspect the prior invocation before retrying\n' "$work/lifecycle.lock" >&2
+  owner='unavailable'
+  if [[ -f "$work/lifecycle.lock/owner" ]]; then
+    IFS= read -r owner < "$work/lifecycle.lock/owner" || true
+  fi
+  printf 'FAIL lifecycle lock held: %s; owner: %s\n' "$work/lifecycle.lock" "$owner" >&2
+  owner_pid=$(printf '%s\n' "$owner" | perl -ne 'print $1 if /^pid=([0-9]+) /')
+  if [[ -n "$owner_pid" ]] && ps -p "$owner_pid" >/dev/null 2>&1; then
+    printf 'FAIL lifecycle lock owner is active (pid=%s); do not remove the lock\n' "$owner_pid" >&2
+  fi
+  printf 'Recovery: check `ps -p %s` and establish that no invocation is active; only if the process is gone, run `rm -f %q` then `rmdir %q`. Never remove an active lock.\n' \
+    "${owner_pid:-<pid>}" "$work/lifecycle.lock/owner" "$work/lifecycle.lock" >&2
   exit 1
 fi
 lifecycle_lock="$work/lifecycle.lock"
+printf 'pid=%s started=%s command=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$command" >| "$lifecycle_lock/owner"
 tart_home=${TART_HOME:-$HOME/.tart}
 [[ "$tart_home" == /* ]] || exit 1
 export SSHPASS=${PARITY_SSH_PASSWORD:-admin}
@@ -285,8 +298,12 @@ snapshot_digest() {
   [[ -f "$file" ]] || return 1
   shasum -a 256 "$file" | perl -ane 'print "$F[0]\n"'
 }
+# Snapshot metadata is added later; the creation provenance remains immutable.
+creation_digest() {
+  jq -cS 'del(.base_state_sha256)' "$1" | shasum -a 256 | perl -ane 'print "$F[0]\n"'
+}
 owned() {
-  local name=$1 identity digest
+  local name=$1 identity digest nonce provenance sidecar="$tart_home/vms/$1/.agentctl-parity-owner.json"
   if ! exists "$name" || ! identity=$(vm_identity "$name") ||
     ! jq -e --arg name "$name" --argjson identity "$identity" '
       .name == $name and .vm == $identity and
@@ -295,6 +312,14 @@ owned() {
       (.base_state_sha256|type == "string")
     ' "$work/vms/$name" >/dev/null 2>&1; then
     printf 'FAIL refusing missing or unowned VM/provenance mismatch: %s (snapshot metadata: %s)\n' "$name" "$work/base-state.txt" >&2
+    exit 1
+  fi
+  nonce=$(jq -r '.nonce // ""' "$work/vms/$name") || exit 1
+  provenance=$(creation_digest "$work/vms/$name") || exit 1
+  if [[ ! "$nonce" =~ ^[0-9a-f]{32}$ || ! -f "$sidecar" || -L "$sidecar" ]] ||
+    ! jq -e --arg nonce "$nonce" --arg digest "$provenance" \
+      '.nonce == $nonce and .provenance_sha256 == $digest' "$sidecar" >/dev/null 2>&1; then
+    printf 'FAIL VM creation sidecar missing or nonce/provenance mismatch: %s\n' "$name" >&2
     exit 1
   fi
   digest=$(jq -r '.base_state_sha256' "$work/vms/$name")
@@ -342,7 +367,7 @@ connect() {
 }
 remote() { sshpass -e ssh "${ssh_options[@]}" "$ssh_user@$ip" "$@"; }
 clone() {
-  local source=$1 name=$2 identity digest=
+  local source=$1 name=$2 identity digest='' nonce sidecar provenance
   if exists "$name"; then
     owned "$name"
     jq -e --arg source "$source" '.source == $source' "$work/vms/$name" >/dev/null || exit 1
@@ -354,11 +379,21 @@ clone() {
   exists "$name" || exit 1
   identity=$(vm_identity "$name") || exit 1
   if [[ "$source" == "$base" ]]; then digest=$(snapshot_digest) || exit 1; fi
+  # Never adopt creation evidence inherited from the source VM.
+  nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || exit 1
   jq -n --arg name "$name" --arg source "$source" --arg created "$(date '+%Y-%m-%d %H:%M:%S %Z')" \
-    --arg digest "$digest" --argjson identity "$identity" \
-    '{name: $name, source: $source, created_at: $created, vm: $identity, base_state_sha256: $digest}' \
+    --arg digest "$digest" --argjson identity "$identity" --arg nonce "$nonce" \
+    '{name: $name, source: $source, created_at: $created, vm: $identity, base_state_sha256: $digest, nonce: $nonce}' \
     >| "$work/vms/$name.pending"
+  provenance=$(creation_digest "$work/vms/$name.pending") || exit 1
+  sidecar="$tart_home/vms/$name/.agentctl-parity-owner.json"
+  jq -n --arg nonce "$nonce" --arg digest "$provenance" \
+    '{nonce: $nonce, provenance_sha256: $digest}' >| "$sidecar.pending"
+  chmod 600 "$sidecar.pending"
+  mv -f "$sidecar.pending" "$sidecar"
   mv "$work/vms/$name.pending" "$work/vms/$name"
+  owned "$name"
 }
 stop() {
   if running "$1"; then tart stop "$1"; fi
@@ -371,7 +406,7 @@ delete_vm() {
     # Recheck after stopping, immediately before the only destructive Tart call.
     owned "$name"
     tart delete "$name"
-    if exists "$name"; then
+    if exists "$name" || [[ -e "$tart_home/vms/$name" ]]; then
       printf 'FAIL deletion not verified: %s; ownership retained\n' "$name" >&2
       exit 1
     fi
