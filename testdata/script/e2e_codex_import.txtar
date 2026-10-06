@@ -29,6 +29,22 @@ stdout '--dry-run: nothing was written'
 codex-import-check unchanged
 codex-import-check dry
 
+# a_dir_that_is_the_live_home_folds_into_it_when_the_grant_is_the_same
+codex-import-fixture live
+exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_HOME
+exec agentctl codex status --json --all
+cp stdout codex-status.json
+codex-import-check folded
+
+# a_dir_that_is_the_live_home_is_a_stale_sibling_once_the_grant_differs
+codex-import-switch
+! exec agentctl codex status --json --all
+stderr '1 shown account\(s\) could not be read'
+cp stdout codex-status.json
+codex-import-check stale
+exec agentctl codex status --json
+! stdout 'home_read_only'
+
 # the_codex_home_flag_obeys_the_same_rules_as_the_variable
 codex-import-fixture flags
 exec agentctl codex import --from codex-home --codex-home $CODEX_IMPORT_LINK

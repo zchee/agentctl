@@ -242,10 +242,11 @@ func codexImportFixture(ts *testscript.TestScript, neg bool, args []string) {
 		case "folded", "stale":
 			var report struct {
 				Rows []struct {
-					Kind  string         `json:"kind"`
-					State string         `json:"state"`
-					Note  *string        `json:"note"`
-					Usage jsontext.Value `json:"usage"`
+					Kind    string           `json:"kind"`
+					State   string           `json:"state"`
+					Note    *string          `json:"note"`
+					Usage   jsontext.Value   `json:"usage"`
+					Windows []jsontext.Value `json:"windows"`
 				} `json:"rows"`
 			}
 			ts.Check(json.Unmarshal([]byte(ts.ReadFile("codex-status.json")), &report))
@@ -254,12 +255,15 @@ func codexImportFixture(ts *testscript.TestScript, neg bool, args []string) {
 				if row.Kind != "home_read_only" {
 					continue
 				}
+				if found {
+					ts.Fatalf("more than one imported row")
+				}
 				found = true
 				if args[0] == "folded" {
 					if row.Note == nil || !strings.Contains(*row.Note, "same credential as live") || row.State == "stale_sibling_of_live" {
 						ts.Fatalf("imported row was not folded")
 					}
-				} else if row.State != "stale_sibling_of_live" || string(row.Usage) != "null" {
+				} else if row.State != "stale_sibling_of_live" || len(row.Usage) > 0 && string(row.Usage) != "null" || len(row.Windows) != 0 {
 					ts.Fatalf("imported row is not stale without usage")
 				}
 			}
