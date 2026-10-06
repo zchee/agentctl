@@ -18,6 +18,21 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
+      - name: Install shell validation tools
+        run: |
+          # The macOS image ships Bash 3.2 and does not list ripgrep or ShellCheck.
+          brew install bash ripgrep shellcheck
+          printf '%s/bin\n' "$(brew --prefix bash)" >> "$GITHUB_PATH"
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh scripts/lib/*.sh
+      - name: Check release isolation
+        shell: bash
+        run: |
+          bash_bin="$(brew --prefix bash)/bin/bash"
+          "$bash_bin" -c '(( BASH_VERSINFO[0] >= 4 ))'
+          log="$(mktemp "${RUNNER_TEMP}/release-gate.XXXXXX")"
+          "$bash_bin" scripts/release-gate.sh 2>&1 | tee "$log"
+          tail -n 1 "$log" | grep '^PASS release gate:' >/dev/null
       - name: Install validation tools
         run: |
           go install mvdan.cc/gofumpt@latest
