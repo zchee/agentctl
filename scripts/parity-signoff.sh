@@ -5,7 +5,7 @@ umask 077
 # Run from the module root. Captured files are retained for diagnosis.
 root=$(pwd -P)
 reference=${AGCTL_BIN:-/Users/zchee/rust/src/github.com/zchee/agctl/target/debug/agctl}
-for tool in go jq perl diff cmp git shasum; do
+for tool in go jq perl diff cmp git shasum grep; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'FAIL prerequisite: %s is unavailable\n' "$tool"
     exit 1
@@ -26,8 +26,13 @@ printf 'Evidence: %s\n' "$work"
 printf 'Measured: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 printf 'Reference: %s\n' "$reference"
 printf 'Source: %s\n' "$(git rev-parse HEAD)"
-GOTOOLCHAIN=go1.27.1 go build -trimpath -ldflags='-s -w' -o "$work/agentctl" "$root"
-printf 'PASS untagged release build (exit=0)\n'
+GOTOOLCHAIN=go1.27.1 GOFLAGS='' go build -trimpath -ldflags='-s -w' -o "$work/agentctl" "$root"
+GOTOOLCHAIN=go1.27.1 go version -m "$work/agentctl" >| "$work/build-info"
+if grep -q -- '-tags=' "$work/build-info"; then
+  printf 'FAIL untagged release build: artifact contains a -tags= build setting\n' >&2
+  exit 1
+fi
+printf 'PASS untagged release build (exit=0; no -tags= build setting)\n'
 
 passes=0
 failures=0

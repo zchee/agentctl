@@ -106,13 +106,13 @@ for mode in release testing; do
 	if [ "$mode" = testing ]; then
 		args=(-tags agentctl_testing)
 	fi
-	if go -C "$repo_root" build "${args[@]}" -trimpath -ldflags='-s -w' -o "$work/agentctl-$mode" .; then
+	if go -C "$repo_root" build ${args[@]+"${args[@]}"} -trimpath -ldflags='-s -w' -o "$work/agentctl-$mode" .; then
 		printf 'PASS build %s\n' "$mode"
 	else
 		printf 'FAIL build %s\n' "$mode" >&2
 		exit 1
 	fi
-	go -C "$repo_root" list "${args[@]}" -deps -f '{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}' ./... |
+	go -C "$repo_root" list ${args[@]+"${args[@]}"} -deps -f '{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}' ./... |
 		rg -v '^$' | sort -u >|"$work/$mode-files"
 done
 
@@ -148,7 +148,11 @@ tagged_sources=()
 while IFS= read -r file; do
 	tagged_sources+=("$file")
 done <"$work/testing-only"
-rg --no-filename -o 'AGENTCTL_[A-Z0-9_]+' "${tagged_sources[@]}" | sort -u >|"$work/discovered-env"
+if [ "${#tagged_sources[@]}" -eq 0 ]; then
+	printf 'FAIL testing environment inventory: no tagged sources selected\n' >&2
+	exit 1
+fi
+rg --no-filename -o 'AGENTCTL_[A-Z0-9_]+' ${tagged_sources[@]+"${tagged_sources[@]}"} | sort -u >|"$work/discovered-env"
 printf '%s\n' "${testing_env[@]}" | sort -u >|"$work/expected-env"
 if diff -u "$work/expected-env" "$work/discovered-env"; then
 	printf 'PASS testing environment inventory: %s names\n' "${#testing_env[@]}"
