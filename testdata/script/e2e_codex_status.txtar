@@ -280,10 +280,14 @@ codex-status-calls 1 1
 # h_sigterm_before_the_rename_keeps_the_grant_and_the_marker
 codex-status-fixture owned-expired
 env AGENTCTL_FAULT=pause_codex_before_rename
+# Force the interrupted process to exit before the tagged pause times out.
+env AGENTCTL_TEST_EXIT_DEFERRAL=100ms
 ! exec agentctl codex status --account $C_USER &
 codex-status-action wait
 codex-status-action term
 wait
+stderr 'locked-memory purge was skipped because a command goroutine was still running'
+env AGENTCTL_TEST_EXIT_DEFERRAL=
 codex-status-check staged $C_NAMESPACE
 codex-status-check stored $C_NAMESPACE/auth.json 0001
 codex-status-check marker $C_MARKER inflight object
@@ -296,10 +300,14 @@ codex-status-calls 0 1
 # sigint_before_the_rename_leaves_an_interrupted_outcome
 codex-status-fixture owned-expired
 env AGENTCTL_FAULT=pause_codex_before_rename
+# Force the interrupted process to exit before the tagged pause times out.
+env AGENTCTL_TEST_EXIT_DEFERRAL=100ms
 ! exec agentctl codex status --account $C_USER &
 codex-status-action wait
 codex-status-action int
 wait
+stderr 'locked-memory purge was skipped because a command goroutine was still running'
+env AGENTCTL_TEST_EXIT_DEFERRAL=
 codex-status-check staged $C_NAMESPACE
 codex-status-check marker $C_MARKER inflight object
 env AGENTCTL_FAULT=
