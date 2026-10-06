@@ -15,7 +15,6 @@
 package claude
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
@@ -115,16 +114,11 @@ func (c *LoginClient) postExchange(ctx context.Context, body []byte) (*TokenResp
 	if ctx.Err() != nil {
 		return nil, provider.NewFetchCancelled()
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(ctx, TokenTimeout)
+	defer cancel()
+	response, err := c.postToken(ctx, cancel, body)
 	if err != nil {
-		return nil, provider.NewFetchTransport("could not build the token request")
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", c.userAgent)
-	response, err := c.tokenClient.Do(request)
-	if err != nil {
-		return nil, mapTransportError(err)
+		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
 	text, err := readOAuthBody(response.Body)

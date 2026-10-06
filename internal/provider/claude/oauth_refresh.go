@@ -60,6 +60,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -130,11 +131,14 @@ func NewOAuthClient(tokenURL, profileURL, userAgent string) (*OAuthClient, error
 		}
 	}
 	return &OAuthClient{
-		tokenURL:      tokenURL,
-		profileURL:    profileURL,
-		clientID:      ClientID,
-		userAgent:     userAgent,
-		tokenClient:   &http.Client{Timeout: TokenTimeout},
+		tokenURL:   tokenURL,
+		profileURL: profileURL,
+		clientID:   ClientID,
+		userAgent:  userAgent,
+		tokenClient: &http.Client{
+			Timeout:       TokenTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		profileClient: &http.Client{Timeout: ProfileTimeout},
 	}, nil
 }
@@ -171,17 +175,11 @@ func (c *OAuthClient) RefreshAccess(ctx context.Context, credentials *Credential
 	// the one request that consumes it.
 	defer memguard.WipeBytes(body)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(ctx, TokenTimeout)
+	defer cancel()
+	response, err := c.postToken(ctx, cancel, body)
 	if err != nil {
-		return nil, provider.NewFetchTransport(err.Error())
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("User-Agent", c.userAgent)
-
-	response, err := c.tokenClient.Do(request)
-	if err != nil {
-		return nil, mapTransportError(err)
+		return nil, err
 	}
 	defer func() {
 		// The response has already been consumed or classified by the time
@@ -209,6 +207,71 @@ func (c *OAuthClient) RefreshAccess(ctx context.Context, credentials *Credential
 		return nil, provider.NewFetchParse("the token response could not be used: " + err.Error())
 	}
 	return credentials, nil
+}
+
+// oauthBodyReader prevents replay and synchronizes plaintext disposal with reads.
+type oauthBodyReader struct {
+	mu     sync.Mutex
+	reader *bytes.Reader
+	done   chan struct{}
+}
+
+func (r *oauthBodyReader) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.reader == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return r.reader.Read(p)
+}
+
+func (r *oauthBodyReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.reader != nil {
+		r.reader = nil
+		close(r.done)
+	}
+	return nil
+}
+
+// postToken retains body ownership until transport reads have stopped. Its
+// caller supplies the whole-operation deadline and wipes body after it returns.
+func (c *OAuthClient) postToken(ctx context.Context, cancel context.CancelFunc, body []byte) (*http.Response, error) {
+	requestBody := &oauthBodyReader{reader: bytes.NewReader(body), done: make(chan struct{})}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURL, requestBody)
+	if err != nil {
+		_ = requestBody.Close()
+		return nil, provider.NewFetchTransport("could not build the token request")
+	}
+	request.ContentLength = int64(len(body))
+	request.GetBody = nil
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", c.userAgent)
+	response, err := c.tokenClient.Do(request)
+	// Do can return before the transport's asynchronous request-body Close.
+	select {
+	case <-requestBody.done:
+	default:
+		select {
+		case <-requestBody.done:
+		case <-ctx.Done():
+			cancel()
+			_ = requestBody.Close()
+			if response != nil {
+				_ = response.Body.Close()
+			}
+			return nil, provider.NewFetchTransport("the token request may have reached the server; its body did not finish closing")
+		}
+	}
+	if err != nil {
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		return nil, mapTransportError(err)
+	}
+	return response, nil
 }
 
 // readOAuthBody reads a token or profile response body under the

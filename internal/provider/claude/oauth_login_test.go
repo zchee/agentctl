@@ -157,21 +157,21 @@ func TestLoginExchangeWipesEachBodyBeforeRetryWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bodies []func() (io.ReadCloser, error)
+	var bodies []bytes.Reader
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	defer transport.CloseIdleConnections()
 	client.tokenClient.Transport = exchangeBodyTransport(func(request *http.Request) (*http.Response, error) {
-		bodies = append(bodies, request.GetBody)
+		body, ok := request.Body.(*oauthBodyReader)
+		if !ok || request.GetBody != nil {
+			return nil, errors.New("exchange body is replayable or unsynchronized")
+		}
+		bodies = append(bodies, *body.reader)
 		return transport.RoundTrip(request)
 	})
 	assertWiped := func(index int) {
 		t.Helper()
-		body, err := bodies[index]()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = body.Close() }()
-		blob, err := io.ReadAll(body)
+		body := bodies[index]
+		blob, err := io.ReadAll(&body)
 		if err != nil {
 			t.Fatal(err)
 		}
