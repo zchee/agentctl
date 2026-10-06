@@ -282,6 +282,7 @@ func usageObject(value jsontext.Value) (usageMembers, error) {
 		return nil, err
 	}
 	var members usageMembers
+	indices := make(map[string]int)
 	for decoder.PeekKind() != '}' {
 		token, err := decoder.ReadToken()
 		if err != nil {
@@ -292,15 +293,10 @@ func usageObject(value jsontext.Value) (usageMembers, error) {
 		if err != nil {
 			return nil, err
 		}
-		replaced := false
-		for i := range members {
-			if members[i].name == name {
-				members[i].value = bytes.Clone(raw)
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
+		if index, ok := indices[name]; ok {
+			members[index].value = bytes.Clone(raw)
+		} else {
+			indices[name] = len(members)
 			members = append(members, usageMember{name: name, value: bytes.Clone(raw)})
 		}
 	}

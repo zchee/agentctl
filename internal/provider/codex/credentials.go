@@ -210,6 +210,7 @@ func readAuthValue(decoder *jsontext.Decoder) (*authValue, error) {
 	fail := func(err error) (*authValue, error) { value.wipe(); return nil, err }
 	switch value.kind {
 	case '{':
+		indices := make(map[string]int)
 		for decoder.PeekKind() != '}' {
 			key, err := decoder.ReadToken()
 			if err != nil {
@@ -220,12 +221,12 @@ func readAuthValue(decoder *jsontext.Decoder) (*authValue, error) {
 			if err != nil {
 				return fail(err)
 			}
-			index := slices.IndexFunc(value.object, func(member authMember) bool { return member.name == name })
-			if index < 0 {
-				value.object = append(value.object, authMember{name, child})
-			} else {
+			if index, ok := indices[name]; ok {
 				value.object[index].value.wipe()
 				value.object[index].value = child
+			} else {
+				indices[name] = len(value.object)
+				value.object = append(value.object, authMember{name, child})
 			}
 		}
 		if _, err := decoder.ReadToken(); err != nil {
