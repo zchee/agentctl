@@ -237,13 +237,32 @@ func (o *observer) clientTrace(phases PhaseTimeouts) *httptrace.ClientTrace {
 // headers before its first Read. WroteHeaders alone fires before that flush.
 // The body deadline starts once, after the header write has completed.
 type refreshBodyReader struct {
+	mu      sync.Mutex
 	reader  *bytes.Reader
 	observe *observer
 	budget  time.Duration
 	started bool
+	done    chan struct{}
+	once    sync.Once
+}
+
+func (r *refreshBodyReader) Close() error {
+	r.once.Do(func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		// Cancellation may close the body before the transport's read finishes.
+		r.reader = nil
+		close(r.done)
+	})
+	return nil
 }
 
 func (r *refreshBodyReader) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.reader == nil {
+		return 0, net.ErrClosed
+	}
 	if !r.started {
 		r.started = true
 		if err := r.observe.conn.SetWriteDeadline(time.Now().Add(r.budget)); err != nil {
@@ -295,24 +314,50 @@ func (c *refreshClient) post(ctx context.Context, endpoint, userAgent string, bo
 	if err := ctx.Err(); err != nil {
 		return Outcome{Kind: OutcomeNotSent, Reason: "cancelled before the send", Err: err}
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return Outcome{Kind: OutcomeNotSent, Reason: "the request could not be built", Err: err}
 	}
 	obs := new(observer)
 	req.ContentLength = int64(len(body))
+	var requestBody *refreshBodyReader
 	if len(body) != 0 {
-		req.Body = io.NopCloser(&refreshBodyReader{reader: bytes.NewReader(body), observe: obs, budget: c.phases.SendBody})
+		requestBody = &refreshBodyReader{reader: bytes.NewReader(body), observe: obs, budget: c.phases.SendBody, done: make(chan struct{})}
+		req.Body = requestBody
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 	req = req.WithContext(httptrace.WithClientTrace(ctx, obs.clientTrace(c.phases)))
 	resp, err := c.client.Do(req)
+	if resp != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
+	if requestBody != nil {
+		// A response or transport error can precede the asynchronous body Close.
+		waitCtx, stop := context.WithTimeout(ctx, c.phases.SendBody)
+		var waitErr error
+		select {
+		case <-requestBody.done:
+		default:
+			select {
+			case <-requestBody.done:
+			case <-waitCtx.Done():
+				waitErr = waitCtx.Err()
+			}
+		}
+		stop()
+		if waitErr != nil {
+			cancel()
+			_ = requestBody.Close()
+			return Outcome{Kind: OutcomeUnknown, Reason: "the request body did not finish closing", Err: waitErr, Trace: obs.snapshot()}
+		}
+	}
 	if err != nil {
 		return Classify(err, obs.snapshot())
 	}
-	defer func() { _ = resp.Body.Close() }()
 	out := Outcome{Kind: OutcomeResponse, Status: resp.StatusCode, Header: resp.Header.Clone()}
 	if resp.Body == http.NoBody {
 		out.BodyComplete = true
