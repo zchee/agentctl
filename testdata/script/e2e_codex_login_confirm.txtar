@@ -1,0 +1,43 @@
+# Provenance: tests/e2e_codex_login_confirm.rs; headings retain reference names without numbering prefixes.
+
+# a_second_login_for_an_owned_account_is_refused_and_costs_the_stored_grant_nothing
+codex-login-fixture first
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-check snapshot
+exec expectexit 2 agentctl codex login
+stderr 'already logged in.*standard input is not a terminal'
+stderr 'accounts remove'
+! stderr '--yes'
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check unchanged
+
+# a_login_for_another_account_is_not_an_overwrite_and_is_not_asked_about
+codex-login-fixture other
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-other-identity
+exec agentctl codex login
+! stdout 'replace the grant'
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-prior-unchanged
+
+# a_namespace_with_no_record_is_adopted_without_a_question
+codex-login-fixture adopt
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-check drop-record
+exec agentctl codex login
+! stdout 'replace the grant'
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check audit

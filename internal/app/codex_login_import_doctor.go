@@ -22,12 +22,22 @@ import (
 	commands "github.com/zchee/agentctl/internal/commands/codex"
 	"github.com/zchee/agentctl/internal/config"
 	provider "github.com/zchee/agentctl/internal/provider/codex"
+	"github.com/zchee/agentctl/internal/runtime/tty"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
 func init() { register(codexLoginImportDoctorHandlers) }
 
 func codexLoginImportDoctorHandlers(deps Dependencies, handlers *cli.Handlers) {
+	handlers.CodexLogin = func(ctx context.Context, globals cli.Globals, opts cli.CodexLoginOptions) error {
+		paths, err := config.Resolve(globals.ConfigDir)
+		if err != nil {
+			return err
+		}
+		prompt := commands.LoginTerminal{In: os.Stdin, Out: deps.Stdout}
+		command := commands.Login{Paths: paths, Reader: secret.NewReader(), Env: provider.Env{CodexHome: os.Getenv("CODEX_HOME"), Home: os.Getenv("HOME")}, In: os.Stdin, Out: deps.Stdout, Err: os.Stderr, Prompt: prompt, Terminal: tty.IsTerminal(os.Stdin), Signals: deps.Signals}
+		return command.Run(ctx, opts)
+	}
 	handlers.CodexImport = func(ctx context.Context, globals cli.Globals, opts cli.CodexImportOptions) error {
 		paths, err := config.Resolve(globals.ConfigDir)
 		if err != nil {

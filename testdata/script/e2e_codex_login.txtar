@@ -1,0 +1,215 @@
+# Provenance: tests/e2e_codex_login.rs; headings retain reference names without numbering prefixes.
+
+# checked_reports_a_needle_by_name_and_offset_never_by_value
+codex-login-oracle-control needle
+
+# checked_refuses_a_run_that_dropped_a_write_receipt
+codex-login-oracle-control receipt
+
+# a_login_that_leaves_a_normal_logins_residue_installs
+codex-login-fixture normal
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# the_install_is_a_copy_not_a_rename
+codex-login-fixture copy
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# the_child_sees_exactly_the_allowlist_and_no_decoy
+codex-login-fixture allowlist
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# the_lowercase_proxy_names_reach_the_child_and_nothing_else_new
+codex-login-fixture proxies
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# the_child_runs_in_its_scratch_home_and_is_given_it
+codex-login-fixture cwd
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# the_child_gets_the_measured_argv
+codex-login-fixture argv
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# a_child_that_fails_installs_nothing_and_leaves_no_scratch
+codex-login-fixture failed
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'login exited'
+codex-login-check refused
+
+# an_apikey_login_is_refused_because_it_has_no_usage_source
+codex-login-fixture apikey
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'only a ChatGPT login has a usage source'
+codex-login-check refused
+
+# a_child_that_starts_a_daemon_is_refused
+codex-login-fixture daemon
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'started a Codex daemon'
+codex-login-check refused
+
+# a_child_that_leaves_a_held_lock_is_refused
+codex-login-fixture held
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'lock file.*still held'
+codex-login-check refused
+
+# keychain_a_normal_login_takes_exactly_two_listings_and_installs
+codex-login-fixture listings
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# keychain_a_child_that_creates_a_codex_auth_item_is_refused
+codex-login-fixture gained
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'cli\|0123456789abcdef'
+codex-login-check refused
+
+# keychain_an_item_a_child_gained_is_named_only_in_agctls_spelling
+codex-login-fixture hostile-gained
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'account agentctl would not have written'
+codex-login-check refused
+
+# keychain_a_second_listing_that_fails_is_a_refusal
+codex-login-fixture listing-failed
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'keychain after the login'
+codex-login-check refused
+
+# a_scratch_document_swapped_for_a_symlink_never_lands
+codex-login-fixture snapshot-symlink
+codex-login-run snapshot-symlink 0
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# a_scratch_document_replaced_by_another_file_never_lands
+codex-login-fixture snapshot-file
+codex-login-run snapshot-file 0
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# a_scratch_document_rewritten_in_place_never_lands
+codex-login-fixture snapshot-inplace
+codex-login-run snapshot-inplace 0
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# a_failed_install_rename_leaves_the_previous_grant_byte_identical
+codex-login-fixture rename-failed
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check unchanged
+
+# a_login_audits_an_install_and_then_an_overwrite
+codex-login-fixture audit
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-check drop-record
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check audit
+
+# a_symlinked_scratch_root_is_refused_and_nothing_behind_it_is_swept
+codex-login-fixture symlink-root
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'scratch root.*symbolic link'
+codex-login-check refused
+
+# a_closed_stdout_never_decides_whether_the_credential_is_removed
+codex-login-fixture closed-stdout
+codex-login-run closed-stdout 0
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# a_closed_stderr_never_decides_whether_the_credential_is_removed
+codex-login-fixture blocked-marker
+exec agentctl codex login
+stderr 'refresh marker could not be reset after a login install'
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-fixture closed-stderr
+codex-login-run closed-stderr 0
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+
+# a_sigterm_while_paused_before_install_removes_the_registered_scratch_document
+codex-login-fixture signal
+codex-login-run signal 143
+cp stdout login-out.txt
+cp stderr login-err.txt
+
+# a_relogin_over_a_terminal_namespace_resets_its_refresh_state
+codex-login-fixture reset
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check installed
+codex-login-terminal-marker
+codex-login-check drop-record
+exec agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+codex-login-check reset
+
+# an_odd_lock_the_child_named_is_reported_without_its_name_reaching_stderr
+codex-login-fixture odd-hostile
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'unnameable lock file'
+codex-login-check refused
+
+# an_odd_lock_named_the_way_agctl_writes_one_is_still_named
+codex-login-fixture odd-safe
+exec expectexit 2 agentctl codex login
+cp stdout login-out.txt
+cp stderr login-err.txt
+stderr 'ordinary.lock'
+codex-login-check refused
