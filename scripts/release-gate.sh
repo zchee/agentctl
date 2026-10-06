@@ -18,7 +18,19 @@ for tool in go rg sort comm diff mktemp; do
 done
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/agentctl-release-gate.XXXXXX")
-trap 'rm -rf -- "$work"' EXIT
+completed=0
+cleanup() {
+	local status=$?
+	rm -rf -- "$work" || status=1
+	if [ "$completed" -ne 1 ]; then
+		printf 'FAIL release gate: aborted before final summary\n' >&2
+		if [ "$status" -eq 0 ]; then
+			status=1
+		fi
+	fi
+	exit "$status"
+}
+trap cleanup EXIT
 failures=0
 
 testing_env=(
@@ -251,3 +263,4 @@ if [ "$failures" -ne 0 ]; then
 	exit 1
 fi
 printf 'PASS release gate: %s seams absent, tagged controls present, %s production controls present\n' "${#seams[@]}" "${#production[@]}"
+completed=1

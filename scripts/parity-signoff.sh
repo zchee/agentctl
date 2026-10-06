@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+completed=0
+finish() {
+  local status=$?
+  if [[ "$completed" != 1 ]]; then
+    printf 'FAIL parity sign-off: aborted before final summary\n' >&2
+    if [[ "$status" == 0 ]]; then
+      status=1
+    fi
+  fi
+  exit "$status"
+}
+trap finish EXIT
 umask 077
 
 # Run from the module root. Captured files are retained for diagnosis.
@@ -25,13 +37,19 @@ mkdir -p "$work/captures"
 printf 'Evidence: %s\n' "$work"
 printf 'Measured: %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
 printf 'Reference: %s\n' "$reference"
-printf 'Source: %s\n' "$(git rev-parse HEAD)"
+if source=$(git rev-parse HEAD 2>/dev/null); then
+  printf 'Source: %s\n' "$source"
+else
+  printf 'Source: unavailable (not a git checkout)\n'
+fi
 GOTOOLCHAIN=go1.27.1 GOFLAGS='' go build -trimpath -ldflags='-s -w' -o "$work/agentctl" "$root"
 GOTOOLCHAIN=go1.27.1 go version -m "$work/agentctl" >| "$work/build-info"
 if grep -q -- '-tags=' "$work/build-info"; then
   printf 'FAIL untagged release build: artifact contains a -tags= build setting\n' >&2
   exit 1
 fi
+shasum -a 256 "$reference" "$work/agentctl" >| "$work/artifact-sha256"
+printf 'Artifact SHA-256:\n%s\n' "$(< "$work/artifact-sha256")"
 printf 'PASS untagged release build (exit=0; no -tags= build setting)\n'
 
 passes=0
@@ -243,6 +261,7 @@ done
 result SKIP 'usage/refresh endpoints: release endpoint overrides are compiled out; no live network requests'
 printf 'Summary: PASS=%s FAIL=%s SKIP=%s\n' "$passes" "$failures" "$skips"
 printf 'Evidence retained: %s\n' "$work"
+completed=1
 if (( failures != 0 )); then
   exit 1
 fi
