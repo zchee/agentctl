@@ -158,6 +158,9 @@ func (l *Login) install(ctx context.Context, scratch *provider.LoginScratch, rep
 	defer func() { _ = guard.Release() }()
 	active := fault.Active()
 	active.PausePoint("codex_login_before_install")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	receipt, _, err := provider.WriteAuth(guard.Context(), l.Paths, verified, guard)
 	if err != nil {
 		return errs.NewRefused(0, err.Error())

@@ -784,10 +784,20 @@ func codexLoginProcess(ts *testscript.TestScript, mode string, want int, scratch
 			ts.Check(os.WriteFile(scratch, []byte(`{"auth_mode":"apikey"}`), 0o600))
 		case "signal":
 			ts.Check(cmd.Process.Signal(unix.SIGTERM))
+			for {
+				_, err := os.Lstat(scratch)
+				if errors.Is(err, os.ErrNotExist) {
+					break
+				}
+				ts.Check(err)
+				select {
+				case <-ticker.C:
+				case <-ctx.Done():
+					ts.Fatalf("signal never removed the registered scratch credential")
+				}
+			}
 		}
-		if mode != "signal" {
-			ts.Check(os.WriteFile(resume, nil, 0o600))
-		}
+		ts.Check(os.WriteFile(resume, nil, 0o600))
 	}
 	err = cmd.Wait()
 	exit := 0
@@ -805,13 +815,15 @@ func codexLoginProcess(ts *testscript.TestScript, mode string, want int, scratch
 	if mode == "signal" {
 		leaves, err := os.ReadDir(scratchRoot)
 		ts.Check(err)
-		if len(leaves) != 1 {
-			ts.Fatalf("signal unexpectedly removed scratch directory")
+		if len(leaves) > 1 {
+			ts.Fatalf("signal left unexpected scratch homes")
 		}
-		if _, err := os.Stat(filepath.Join(scratchRoot, leaves[0].Name(), "auth.json")); !os.IsNotExist(err) {
-			ts.Fatalf("signal left registered credential")
+		for _, leaf := range leaves {
+			if _, err := os.Lstat(filepath.Join(scratchRoot, leaf.Name(), "auth.json")); !os.IsNotExist(err) {
+				ts.Fatalf("signal left registered credential")
+			}
 		}
-		if _, err := os.Stat(authPath); !os.IsNotExist(err) {
+		if _, err := os.Lstat(authPath); !os.IsNotExist(err) {
 			ts.Fatalf("signal installed credential")
 		}
 	}
