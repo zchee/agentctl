@@ -53,7 +53,7 @@ func readOwned(ctx context.Context, source codexprovider.Source, paths *config.P
 		}
 	}()
 	read, err := ns.Read()
-	if err == nil && read.Kind == codexprovider.ResolvedTorn && waitTorn(ctx) {
+	if err == nil && read.Kind == codexprovider.ResolvedTorn && waitTorn(guard.Context()) {
 		read, err = ns.Read()
 	}
 	if err != nil {
@@ -72,7 +72,7 @@ func readOwned(ctx context.Context, source codexprovider.Source, paths *config.P
 		view = markerView{kind: markerUnavailable, reason: err.Error()}
 	} else {
 		digest, ok := read.Credentials.RefreshDigest8()
-		view, floor = readMarkerView(store.Load(ctx), digest, ok)
+		view, floor = readMarkerView(store.Load(guard.Context()), digest, ok)
 	}
 	credentials, err := read.Credentials.IntoCredentials()
 	if err != nil {
