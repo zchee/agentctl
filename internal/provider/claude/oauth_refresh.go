@@ -139,7 +139,10 @@ func NewOAuthClient(tokenURL, profileURL, userAgent string) (*OAuthClient, error
 			Timeout:       TokenTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		profileClient: &http.Client{Timeout: ProfileTimeout},
+		profileClient: &http.Client{
+			Timeout:       ProfileTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}, nil
 }
 

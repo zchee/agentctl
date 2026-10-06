@@ -126,7 +126,11 @@ func NewUsageClient(baseURL, userAgent string, totalTimeout time.Duration) *Usag
 	return &UsageClient{
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		userAgent: userAgent,
-		client:    &http.Client{Transport: transport, Timeout: totalTimeout},
+		client: &http.Client{
+			Transport:     transport,
+			Timeout:       totalTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 
