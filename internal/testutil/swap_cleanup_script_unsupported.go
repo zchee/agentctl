@@ -12,24 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build darwin
+//go:build !darwin
 
 package testutil
 
-import (
-	"os/exec"
+import "github.com/rogpeppe/go-internal/testscript"
 
-	"github.com/rogpeppe/go-internal/testscript"
-)
-
-// Darwin's user immutable flag needs no privilege; Linux's chattr +i requires root.
 func init() {
-	registerScriptCmd("swap-immutable", func(ts *testscript.TestScript, neg bool, args []string) {
-		if neg || len(args) != 1 {
-			ts.Fatalf("usage: swap-immutable <file>")
-		}
-		path := ts.MkAbs(args[0])
-		ts.Defer(func() { ts.Check(exec.Command("/usr/bin/chflags", "nouchg", path).Run()) })
-		ts.Check(exec.Command("/usr/bin/chflags", "uchg", path).Run())
+	registerScriptCmd("swap-immutable", func(ts *testscript.TestScript, _ bool, _ []string) {
+		ts.Fatalf("swap-immutable is only available on Darwin; guard it with [darwin]")
 	})
 }

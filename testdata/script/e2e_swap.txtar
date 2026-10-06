@@ -1122,6 +1122,8 @@ undo-check 0 0 1 third-absent
 swap-check 0 0 0
 swap-io 1 0 0
 
+# Only the cleanup-failure cases require Darwin's unprivileged immutable flag.
+# Linux's chattr +i requires root; keep the remaining swap cases portable.
 # an_applied_swap_whose_cleanup_failed_warns_on_stderr_and_in_json (arm: cleanup-human)
 [darwin] swapfixture first-write cleanup-human
 [darwin] undo-setup
