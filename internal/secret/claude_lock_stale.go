@@ -285,7 +285,7 @@ func ResolveStale(ctx context.Context, subject LockSubject, at LockSlot, profile
 
 	// The injected resume: a holder that was wedged and comes back in
 	// exactly the window sample C exists to close.
-	if seams.fault(FaultLockResumeAfterSampleB) {
+	if seams.fault(fault.LockResumeAfterSampleB) {
 		touchSlot(at)
 	}
 

@@ -59,6 +59,8 @@ const (
 	CodexRefreshStateRename = "codex_refresh_state_rename"
 	// CodexRefreshStateWrite fails the refresh-state temporary write.
 	CodexRefreshStateWrite = "codex_refresh_state_write"
+	// FlockENOTSUP makes the namespace lock report an unsupported flock.
+	FlockENOTSUP = "flock_enotsup"
 	// LockContended makes the primary lock's first mkdir report a holder.
 	LockContended = "lock_contended"
 	// LockResumeAfterSampleB touches the lock between the last two samples.

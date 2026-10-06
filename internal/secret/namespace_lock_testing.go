@@ -25,7 +25,7 @@ import (
 )
 
 func namespaceLockFault(path string) error {
-	if fault.Active().Is("flock_enotsup") {
+	if fault.Active().Is(fault.FlockENOTSUP) {
 		return &LockUnavailableError{Reason: fmt.Sprintf("could not lock `%s`: %v", path, unix.ENOTSUP), Err: unix.ENOTSUP}
 	}
 	return nil

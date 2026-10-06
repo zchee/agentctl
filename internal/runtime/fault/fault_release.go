@@ -53,6 +53,8 @@ const (
 	CodexRefreshStateRename = ""
 	// CodexRefreshStateWrite is inert in a release build.
 	CodexRefreshStateWrite = ""
+	// FlockENOTSUP is inert in a release build.
+	FlockENOTSUP = ""
 	// LockContended is inert in a release build.
 	LockContended = ""
 	// LockResumeAfterSampleB is inert in a release build.

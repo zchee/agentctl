@@ -24,6 +24,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/runtime/fault"
 	"github.com/zchee/agentctl/internal/runtime/proc"
 )
 
@@ -310,7 +311,7 @@ func AcquirePeerLocksWith(ctx context.Context, anchor *LockAnchor, paths *config
 			if !present {
 				continue
 			}
-			if elapsedSince(seams.Clock.Wall(), mtime) < lock.profile.Stale && !seams.fault(FaultLockStale) {
+			if elapsedSince(seams.Clock.Wall(), mtime) < lock.profile.Stale && !seams.fault(fault.LockStale) {
 				continue
 			}
 			if breakRecord != nil {
@@ -416,7 +417,7 @@ func AcquirePeerLocksWith(ctx context.Context, anchor *LockAnchor, paths *config
 				holdBudget: primary.profile.HoldBudget,
 				clock:      seams.Clock,
 				fs:         seams.FS,
-				leak:       seams.fault(FaultSwapLockLeak),
+				leak:       seams.fault(fault.SwapLockLeak),
 			}
 			registerEmergencyRelease(hold, seams)
 			return &Acquisition{Held: hold, BreakRecord: breakRecord}, nil
@@ -487,7 +488,7 @@ func takeAll(anchor *LockAnchor, plans *[3]lockPlan, seams *Seams) ([]heldOne, *
 		lock := &plans[position]
 		at := anchor.slot(&lock.artefact)
 		var err error
-		if position == 0 && seams.fault(FaultLockContended) {
+		if position == 0 && seams.fault(fault.LockContended) {
 			err = ErrLockExists
 		} else {
 			err = seams.FS.Mkdir(at)
