@@ -53,8 +53,8 @@ stderr 'unknown command "bogus" for "agentctl claude"'
 stderr 'agentctl claude --help'
 
 # The exit contract, by number rather than by zero/non-zero: usage errors
-# and Claude status on an empty store exit 2. The parsed codex status command
-# below still exits 1 because its implementation has not arrived.
+# and Claude status on an empty store exit 2; Codex status with no home
+# and no recorded accounts succeeds without inventing a live row.
 exec expectexit 2 agentctl completions tcsh
 exec expectexit 2 agentctl bogus
 exec expectexit 2 agentctl claude bogus
@@ -68,4 +68,4 @@ exec expectexit 0 agentctl --version
 # ordinary statuses untouched: a clean run still exits 0 and a fatal
 # one still exits 1.
 exec expectexit 0 agentctl completions zsh
-exec expectexit 1 agentctl codex status
+exec expectexit 0 agentctl codex status

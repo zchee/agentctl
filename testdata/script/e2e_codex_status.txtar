@@ -1,0 +1,313 @@
+# Provenance: tests/e2e_codex_status.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; executable fixtures use real loopback endpoints and isolated homes.
+
+# status_json_validates_against_v2_and_carries_no_needle
+codex-status-fixture twins
+env AGENTCTL_LOG=debug
+exec agentctl codex status --json
+cp stdout status-json
+cp stderr status-trace
+exec schema status.v2.json status-json
+codex-status-check json status-json 2 ok
+codex-status-check needles status-json status-trace
+grep 'codex_account' status-trace
+grep $C_USER status-trace
+! grep $C_EMAIL status-trace
+codex-status-calls 2 0
+
+# raw_bodies_carry_no_email_in_the_table_and_in_the_v2_document
+codex-status-fixture live
+exec agentctl codex status --raw
+stdout '--- raw: '
+stdout '"account_id"'
+cp stdout raw-table
+codex-status-check needles raw-table
+exec agentctl codex status --json --raw
+cp stdout raw-json
+exec schema status.v2.json raw-json
+codex-status-check json raw-json 1 ok
+codex-status-check needles raw-json
+exec agentctl codex status --json
+! stdout '"raw"'
+codex-status-calls 1 0
+
+# no_usage_source_rows_alone_exit_0_and_a_degraded_row_exits_2
+codex-status-fixture apikey
+exec agentctl codex status
+stdout 'no usage source \(apikey\)'
+stdout 'Account.*Plan.*Kind.*5h.*Weekly.*Credits.*5h reset.*Weekly reset.*State'
+codex-status-calls 0 0
+codex-status-fixture apikey-never
+exec expectexit 2 agentctl codex status
+stdout 'expired \(run agentctl codex login\)'
+stdout 'no usage source \(apikey\)'
+codex-status-calls 0 0
+
+# a_codex_only_run_creates_the_empty_claude_store_and_the_codex_roots
+codex-status-fixture empty
+exec agentctl codex status
+! stdout 'needs login'
+exists $C_CONFIG/claude/.locks
+exists $C_CONFIG/cache/claude
+exists $C_CONFIG/codex/.locks
+exists $C_CONFIG/codex/.state
+exists $C_CONFIG/codex/.scratch
+exists $C_CONFIG/cache/codex
+mkdir $C_LIVE
+exec expectexit 2 agentctl codex status
+stdout 'needs login'
+stdout 'no credential in this Codex home'
+codex-status-calls 0 0
+
+# the_get_carries_the_documented_headers_and_fedramp_only_when_claimed
+codex-status-fixture live
+exec agentctl codex status
+codex-status-headers false
+codex-status-fixture fedramp
+exec agentctl codex status
+codex-status-headers true
+
+# a_403_is_an_error_and_never_a_refresh
+codex-status-fixture owned
+codex-status-response usage 403
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'HTTP 403'
+codex-status-calls 1 0
+
+# default_flags_let_one_expired_owned_row_refresh_exactly_once
+codex-status-fixture owned-expired
+exec agentctl codex status --account $C_USER
+codex-status-calls 1 1
+codex-status-check namespace $C_NAMESPACE
+
+# an_account_selector_that_matches_nothing_fails_naming_the_known_ones
+codex-status-fixture owned
+exec expectexit 1 agentctl codex status --account nobody
+stderr 'no Codex account matches `nobody`'
+stderr $C_USER/$C_ACCOUNT
+codex-status-calls 0 0
+
+# watch_rejects_an_interval_under_the_floor_naming_it
+codex-status-fixture empty
+exec expectexit 2 agentctl codex watch --interval 30s
+stderr '60s floor'
+
+# a_permanent_class_needs_login_after_one_post_and_no_retry
+codex-status-fixture owned-expired
+codex-status-response token 400
+cp $C_NAMESPACE/auth.json before-permanent
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'needs login'
+cmp before-permanent $C_NAMESPACE/auth.json
+codex-status-calls 0 1
+
+# a_pre_send_failure_is_stale_and_the_next_pass_sends_exactly_once
+codex-status-fixture owned-expired
+env AGENTCTL_CODEX_TOKEN_URL=http://127.0.0.1:9/oauth/token
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'stale'
+codex-status-calls 0 0
+env AGENTCTL_CODEX_TOKEN_URL=$C_TOKEN_URL
+exec agentctl codex status --account $C_USER
+codex-status-calls 1 1
+
+# a_refresh_appends_one_audited_line_that_names_no_identity
+codex-status-fixture owned-expired
+exec agentctl codex status --account $C_USER
+codex-status-check audit $C_AUDIT
+codex-status-calls 1 1
+
+# an_audit_append_that_fails_leaves_the_write_and_says_so
+codex-status-fixture owned-expired
+mkdir $C_AUDIT
+exec agentctl codex status --account $C_USER
+stdout 'audit log refused'
+codex-status-calls 1 1
+codex-status-check namespace $C_NAMESPACE
+
+# the_floor_blocks_the_second_pass_and_at_most_one_post_is_sent
+codex-status-fixture owned
+codex-status-response usage 401
+exec expectexit 2 agentctl codex status --account $C_USER
+codex-status-calls 2 1
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'unauthorized'
+codex-status-calls 3 1
+
+# a_server_error_is_an_unknown_outcome_and_the_next_pass_sends_nothing
+codex-status-fixture owned
+codex-status-response usage 401
+codex-status-response token 503
+cp $C_NAMESPACE/auth.json before-unknown
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'refresh outcome unknown'
+cmp before-unknown $C_NAMESPACE/auth.json
+codex-status-calls 1 1
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'refresh outcome unknown'
+codex-status-calls 2 1
+
+# an_unreadable_marker_is_state_unavailable_and_never_unknown
+codex-status-fixture owned-expired
+mkdir $C_CONFIG/codex/.state
+cp malformed-marker $C_MARKER
+chmod 0000 $C_MARKER
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'refresh state unavailable'
+! stdout 'refresh outcome unknown'
+codex-status-calls 1 0
+chmod 0600 $C_MARKER
+
+# account_live_on_a_machine_without_codex_is_an_unmatched_selector
+codex-status-fixture owned
+exec expectexit 1 agentctl codex status --account live
+stderr 'no Codex account matches `live`'
+stderr $C_USER/$C_ACCOUNT
+! exists $C_LIVE
+mkdir $C_LIVE
+exec expectexit 2 agentctl codex status --account live
+stdout 'no credential in this Codex home'
+codex-status-calls 0 0
+
+# a_torn_credential_file_says_so_and_is_never_refreshed
+codex-status-fixture torn
+exec expectexit 2 agentctl codex status
+stdout 'auth.json was being rewritten'
+! stdout 'needs login'
+codex-status-calls 0 0
+
+# the_live_home_is_read_from_the_environment_and_only_when_it_is_there
+codex-status-fixture empty
+exec agentctl codex status
+! stdout 'needs login'
+codex-status-action live
+exec agentctl codex status
+stdout 'live'
+codex-status-calls 1 0
+
+# supplemental: explicit live-home overrides report absent directories
+codex-status-fixture empty
+mkdir alternate-home
+env CODEX_HOME=$WORK/alternate-home
+exec expectexit 2 agentctl codex status
+stdout 'needs login'
+env CODEX_HOME=$WORK/missing-home
+exec expectexit 2 agentctl codex status
+stdout 'home unreadable'
+codex-status-calls 0 0
+
+# an_abort_after_the_marker_leaves_the_next_pass_with_no_post
+codex-status-fixture owned-expired
+env AGENTCTL_FAULT=codex_abort_after_marker
+! exec agentctl codex status --account $C_USER
+codex-status-calls 0 0
+codex-status-check marker $C_MARKER inflight object
+env AGENTCTL_FAULT=
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'refresh outcome unknown'
+codex-status-calls 0 0
+
+# a_live_codex_daemon_stops_the_refresh_and_names_itself
+codex-status-fixture owned-expired
+codex-status-action daemon
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'codex session detected'
+codex-status-calls 0 0
+
+# a_a_race_at_the_post_snapshot_is_adopted_and_verified_with_one_get
+codex-status-fixture owned-expired
+codex-status-response token 400
+env AGENTCTL_FAULT=pause_codex_after_post_snapshot
+exec agentctl codex status --account $C_USER --json &
+codex-status-action wait
+codex-status-action rotate
+codex-status-action resume
+wait
+cp stdout adopted-ok
+codex-status-check json adopted-ok 1 ok
+stdout 'refresh raced an external writer'
+codex-status-calls 1 1
+codex-status-check stored $C_NAMESPACE/auth.json 0009
+codex-status-check marker $C_MARKER inflight '<nil>'
+grep 'adopted_external' $C_AUDIT
+
+# a_prime_an_adopted_grant_that_is_rejected_needs_login
+codex-status-fixture owned-expired
+codex-status-response token 400
+codex-status-response usage 401
+env AGENTCTL_FAULT=pause_codex_after_post_snapshot
+! exec agentctl codex status --account $C_USER --json &
+codex-status-action wait
+codex-status-action rotate
+codex-status-action resume
+wait
+cp stdout adopted-dead
+codex-status-check json adopted-dead 1 adopted_grant_dead
+codex-status-calls 1 1
+
+# status_dumps_the_keychain_only_under_store_mode_auto
+codex-status-fixture live
+exec agentctl codex status
+! exists $AGCTL_FAKE_SECURITY_LOG
+cp auto-store $C_LIVE/config.toml
+exec agentctl codex status
+grep 'dump-keychain' $AGCTL_FAKE_SECURITY_LOG
+codex-status-calls 1 0
+
+# a_parked_grant_is_replayed_on_the_next_pass_without_a_second_post
+codex-status-fixture owned-expired
+env AGENTCTL_FAULT=codex_rename_fail
+! exec agentctl codex status --account $C_USER
+exists $C_NAMESPACE/auth.json.pending
+exists $C_NAMESPACE/auth.pending.meta
+codex-status-calls 0 1
+env AGENTCTL_FAULT=
+exec agentctl codex status --account $C_USER
+stdout 'pending replayed'
+codex-status-calls 1 1
+codex-status-check stored $C_NAMESPACE/auth.json 0002
+! exists $C_NAMESPACE/auth.json.pending
+! exists $C_NAMESPACE/auth.pending.meta
+
+# a_pending_grant_with_no_metadata_is_discarded_and_the_row_stays_due
+codex-status-fixture owned-expired
+codex-status-action pending
+exec agentctl codex status --account $C_USER
+stdout 'pending discarded'
+! exists $C_NAMESPACE/auth.json.pending
+codex-status-check stored $C_NAMESPACE/auth.json 0002
+codex-status-calls 1 1
+
+# h_sigterm_before_the_rename_keeps_the_grant_and_the_marker
+codex-status-fixture owned-expired
+env AGENTCTL_FAULT=pause_codex_before_rename
+! exec agentctl codex status --account $C_USER &
+codex-status-action wait
+codex-status-action term
+wait
+codex-status-check staged $C_NAMESPACE
+codex-status-check stored $C_NAMESPACE/auth.json 0001
+codex-status-check marker $C_MARKER inflight object
+codex-status-calls 0 1
+env AGENTCTL_FAULT=
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'refresh outcome unknown'
+codex-status-calls 0 1
+
+# sigint_before_the_rename_leaves_an_interrupted_outcome
+codex-status-fixture owned-expired
+env AGENTCTL_FAULT=pause_codex_before_rename
+! exec agentctl codex status --account $C_USER &
+codex-status-action wait
+codex-status-action int
+wait
+codex-status-check staged $C_NAMESPACE
+codex-status-check marker $C_MARKER inflight object
+env AGENTCTL_FAULT=
+exec expectexit 2 agentctl codex status --account $C_USER
+stdout 'refresh outcome unknown'
+codex-status-calls 0 1
+
+-- auto-store --
+cli_auth_credentials_store = "auto"
+-- malformed-marker --
+{}

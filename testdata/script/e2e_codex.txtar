@@ -1,0 +1,58 @@
+# Provenance: tests/e2e_codex.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; compares exit status and narrowly normalized complete streams across three passes of the same real store.
+
+# claude_output_is_byte_identical_with_codex_rows_present
+codex-status-fixture empty
+codex-invariance-fixture
+codex-invariance-rows none
+exec sh capture-all.sh before
+codex-invariance-rows two
+exec sh capture-all.sh during
+codex-invariance-rows none
+exec sh capture-all.sh after
+codex-invariance-check before during after
+codex-invariance-rows two
+exec sh capture.sh final claude status --json
+grep '"version":2' $C_CONFIG/config.json
+grep 'user-01' $C_CONFIG/config.json
+grep 'user-02' $C_CONFIG/config.json
+
+# a_claude_command_does_not_resolve_a_codex_account
+exec agentctl claude accounts show owner@example.com
+stdout '11111111-2222-3333-4444-555555555555'
+exec expectexit 1 agentctl claude accounts show user-01
+stderr 'no account matches `user-01`'
+
+# a_codex_command_that_refuses_its_argument_still_touches_no_file
+codex-status-fixture empty
+env AGCTL_FAKE_CODEX_LOG=$WORK/fake-codex.log
+cp $C_CONFIG/config.json untouched
+exec expectexit 1 agentctl codex accounts set x --refresh never
+stderr 'no account matches `x`'
+exec expectexit 1 agentctl codex accounts refresh x --reset-floor
+stderr 'no account matches `x`'
+cmp untouched $C_CONFIG/config.json
+! exists $C_CONFIG/codex
+! exists $AGCTL_FAKE_CODEX_LOG
+codex-status-calls 0 0
+
+# the_codex_flags_parse_and_reach_their_commands
+exec expectexit 1 agentctl codex accounts set x --refresh never
+stderr 'no account matches `x`'
+exec expectexit 2 agentctl codex status --by-identity
+stderr 'unknown flag: --by-identity'
+
+-- capture-all.sh --
+set -eu
+prefix=$1
+sh capture.sh "$prefix-status-json" claude status --json
+sh capture.sh "$prefix-status-table" claude status
+sh capture.sh "$prefix-list" claude accounts list --all
+sh capture.sh "$prefix-show" claude accounts show owner@example.com
+sh capture.sh "$prefix-doctor" claude doctor
+sh capture.sh "$prefix-undo" claude use --undo --json
+-- capture.sh --
+prefix=$1
+shift
+agentctl "$@" >| "$prefix.out" 2>| "$prefix.err"
+code=$?
+printf '%s\n' "$code" >| "$prefix.code"
