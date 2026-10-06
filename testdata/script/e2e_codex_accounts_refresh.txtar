@@ -1,0 +1,70 @@
+# Provenance: tests/e2e_codex_accounts_refresh.rs @ dbf6aeab84dfbe2465de496316d7bf6780940a60; real loopback servers count every GET and POST, and refused actions preserve marker bytes and namespace manifests.
+
+# set_names_a_row_it_cannot_change
+codex-status-fixture owned
+cp $C_CONFIG/config.json registry-before
+codex-manifest save $C_NAMESPACE
+exec expectexit 1 agentctl codex accounts set nobody --refresh never
+stderr 'no account matches `nobody`'
+cmp registry-before $C_CONFIG/config.json
+codex-manifest check $C_NAMESPACE
+codex-refresh-policy auto
+codex-status-calls 0 0
+
+# yes_without_a_terminal_refuses_the_re_send_and_posts_nothing
+codex-status-fixture owned
+codex-refresh-marker unknown
+cp $C_MARKER marker-before
+codex-manifest save $C_CONFIG/codex
+exec expectexit 2 agentctl codex accounts refresh $C_USER --resend --yes
+stderr 'interactive terminal'
+cp stdout resend-out
+cp stderr resend-err
+cmp marker-before $C_MARKER
+codex-manifest check $C_CONFIG/codex
+codex-status-calls 0 0
+codex-status-check needles resend-out resend-err
+
+# a_spent_marker_is_refused_before_a_terminal_is_even_asked_for
+codex-status-fixture owned
+codex-refresh-marker spent
+cp $C_MARKER spent-before
+codex-manifest save $C_CONFIG/codex
+exec expectexit 2 agentctl codex accounts refresh $C_USER --resend
+stderr 'interactive terminal'
+cmp spent-before $C_MARKER
+codex-status-check marker $C_MARKER resent true
+codex-manifest check $C_CONFIG/codex
+codex-status-calls 0 0
+
+# reset_floor_without_a_terminal_is_refused_and_lifts_nothing
+codex-status-fixture owned
+codex-refresh-marker terminal
+cp $C_MARKER floor-before
+codex-manifest save $C_CONFIG/codex
+exec expectexit 2 agentctl codex accounts refresh $C_USER --reset-floor --yes
+stderr 'interactive terminal'
+cmp floor-before $C_MARKER
+codex-status-check marker $C_MARKER did_not_help 3
+codex-status-check marker $C_MARKER floor_min 240
+codex-manifest check $C_CONFIG/codex
+codex-status-calls 0 0
+
+# refresh_needs_one_of_the_two_actions_and_says_which
+codex-status-fixture owned
+codex-manifest save $C_CONFIG/codex
+exec expectexit 1 agentctl codex accounts refresh $C_USER
+stderr '--resend'
+stderr '--reset-floor'
+codex-manifest check $C_CONFIG/codex
+codex-status-calls 0 0
+
+# a_row_agctl_stores_no_credential_for_has_no_refresh_state_to_act_on
+codex-status-fixture owned
+codex-account-setup readonly-rows
+codex-manifest save $C_CONFIG/codex
+exec expectexit 2 agentctl codex accounts refresh user-live --resend --yes
+stderr 'stores no credential'
+! exists $C_MARKER
+codex-manifest check $C_CONFIG/codex
+codex-status-calls 0 0
