@@ -14,7 +14,7 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
-	github.com/zchee/go-toml v0.0.0-20260722214334-70b8c27cb946
+	github.com/zchee/go-toml v0.0.0-20261006182330-3ec58a591f26
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0
