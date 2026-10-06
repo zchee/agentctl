@@ -20,7 +20,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/runtime/proc"
 )
@@ -55,10 +58,16 @@ const lockBodyMaxLen = 4096
 // body means the holder is older, or newer, or crashed mid-write, and
 // none of those is worth failing a doctor run over.
 func ReadBody(path string) (LockBody, bool) {
-	bytes, err := os.ReadFile(path)
-	if err != nil || len(bytes) > lockBodyMaxLen {
+	dir, found, err := openDirAtPath(filepath.Dir(path))
+	if err != nil || !found {
 		return LockBody{}, false
 	}
+	defer func() { _ = unix.Close(dir) }()
+	outcome, err := readFileAt(dir, filepath.Base(path), lockBodyMaxLen, path)
+	if err != nil || !outcome.Present {
+		return LockBody{}, false
+	}
+	bytes := outcome.Bytes
 	// Presence is checked through pointers because a record without its
 	// required members is not a record: a zero-valued pid must not be
 	// invented for a body that never named one.
