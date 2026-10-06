@@ -9,6 +9,8 @@ export TART_NO_AUTO_PRUNE=1
 export GOTOOLCHAIN=go1.27.1
 # Persisted go env can carry GOEXPERIMENT; an empty override does not clear it.
 export GOENV=off
+# Inherited or discovered workspaces must not change dependency selection.
+export GOWORK=off
 # Caller-supplied tags must not turn the release artifact into a testing build.
 export GOFLAGS=
 umask 077

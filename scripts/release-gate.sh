@@ -8,6 +8,8 @@ repo_root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 export GOTOOLCHAIN=go1.27.1
 # Persisted go env can carry GOEXPERIMENT; an empty override does not clear it.
 export GOENV=off
+# Inherited or discovered workspaces must not change dependency selection.
+export GOWORK=off
 # Caller-supplied tags must not turn the release artifact into a testing build.
 export GOFLAGS=
 export LC_ALL=C
@@ -68,6 +70,7 @@ fault_points=(
 	codex_error_after_rename
 	codex_install_rename_fail
 	codex_login_after_write
+	codex_login_before_install
 	codex_refresh_state_before_rename
 	codex_refresh_state_dir_sync
 	codex_refresh_state_file_sync
@@ -77,7 +80,6 @@ fault_points=(
 	flock_enotsup
 	lock_contended
 	lock_resume_after_sample_b
-	lock_stale
 	rename_fail
 	swap_lock_leak
 	swap_namespace_acquired
@@ -86,7 +88,7 @@ fault_points=(
 )
 seams=(
 	"${testing_env[@]}"
-	codex_login_before_install
+	"${fault_points[@]}"
 	'agentctl lock order violated'
 	AGCTL_FAKE_CODEX_
 	127.0.0.1:9
@@ -183,6 +185,19 @@ else
 	failures=$((failures + 1))
 fi
 
+# Fault-point names are declared only in this exported constant block; callers
+# reference the constants, so the block is the inventory to scan for.
+# This gate checks that the inventory and artifact scans agree.
+rg --no-filename -o --replace '$2' '^[[:space:]]+[A-Z][A-Za-z0-9_]*([[:space:]]+string)?[[:space:]]*=[[:space:]]*"([a-z][a-z0-9_]*)"$' \
+	"$repo_root/internal/runtime/fault/fault_testing.go" | sort -u >|"$work/discovered-faults"
+printf '%s\n' "${fault_points[@]}" lock_stale | sort -u >|"$work/expected-faults"
+if diff -u "$work/expected-faults" "$work/discovered-faults"; then
+	printf 'PASS fault point inventory: %s strict stems and 1 shared production string\n' "${#fault_points[@]}"
+else
+	printf 'FAIL fault point inventory: update the artifact scan list\n' >&2
+	failures=$((failures + 1))
+fi
+
 count_matches() {
 	local count status
 	if count=$(rg -a -c -F -- "$1" "$2"); then
@@ -208,11 +223,10 @@ for name in "${seams[@]}"; do
 		failures=$((failures + 1))
 	fi
 done
-for name in "${fault_points[@]}"; do
-	release_count=$(count_matches "$name" "$work/agentctl-release")
-	testing_count=$(count_matches "$name" "$work/agentctl-testing")
-	printf 'INFO fault string %s: release=%s testing=%s (not a release gate)\n' "$name" "$release_count" "$testing_count"
-done
+# The production audit reason value shares lock_stale, so it cannot be release-absent.
+release_count=$(count_matches lock_stale "$work/agentctl-release")
+testing_count=$(count_matches lock_stale "$work/agentctl-testing")
+printf 'INFO fault string lock_stale: release=%s testing=%s (production audit reason value shares the string; not a release gate)\n' "$release_count" "$testing_count"
 for name in "${production[@]}"; do
 	count=$(count_matches "$name" "$work/agentctl-release")
 	if [ "$count" -gt 0 ]; then
