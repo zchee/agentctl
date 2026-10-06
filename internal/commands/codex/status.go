@@ -111,7 +111,7 @@ func (s *Status) Run(ctx context.Context, globals cli.Globals, opts cli.CodexSta
 		if err != nil {
 			return errs.NewConfig("the JSON report could not be serialized: " + err.Error())
 		}
-		if _, err := out.Write(body); err != nil {
+		if _, err := out.Write(append(body, '\n')); err != nil {
 			return err
 		}
 	} else {
