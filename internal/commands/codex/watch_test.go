@@ -66,8 +66,8 @@ func TestWatchReadOnlyPass(t *testing.T) {
 			if test.expired {
 				expiry = 1000
 			}
-			jwt := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, expiry))) + ".watch-test"
-			auth := []byte(fmt.Sprintf(`{"auth_mode":"chatgpt","tokens":{"access_token":%q,"refresh_token":"watch-test-refresh","account_id":"watch-account"}}`, jwt))
+			jwt := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(fmt.Appendf(nil, `{"exp":%d}`, expiry)) + ".watch-test"
+			auth := fmt.Appendf(nil, `{"auth_mode":"chatgpt","tokens":{"access_token":%q,"refresh_token":"watch-test-refresh","account_id":"watch-account"}}`, jwt)
 			authPath := filepath.Join(namespace, "auth.json")
 			if err := os.WriteFile(authPath, auth, 0o600); err != nil {
 				t.Fatal(err)
