@@ -287,7 +287,7 @@ func discoverFaultHelpers(index *faultSourceIndex) map[faultSourceSymbol]map[int
 				if !ok || fn.Body == nil {
 					continue
 				}
-				params := make(map[*ast.Object]int)
+				params := make(map[*ast.Object]int) //nolint:staticcheck // Parser objects are this syntactic guard's binding identity; it loads no type information.
 				paramIndex := 0
 				for _, field := range fn.Type.Params.List {
 					for _, param := range field.Names {
