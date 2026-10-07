@@ -187,6 +187,7 @@ fi
 
 # Fault-point names are declared only in this exported constant block; callers
 # reference the constants, so the block is the inventory to scan for.
+# A Go test rejects fault-point names outside this exported constant inventory.
 # This gate checks that the inventory and artifact scans agree.
 rg --no-filename -o --replace '$2' '^[[:space:]]+[A-Z][A-Za-z0-9_]*([[:space:]]+string)?[[:space:]]*=[[:space:]]*"([a-z][a-z0-9_]*)"$' \
 	"$repo_root/internal/runtime/fault/fault_testing.go" | sort -u >|"$work/discovered-faults"
