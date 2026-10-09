@@ -6,7 +6,7 @@
 # shellcheck disable=SC2016,SC1091
 set -euo pipefail
 export TART_NO_AUTO_PRUNE=1
-export GOTOOLCHAIN=go1.27.1
+export GOTOOLCHAIN=go1.27.2
 # Persisted go env can carry GOEXPERIMENT; an empty override does not clear it.
 export GOENV=off
 # Inherited or discovered workspaces must not change dependency selection.

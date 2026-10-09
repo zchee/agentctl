@@ -35,7 +35,7 @@ func TestExecBinaryExitAndSignalTeardown(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "agentctl")
 	build := exec.CommandContext(t.Context(), "go", "build", "-race", "-o", binary, ".")
 	build.Dir = testutil.RepoRoot(t)
-	build.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.1")
+	build.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.2")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, output)
 	}

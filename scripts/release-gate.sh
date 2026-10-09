@@ -5,7 +5,7 @@ set -euo pipefail
 
 unset CDPATH
 repo_root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
-export GOTOOLCHAIN=go1.27.1
+export GOTOOLCHAIN=go1.27.2
 # Persisted go env can carry GOEXPERIMENT; an empty override does not clear it.
 export GOENV=off
 # Inherited or discovered workspaces must not change dependency selection.

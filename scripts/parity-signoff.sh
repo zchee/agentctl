@@ -42,8 +42,8 @@ if source=$(git rev-parse HEAD 2>/dev/null); then
 else
   printf 'Source: unavailable (not a git checkout)\n'
 fi
-GOTOOLCHAIN=go1.27.1 GOFLAGS='' go build -trimpath -ldflags='-s -w' -o "$work/agentctl" "$root"
-GOTOOLCHAIN=go1.27.1 go version -m "$work/agentctl" >| "$work/build-info"
+GOTOOLCHAIN=go1.27.2 GOFLAGS='' go build -trimpath -ldflags='-s -w' -o "$work/agentctl" "$root"
+GOTOOLCHAIN=go1.27.2 go version -m "$work/agentctl" >| "$work/build-info"
 if grep -q -- '-tags=' "$work/build-info"; then
   printf 'FAIL untagged release build: artifact contains a -tags= build setting\n' >&2
   exit 1
