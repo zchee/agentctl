@@ -259,6 +259,7 @@ compare_runs() {
         elif [[ "$step" == claude-undo && "$code" == 1 ]] &&
           grep -q '^RECORDED undo refused' "$work/captures/$implementation/forward-undo.txt" 2>/dev/null; then
           # The single-account sequence discards the displaced grant, so the guest recorded the refusal.
+          recorded=$((recorded + 1))
           printf 'RECORDED %s %s command refused after the discarded displaced grant (exit=1)\n' "$step" "$implementation"
         elif [[ "$code" =~ ^[0-9]+$ ]]; then
           result FAIL "$step $implementation command (exit=$code)"
@@ -273,7 +274,12 @@ compare_runs() {
     if jq -e '.outcome == "already_active"' "$work/captures/$implementation/claude-live-$implementation.stdout" >/dev/null 2>&1; then
       recorded=$((recorded + 1))
       printf 'RECORDED %s already-active outcome; not a reversal test\n' "$implementation"
-    else result FAIL "$implementation expected already-active forward outcome not observed"; fi
+    elif jq -e '.outcome == "applied"' "$work/captures/$implementation/claude-live-$implementation.stdout" >/dev/null 2>&1 &&
+      grep -q '^RECORDED applied outcome' "$work/captures/$implementation/forward-undo.txt" 2>/dev/null; then
+      # The guest's manual login minted a newer grant for the single account, so the swap applied and its undo refused.
+      recorded=$((recorded + 1))
+      printf 'RECORDED %s applied outcome on the single account; the undo refusal is the recorded fact\n' "$implementation"
+    else result FAIL "$implementation expected already-active or recorded applied forward outcome not observed"; fi
     if [[ -f "$work/captures/$implementation/DONE" ]] && [[ "$(<"$work/captures/$implementation/DONE")" == "$implementation" ]]; then
       result PASS "$implementation completed guest sequence"
     else result FAIL "$implementation missing DONE marker"; fi
