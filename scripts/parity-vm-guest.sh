@@ -130,8 +130,13 @@ step claude-import claude import --from keychain
 step claude-live claude use "$claude_id" --live --yes --json
 if jq -e '.outcome == "already_active"' "$captures/claude-live-$implementation.stdout" >/dev/null 2>&1; then
   printf 'RECORDED already-active outcome; not a reversal test\n' | tee "$captures/forward-undo.txt"
+elif jq -e '.outcome == "applied"' "$captures/claude-live-$implementation.stdout" >/dev/null 2>&1; then
+  # The manual login above mints a grant newer than the keychain item of the
+  # same account, so both implementations install it instead of answering
+  # already-active; the undo that follows reverses that credential swap.
+  printf 'RECORDED applied outcome on the single account: a newer grant replaced the keychain item; the undo reverses it\n' | tee "$captures/forward-undo.txt"
 else
-  printf 'FAIL expected the documented already-active outcome; no reversal claim is permitted\n' >&2
+  printf 'FAIL expected the already-active or applied outcome of the single account; no other reversal claim is permitted\n' >&2
   exit 1
 fi
 step claude-undo claude use --undo --yes --json
