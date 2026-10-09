@@ -877,3 +877,11 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
   no disconnect step (Claude Code drops the bridge itself on the account change while requests keep succeeding), reconnection
   through a Claude Code mod with file-polling transport, tmux only as the fallback for sessions without the mod, mods pinned at
   Claude Code 2.1.287 or newer. Whether claude.ai/code shows the pre-swap conversation under the new account stays unverified.
+- 2026-10-09 21:48:41 JST: every by-name `GOTOOLCHAIN=go1.27.1` pin (README, release gate, parity scripts, exec teardown test) moved to
+  go1.27.2 as `909acd2` after a native go1.27.2 gate (shellcheck, actionlint, vet, golangci-lint v2.14.0, build, release gate,
+  repo-wide `-race` in both modes). Hosted run 37929142512/37929134629 on `280504e`: Vet, Lint and the release gate green on
+  macos; the macos Test step failed twice on the tagged suite's codex login child-reap case (`login_child_process_test.go:190`,
+  the subtest already seen flaking on `8613a14`), the user chose to keep observing; linux Test red as before (P9 input). W10: the
+  parity VM base `agentctl-e2e-base` is prepared with the go1.27.2 artifact in work directory
+  `.omc/artifacts/parity-vm/2026-10-09_21-25-32-operator`; the operator GUI login and snapshot are next. The spike's keychain
+  item was deleted on the user's decision.
