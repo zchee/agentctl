@@ -7,7 +7,7 @@ process backend is macOS. Codex accounts can be tracked and refreshed, but not s
 
 ## Install
 
-Use Go 1.27.1. Install the current module revision:
+Use Go 1.27.2. Install the current module revision:
 
 ```sh
 GOTOOLCHAIN=go1.27.2 go install github.com/zchee/agentctl@latest
