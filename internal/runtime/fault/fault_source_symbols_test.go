@@ -75,11 +75,16 @@ func faultModuleRoot(t *testing.T) string {
 	return root
 }
 
-// faultModuleRootFrom walks cwd's ancestors and validates the nearest go.mod.
+// faultModuleRootFrom resolves cwd's symlinks before validating the nearest go.mod
+// so a module on the symlink's lexical path cannot capture the source-contract scan.
 // A nested module with another identity stops discovery rather than allowing
 // the parent checkout to supply a different source-contract scope.
 func faultModuleRootFrom(cwd string) (string, error) {
-	for dir := cwd; ; {
+	resolved, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", err
+	}
+	for dir := resolved; ; {
 		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			if !info.IsDir() {
 				path := filepath.Join(dir, "go.mod")
@@ -374,15 +379,21 @@ func faultPackageSources(t *testing.T, pkgs []*packages.Package) (*token.FileSet
 
 func TestFaultModuleRoot(t *testing.T) {
 	tests := map[string]struct {
-		module  string
-		content string
-		nested  bool
-		missing bool
-		want    string
+		module   string
+		content  string
+		nested   bool
+		missing  bool
+		symlink  bool
+		dangling bool
+		subdir   bool
+		want     string
 	}{
 		"violation: wrong module cwd":                            {module: "example.com/other", want: `wrong source-contract module: got "example.com/other", want "` + faultModulePath + `"`},
 		"violation: prefix collision module cwd":                 {module: faultModulePath + "-other", want: `wrong source-contract module: got "` + faultModulePath + `-other", want "` + faultModulePath + `"`},
 		"control: expected module cwd":                           {module: faultModulePath},
+		"violation: symlinked cwd resolves to the real module":   {module: faultModulePath, symlink: true, subdir: true},
+		"control: resolved cwd under the expected module":        {module: faultModulePath, subdir: true},
+		"violation: dangling symlink cwd is an error":            {module: faultModulePath, dangling: true},
 		"violation: missing module directive":                    {content: "go 1.27\n", want: `wrong source-contract module: got "", want "` + faultModulePath + `"`},
 		"violation: invalid module syntax":                       {content: "module (\n", want: "syntax error"},
 		"violation: nested wrong module stops discovery":         {module: "example.com/nested", nested: true, want: `wrong source-contract module: got "example.com/nested", want "` + faultModulePath + `"`},
@@ -409,9 +420,42 @@ func TestFaultModuleRoot(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			wantRoot, err := filepath.EvalSymlinks(cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.subdir {
+				if err := os.Mkdir(filepath.Join(cwd, "sub"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.symlink || tt.dangling {
+				decoy := t.TempDir()
+				if err := os.WriteFile(filepath.Join(decoy, "go.mod"), []byte("module "+faultModulePath+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				target := cwd
+				if tt.dangling {
+					target = filepath.Join(cwd, "absent")
+				}
+				cwd = filepath.Join(decoy, "tree")
+				if err := os.Symlink(target, cwd); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.subdir {
+				cwd = filepath.Join(cwd, "sub")
+			}
 			want := tt.want
+			if tt.dangling {
+				_, err := filepath.EvalSymlinks(cwd)
+				if err == nil {
+					t.Fatal("dangling symlink fixture unexpectedly resolves")
+				}
+				want = err.Error()
+			}
 			if tt.content == "module (\n" {
-				path := filepath.Join(cwd, "go.mod")
+				path := filepath.Join(wantRoot, "go.mod")
 				want = fmt.Sprintf("%s:2: syntax error (unterminated block started at %s:1:1)", path, path)
 			}
 			if tt.missing {
@@ -426,8 +470,7 @@ func TestFaultModuleRoot(t *testing.T) {
 			if diff := gocmp.Diff(want, got); diff != "" {
 				t.Errorf("module discovery error (-want +got):\n%s", diff)
 			}
-			wantRoot := cwd
-			if tt.want != "" {
+			if want != "" {
 				wantRoot = ""
 			}
 			if diff := gocmp.Diff(wantRoot, root); diff != "" {
