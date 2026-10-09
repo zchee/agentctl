@@ -285,8 +285,12 @@ compare_runs() {
     else result FAIL "$implementation missing DONE marker"; fi
     for kind in claude codex; do
       file="$work/captures/$implementation/codex-auto-$implementation.$kind-status-exit"
-      if [[ -f "$file" && "$(<"$file")" == 0 ]] \
-        && jq -e '[.rows[] | select(.state == "ok")] | length > 0' \
+      # The guest never logs the vendor CLI itself in, so its live row may stay
+      # needs_login and turn the exit into the partial 2; the owned parity row
+      # is the one whose real usage success this run observes.
+      if [[ -f "$file" && ( "$(<"$file")" == 0 || "$(<"$file")" == 2 ) ]] \
+        && jq -e '([.rows[] | select(.state == "ok" and .kind == "owned")] | length > 0)
+          and ([.rows[] | select(.state != "ok")] | all(.kind == "live" and .state == "needs_login"))' \
           "$work/captures/$implementation/codex-auto-$implementation.$kind-status" >/dev/null 2>&1; then
         result PASS "$implementation final $kind real usage success"
       else result FAIL "$implementation final $kind real usage success unavailable"; fi
