@@ -210,7 +210,7 @@ captured after each command):
 | `codex login --no-refresh --label parity` | 0 | 0 | 2 | one owned Codex row |
 | `codex accounts set <account> --refresh auto` | 0 | 0 | 2 | owned Codex row `ok`; the guest's own Codex CLI stays `needs_login` (live row), which is the partial exit 2 |
 
-Comparison output restricted to the Go side: 9 PASS (seven commands, the
+Comparison output restricted to the Go side: 9 PASS (six commands, the
 completed guest sequence, Claude and Codex real usage success), 2 RECORDED
 (the applied forward swap and the refused undo), 0 FAIL. The 74 FAIL
 lines of the full output are the absent reference captures.
