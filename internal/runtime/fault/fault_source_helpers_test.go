@@ -18,6 +18,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"strings"
 	"testing"
 
@@ -25,10 +26,12 @@ import (
 )
 
 func TestFaultForwardingBoundaries(t *testing.T) {
+	imports := loadFaultFixtureImports(t)
 	tests := map[string]struct {
-		path   string
-		source string
-		want   int
+		path       string
+		source     string
+		want       int
+		diagnostic string
 	}{
 		"violation: generated header does not exempt names": {
 			path: "internal/commands/generated_fixture.go",
@@ -37,7 +40,8 @@ func TestFaultForwardingBoundaries(t *testing.T) {
 package commands; func probe() {
 	point := "hidden"; fault.Active().Is(point)
 }`,
-			want: 1,
+			want:       1,
+			diagnostic: "fault name must reference a tagged fault constant, got point",
 		},
 		"control: unrelated function": {
 			path: "internal/commands/fixture.go",
@@ -56,7 +60,8 @@ package commands; func probe() {
 			source: `package fault; func probe(name string) {
 				active.Is(name)
 			}`,
-			want: 1,
+			want:       1,
+			diagnostic: "fault name must reference a tagged fault constant, got name",
 		},
 		"control: existing seam file exempt": {
 			path: "internal/runtime/fault/fault_testing_test.go",
@@ -81,14 +86,16 @@ package commands; func probe() {
 			source: `package secret; func (f *SecretFile) WriteWithFaults() {
 				point := "hidden"; active.Is(point)
 			}`,
-			want: 1,
+			want:       1,
+			diagnostic: "fault name must reference a tagged fault constant, got point",
 		},
 		"violation: same expression in another function": {
 			path: "internal/secret/secret_file.go",
 			source: `package secret; func anotherWriter() {
 				active.Is(names.RenameFail)
 			}`,
-			want: 1,
+			want:       1,
+			diagnostic: "fault name must reference a tagged fault constant, got names.RenameFail",
 		},
 		"control: abort helper forwarding": {
 			path: "internal/provider/codex/refresh_fault_testing.go",
@@ -101,7 +108,8 @@ package commands; func probe() {
 			source: `package codex; func abortRefreshFault(name string) {
 				active.Is(name + "_hidden")
 			}`,
-			want: 1,
+			want:       1,
+			diagnostic: `fault name must reference a tagged fault constant, got name + "_hidden"`,
 		},
 		"control: lock helper forwarding": {
 			path: "internal/secret/claude_lock_stale.go",
@@ -114,7 +122,8 @@ package commands; func probe() {
 			source: `package secret; func (s *Seams) fault(name string) {
 				point := name; s.Fault(point)
 			}`,
-			want: 1,
+			want:       1,
+			diagnostic: "fault name must reference a tagged fault constant, got point",
 		},
 	}
 	for name, tt := range tests {
@@ -124,19 +133,26 @@ package commands; func probe() {
 			if !found {
 				t.Fatal("fixture must separate package declaration with a semicolon")
 			}
-			file, err := parser.ParseFile(fset, tt.path, pkg+`; import "`+faultImportPath+`"; var active fault.Fault; `+body, parser.ParseComments)
+			file, err := parser.ParseFile(fset, tt.path, pkg+`; import "`+faultImportPath+`"; var active fault.Fault; type SecretFile struct{}; type Seams struct{Fault func(string) bool}; var names struct{BeforeRename, RenameFail string}; `+body, parser.ParseComments|parser.SkipObjectResolution)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := faultSourceViolations(fset, map[string]*ast.File{tt.path: file}, nil)
+			got := faultSourceViolations(fset, checkFaultFixture(t, fset, map[string]*ast.File{tt.path: file}, imports))
+			t.Logf("expected violations=%d; measured=%d; diagnostics=%v", tt.want, len(got), got)
 			if diff := gocmp.Diff(tt.want, len(got)); diff != "" {
 				t.Errorf("violation count (-want +got):\n%s\ndiagnostics: %v", diff, got)
+			}
+			for _, violation := range got {
+				if tt.diagnostic == "" || !strings.Contains(violation, tt.diagnostic) {
+					t.Errorf("diagnostic = %q, want substring %q", violation, tt.diagnostic)
+				}
 			}
 		})
 	}
 }
 
 func TestFaultReceiverShapes(t *testing.T) {
+	imports := loadFaultFixtureImports(t)
 	tests := map[string]struct {
 		decls      string
 		other      string
@@ -144,13 +160,53 @@ func TestFaultReceiverShapes(t *testing.T) {
 		path       string
 		source     string
 		want       int
-		ambiguous  bool
 		alias      string
 		diagnostic string
+		order      []string
 	}{
 		"violation: dot import requires qualified names": {
 			alias: ".", source: `Active().Is("hidden")`, want: 1,
-			diagnostic: "fault points must be spelled through a qualified fault.<Const> selector",
+		},
+		"violation: dot import": {
+			alias: ".", source: `Active().Is(BeforeRename)`, want: 1,
+			diagnostic: "fault name must reference a tagged fault constant, got BeforeRename",
+		},
+		"violation: comma-ok receive declaration": {
+			source: `var ch <-chan fault.Fault; var injected, ok = <-ch; _ = ok; injected.Is("hidden")`, want: 1,
+		},
+		"violation: comma-ok receive assignment": {
+			source: `var ch <-chan fault.Fault; injected, ok := <-ch; _ = ok; injected.Is("hidden")`, want: 1,
+		},
+		"violation: comma-ok map declaration": {
+			source: `values := map[string]fault.Fault{}; var injected, ok = values["k"]; _ = ok; injected.Is("hidden")`, want: 1,
+		},
+		"violation: comma-ok map assignment": {
+			source: `values := map[string]fault.Fault{}; injected, ok := values["k"]; _ = ok; injected.Is("hidden")`, want: 1,
+		},
+		"control: comma-ok unrelated receive": {
+			decls:  `type predicate struct{}; func (predicate) Is(string) bool { return false }`,
+			source: `var ch <-chan predicate; var injected, ok = <-ch; _ = ok; injected.Is("ordinary")`,
+		},
+		"control: comma-ok unrelated map": {
+			decls:  `type predicate struct{}; func (predicate) Is(string) bool { return false }`,
+			source: `values := map[string]predicate{}; injected, ok := values["k"]; _ = ok; injected.Is("ordinary")`,
+		},
+		"control: comma-ok boolean is not a receiver": {
+			source: `values := map[string]fault.Fault{}; _, ok := values["k"]; _ = ok`,
+		},
+		"violation: cross-file method alias": {
+			other: `var check = fault.Active().Is`, source: `check("hidden")`, want: 2,
+			diagnostic: "fault",
+			order:      []string{`got "hidden"`, "got fault.Active().Is"},
+		},
+		"violation: cross-file unqualified method expression": {
+			other: `type wrapper struct{ fault.Fault }`, source: `wrapper.Is(wrapper{}, "hidden")`, want: 1,
+		},
+		"control: cross-file unqualified method expression constant": {
+			other: `type wrapper struct{ fault.Fault }`, source: `wrapper.Is(wrapper{}, fault.BeforeRename)`,
+		},
+		"control: cross-file unrelated method expression": {
+			other: `type wrapper struct{}; func (wrapper) Is(string) bool { return false }`, source: `wrapper.Is(wrapper{}, "ordinary")`,
 		},
 		"control: normal fault import": {
 			source: `fault.Active().Is(fault.BeforeRename)`,
@@ -432,12 +488,6 @@ func TestFaultReceiverShapes(t *testing.T) {
 			decls:  `type wrapper struct{ fault.Fault; Is func(string) bool }`,
 			source: `var value wrapper; value.Is("ordinary")`,
 		},
-		// This intentionally ambiguous selector is a resolver fixture, not legal Go.
-		"control: equal-depth promotion selects no method": {
-			decls:     `type left struct{ fault.Fault }; type right struct{ fault.Fault }; type wrapper struct{ left; right }`,
-			source:    `var value wrapper; value.Is("ordinary")`,
-			ambiguous: true,
-		},
 		"violation: recursive embedding finds shallow method": {
 			decls:  `type wrapper struct{ *wrapper; fault.Fault }`,
 			source: `var value wrapper; value.Is("hidden")`, want: 1,
@@ -469,10 +519,14 @@ func TestFaultReceiverShapes(t *testing.T) {
 			if path == "" {
 				path = "internal/commands/fixture.go"
 			}
-			for path, body := range map[string]string{
-				path:                           tt.decls + "\nfunc probe() {" + tt.source + "}",
-				"internal/commands/globals.go": tt.other,
-			} {
+			bodies := map[string]string{path: tt.decls + "\nfunc probe() {" + tt.source + "}"}
+			if tt.other != "" {
+				bodies["internal/commands/globals.go"] = tt.other
+			}
+			if strings.HasPrefix(path, "internal/provider/codex/") {
+				bodies["internal/provider/codex/refresh_fault_testing.go"] = `func abortRefreshFault(name string) { fault.Active().Is(name) }`
+			}
+			for path, body := range bodies {
 				alias := "fault"
 				if !strings.HasSuffix(path, "/globals.go") && tt.alias != "" {
 					alias = tt.alias
@@ -484,35 +538,24 @@ func TestFaultReceiverShapes(t *testing.T) {
 				if strings.HasPrefix(path, "internal/provider/codex/") {
 					pkg = "codex"
 				}
-				file, err := parser.ParseFile(fset, path, `package `+pkg+`; import `+alias+` "`+faultImportPath+`"; `+body, 0)
+				file, err := parser.ParseFile(fset, path, `package `+pkg+`; import `+alias+` "`+faultImportPath+`"; `+body, parser.SkipObjectResolution)
 				if err != nil {
 					t.Fatal(err)
 				}
 				files[path] = file
 			}
-			if tt.ambiguous {
-				index := indexFaultSources(files)
-				source := index.files[path]
-				checked := 0
-				for _, nodes := range source.nodes {
-					for _, node := range nodes {
-						selector, ok := node.(*ast.SelectorExpr)
-						if !ok || selector.Sel.Name != "Is" {
-							continue
-						}
-						checked++
-						field, method := index.member(index.expressionType(source, selector.X), "Is")
-						if field.expr != nil || method != (faultSourceSymbol{}) {
-							t.Errorf("ambiguous %s selected field %v and method %+v", sourceExpression(fset, selector), field.expr, method)
-						}
-					}
+			got := faultSourceViolations(fset, checkFaultFixture(t, fset, files, imports))
+			t.Logf("expected violations=%d; measured=%d; diagnostics=%v", tt.want, len(got), got)
+			if tt.order != nil {
+				var order []string
+				for _, diagnostic := range got {
+					_, suffix, _ := strings.CutLast(diagnostic, ", ")
+					order = append(order, suffix)
 				}
-				if diff := gocmp.Diff(1, checked); diff != "" {
-					t.Errorf("ambiguous selector checks (-want +got):\n%s", diff)
+				if diff := gocmp.Diff(tt.order, order); diff != "" {
+					t.Errorf("diagnostic order (-want +got):\n%s", diff)
 				}
 			}
-			got := faultSourceViolations(fset, files, map[string]bool{"BeforeRename": true})
-			t.Logf("expected violations=%d; measured=%d; diagnostics=%v", tt.want, len(got), got)
 			if diff := gocmp.Diff(tt.want, len(got)); diff != "" {
 				t.Errorf("violation count (-want +got):\n%s\ndiagnostics: %v", diff, got)
 			}
@@ -524,6 +567,49 @@ func TestFaultReceiverShapes(t *testing.T) {
 				if !strings.Contains(violation, diagnostic) {
 					t.Errorf("unexpected diagnostic: %s", violation)
 				}
+			}
+		})
+	}
+}
+
+func TestFaultCrossPackageHelpers(t *testing.T) {
+	imports := loadFaultFixtureImports(t)
+	tests := map[string]struct {
+		argument string
+		want     []string
+	}{
+		"violation: helper across package test variants":        {argument: `"hidden"`, want: []string{"got name", `got "hidden"`}},
+		"control: helper across package test variants constant": {argument: "fault.BeforeRename", want: []string{"got name"}},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			const helperPath = "internal/commands/helper.go"
+			helper, err := parser.ParseFile(fset, helperPath, `package commands; import "`+faultImportPath+`"; func Forward(name string) { fault.Active().Is(name) }`, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			helperFiles := map[string]*ast.File{helperPath: helper}
+			normal := checkFaultFixture(t, fset, helperFiles, imports)
+			variant := checkFaultFixture(t, fset, helperFiles, imports)
+			callerImports := maps.Clone(imports)
+			callerImports[faultModulePath+"/internal/commands"] = normal[helperPath].pkg
+			const callerPath = "internal/provider/codex/fixture.go"
+			caller, err := parser.ParseFile(fset, callerPath, `package codex; import ("`+faultImportPath+`"; "`+faultModulePath+`/internal/commands"); func probe() { commands.Forward(`+tt.argument+`) }`, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			callerSources := checkFaultFixture(t, fset, map[string]*ast.File{callerPath: caller}, callerImports)
+			maps.Copy(variant, callerSources)
+			got := faultSourceViolations(fset, variant)
+			var messages []string
+			for _, diagnostic := range got {
+				_, suffix, _ := strings.CutLast(diagnostic, ", ")
+				messages = append(messages, suffix)
+			}
+			t.Logf("measured violations=%d; diagnostics=%v", len(got), got)
+			if diff := gocmp.Diff(tt.want, messages); diff != "" {
+				t.Errorf("cross-package diagnostics (-want +got):\n%s", diff)
 			}
 		})
 	}

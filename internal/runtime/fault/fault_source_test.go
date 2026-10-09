@@ -16,12 +16,13 @@ package fault_test
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"go/types"
 	"maps"
 	"os"
 	"path/filepath"
@@ -36,55 +37,22 @@ import (
 const faultImportPath = "github.com/zchee/agentctl/internal/runtime/fault"
 
 func TestFaultSourceContract(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-			break
-		} else if !os.IsNotExist(err) {
+	root := faultModuleRoot(t)
+	fset, sources := faultPackageSources(t, loadFaultPackages(t, true, "./..."))
+	files := make(map[string]*ast.File)
+	for _, path := range []string{"internal/runtime/fault/fault_testing.go", "internal/runtime/fault/fault_release.go"} {
+		file, err := parser.ParseFile(fset, path, mustReadSource(t, filepath.Join(root, path)), parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
 			t.Fatal(err)
 		}
-		parent := filepath.Dir(root)
-		if parent == root {
-			t.Fatal("cannot locate module root containing go.mod")
-		}
-		root = parent
-	}
-
-	fset := token.NewFileSet()
-	files := make(map[string]*ast.File)
-	err = fs.WalkDir(os.DirFS(root), ".", func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "vendor" || entry.Name() == "testdata" {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		file, err := parser.ParseFile(fset, path, mustReadSource(t, filepath.Join(root, path)), parser.ParseComments)
-		if err != nil {
-			return err
-		}
 		files[path] = file
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-
 	testingNames := declaredFaultNames(t, fset, files["internal/runtime/fault/fault_testing.go"], false)
 	releaseNames := declaredFaultNames(t, fset, files["internal/runtime/fault/fault_release.go"], true)
 	if diff := gocmp.Diff(slices.Sorted(maps.Keys(testingNames)), slices.Sorted(maps.Keys(releaseNames))); diff != "" {
 		t.Errorf("tagged fault constant names differ (-testing +release):\n%s", diff)
 	}
-	for _, violation := range faultSourceViolations(fset, files, testingNames) {
+	for _, violation := range faultSourceViolations(fset, sources) {
 		t.Error(violation)
 	}
 }
@@ -117,12 +85,12 @@ func declaredFaultNames(t *testing.T, fset *token.FileSet, file *ast.File, relea
 				}
 				names[name.Name] = true
 				if i >= len(value.Values) {
-					t.Errorf("%s: %s must have an explicit string literal", fset.Position(name.Pos()), name.Name)
+					t.Errorf("%s: %s must have an explicit string literal", fset.PositionFor(name.Pos(), false), name.Name)
 					continue
 				}
 				literal, ok := value.Values[i].(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
-					t.Errorf("%s: %s must be a string literal, got %s", fset.Position(name.Pos()), name.Name, sourceExpression(fset, value.Values[i]))
+					t.Errorf("%s: %s must be a string literal, got %s", fset.PositionFor(name.Pos(), false), name.Name, sourceExpression(fset, value.Values[i]))
 					continue
 				}
 				text, err := strconv.Unquote(literal.Value)
@@ -131,10 +99,10 @@ func declaredFaultNames(t *testing.T, fset *token.FileSet, file *ast.File, relea
 				}
 				if release {
 					if text != "" {
-						t.Errorf("%s: release %s must be empty, got %q", fset.Position(name.Pos()), name.Name, text)
+						t.Errorf("%s: release %s must be empty, got %q", fset.PositionFor(name.Pos(), false), name.Name, text)
 					}
 				} else if !validFaultStem(text) || literal.Value != strconv.Quote(text) {
-					t.Errorf("%s: testing %s must be a plain lowercase [a-z][a-z0-9_]* literal, got %s", fset.Position(name.Pos()), name.Name, literal.Value)
+					t.Errorf("%s: testing %s must be a plain lowercase [a-z][a-z0-9_]* literal, got %s", fset.PositionFor(name.Pos(), false), name.Name, literal.Value)
 				}
 			}
 		}
@@ -165,53 +133,21 @@ func sourceExpression(fset *token.FileSet, node ast.Node) string {
 	return text.String()
 }
 
-func sourceImports(file *ast.File) map[string]string {
-	imports := make(map[string]string)
-	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
-		if err != nil {
-			continue // The parser has already rejected invalid string syntax.
-		}
-		name := filepath.Base(path)
-		if spec.Name != nil {
-			name = spec.Name.Name
-		}
-		imports[name] = path
-	}
-	return imports
-}
-
-func namedFaultConstant(fset *token.FileSet, file *ast.File, imports map[string]string, expr ast.Expr, names map[string]bool) bool {
-	switch name := ast.Unparen(expr).(type) {
-	case *ast.SelectorExpr:
-		pkg, ok := name.X.(*ast.Ident)
-		return ok && pkg.Obj == nil && imports[pkg.Name] == faultImportPath && names[name.Sel.Name]
-	case *ast.Ident:
-		if file.Name.Name != "fault" || !names[name.Name] {
-			return false
-		}
-		// Identifiers declared in a different file have no parser object;
-		// a local declaration must never shadow an approved constant name.
-		if name.Obj == nil {
-			return true
-		}
-		declaredIn := fset.Position(name.Obj.Pos()).Filename
-		if name.Obj.Kind != ast.Con || (declaredIn != "internal/runtime/fault/fault_testing.go" && declaredIn != "internal/runtime/fault/fault_release.go") {
-			return false
-		}
-		for _, decl := range file.Decls {
-			if block, ok := decl.(*ast.GenDecl); ok && block.Tok == token.CONST {
-				for _, spec := range block.Specs {
-					if spec == name.Obj.Decl {
-						return true
-					}
-				}
-			}
-		}
-		return false
-	default:
+func namedFaultConstant(info *types.Info, expr ast.Expr) bool {
+	selector, ok := ast.Unparen(expr).(*ast.SelectorExpr)
+	if !ok {
 		return false
 	}
+	name, ok := ast.Unparen(selector.X).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	pkg, ok := info.Uses[name].(*types.PkgName)
+	if !ok || pkg.Imported().Path() != faultImportPath {
+		return false
+	}
+	constant, ok := info.Uses[selector.Sel].(*types.Const)
+	return ok && constant.Pkg() != nil && constant.Pkg().Path() == faultImportPath
 }
 
 // These are the existing generic forwarding boundaries, not injection
@@ -241,62 +177,45 @@ func faultFunctionName(fn *ast.FuncDecl) string {
 	return name
 }
 
-func (index *faultSourceIndex) faultCallArguments(source *faultSourceFile, call *ast.CallExpr, helpers map[faultSourceSymbol]map[int]bool) (faultSourceSymbol, []ast.Expr) {
-	symbol := index.callSymbol(source, call.Fun)
-	offset := 0
-	if method, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
-		receiver := ast.Unparen(method.X)
-		if pointer, ok := receiver.(*ast.StarExpr); ok {
-			receiver = ast.Unparen(pointer.X)
-		}
-		typ := index.typeSymbol(source, receiver)
-		if index.typeDeclaration(source, typ).typ != nil || typ == (faultSourceSymbol{pkg: faultImportPath, name: "Fault"}) {
-			offset = 1 // A resolved type selects a method expression, not a value.
+func (index *faultSourceIndex) faultCallArguments(source *faultSourceFile, call *ast.CallExpr, helpers map[types.Object]map[int]bool) (types.Object, []ast.Expr) {
+	object, offset := index.callObject(source, call.Fun)
+	positions := helpers[object]
+	if faultBaseSink(object) {
+		positions = map[int]bool{0: true}
+	}
+	if len(positions) > 0 && len(call.Args) == 1 {
+		if _, ok := source.info.TypeOf(call.Args[0]).(*types.Tuple); ok {
+			return object, call.Args
 		}
 	}
 	var args []ast.Expr
-	for _, position := range slices.Sorted(maps.Keys(helpers[symbol])) {
+	for _, position := range slices.Sorted(maps.Keys(positions)) {
 		if position += offset; position < len(call.Args) {
 			args = append(args, call.Args[position])
 		}
 	}
-	return symbol, args
+	return object, args
 }
 
-func discoverFaultHelpers(index *faultSourceIndex) map[faultSourceSymbol]map[int]bool {
-	// Include helper call sites even when their names do not resemble a fault
-	// API. A helper is found by forwarding a parameter to a known name sink.
-	helpers := map[faultSourceSymbol]map[int]bool{
-		{pkg: faultImportPath, receiver: "Fault", name: "Is"}:                          {0: true},
-		{pkg: faultImportPath, receiver: "Fault", name: "PausePoint"}:                  {0: true},
-		{pkg: faultImportPath, receiver: "Fault", name: "WaitIf"}:                      {0: true},
-		{pkg: faultModulePath + "/internal/secret", receiver: "Seams", name: "fault"}:  {0: true},
-		{pkg: faultModulePath + "/internal/secret", receiver: "Seams", name: "Fault"}:  {0: true},
-		{pkg: faultModulePath + "/internal/secret", receiver: "Seams", name: "Pause"}:  {0: true},
-		{pkg: faultModulePath + "/internal/provider/codex", name: "abortRefreshFault"}: {0: true},
-	}
+func discoverFaultHelpers(index *faultSourceIndex) map[types.Object]map[int]bool {
+	helpers := make(map[types.Object]map[int]bool)
 	for changed := true; changed; {
 		changed = false
 		for _, source := range index.files {
-			file := source.file
-			if file == nil {
-				continue
-			}
-			for _, decl := range file.Decls {
+			for _, decl := range source.file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
 				if !ok || fn.Body == nil {
 					continue
 				}
-				params := make(map[*ast.Object]int) //nolint:staticcheck // Parser objects are this syntactic guard's binding identity; it loads no type information.
-				paramIndex := 0
-				for _, field := range fn.Type.Params.List {
-					for _, param := range field.Names {
-						params[param.Obj] = paramIndex
-						paramIndex++
-					}
-					if len(field.Names) == 0 {
-						paramIndex++
-					}
+				object, ok := source.info.Defs[fn.Name].(*types.Func)
+				if !ok {
+					continue
+				}
+				helper := index.functions[object.Origin().FullName()]
+				params := make(map[types.Object]int)
+				signature := object.Type().(*types.Signature)
+				for i := range signature.Params().Len() {
+					params[signature.Params().At(i)] = i
 				}
 				for _, node := range source.nodes[decl] {
 					call, ok := node.(*ast.CallExpr)
@@ -305,18 +224,18 @@ func discoverFaultHelpers(index *faultSourceIndex) map[faultSourceSymbol]map[int
 					}
 					_, args := index.faultCallArguments(source, call, helpers)
 					for _, arg := range args {
-						param, ok := arg.(*ast.Ident)
-						if !ok || param.Obj == nil {
+						param, ok := ast.Unparen(arg).(*ast.Ident)
+						if !ok {
 							continue
 						}
-						position, ok := params[param.Obj]
-						if !ok || helpers[source.functionSymbol(fn)][position] {
+						position, ok := params[source.info.Uses[param]]
+						if !ok || helpers[helper][position] {
 							continue
 						}
-						if helpers[source.functionSymbol(fn)] == nil {
-							helpers[source.functionSymbol(fn)] = make(map[int]bool)
+						if helpers[helper] == nil {
+							helpers[helper] = make(map[int]bool)
 						}
-						helpers[source.functionSymbol(fn)][position] = true
+						helpers[helper][position] = true
 						changed = true
 					}
 				}
@@ -326,29 +245,43 @@ func discoverFaultHelpers(index *faultSourceIndex) map[faultSourceSymbol]map[int
 	return helpers
 }
 
-func faultSourceViolations(fset *token.FileSet, files map[string]*ast.File, names map[string]bool) []string {
+type faultSourceDiagnostic struct {
+	position token.Position
+	message  string
+}
+
+func faultSourceViolations(fset *token.FileSet, files map[string]*faultSourceFile) []string {
 	index := indexFaultSources(files)
 	helpers := discoverFaultHelpers(index)
-	var violations []string
-	for _, path := range slices.Sorted(maps.Keys(files)) {
+	var diagnostics []faultSourceDiagnostic
+	for _, source := range files {
 		// The seam implementation and its parser/behaviour tests consume
 		// arbitrary names by design. Other packages' tests are still checked.
-		switch path {
+		switch source.path {
 		case "internal/runtime/fault/fault.go", "internal/runtime/fault/fault_release.go", "internal/runtime/fault/fault_testing.go",
 			"internal/runtime/fault/fault_test.go", "internal/runtime/fault/fault_release_test.go", "internal/runtime/fault/fault_testing_test.go":
 			continue
 		}
-		for _, decl := range files[path].Decls {
-			violations = append(violations, index.declarationViolations(fset, path, decl, helpers, names)...)
+		for _, decl := range source.file.Decls {
+			diagnostics = append(diagnostics, index.declarationViolations(fset, source, decl, helpers)...)
 		}
+	}
+	slices.SortFunc(diagnostics, func(a, b faultSourceDiagnostic) int {
+		return cmp.Or(cmp.Compare(a.position.Filename, b.position.Filename), cmp.Compare(a.position.Line, b.position.Line), cmp.Compare(a.position.Column, b.position.Column), cmp.Compare(a.message, b.message))
+	})
+	diagnostics = slices.CompactFunc(diagnostics, func(a, b faultSourceDiagnostic) bool {
+		return a.position.Filename == b.position.Filename && a.position.Line == b.position.Line && a.position.Column == b.position.Column && a.message == b.message
+	})
+	var violations []string
+	for _, diagnostic := range diagnostics {
+		violations = append(violations, fmt.Sprintf("%s: %s", diagnostic.position, diagnostic.message))
 	}
 	return violations
 }
 
-func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path string, decl ast.Decl, helpers map[faultSourceSymbol]map[int]bool, names map[string]bool) []string {
-	var violations []string
-	source := index.files[path]
-	file, imports := source.file, source.imports
+func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, source *faultSourceFile, decl ast.Decl, helpers map[types.Object]map[int]bool) []faultSourceDiagnostic {
+	var violations []faultSourceDiagnostic
+	path := source.path
 	function := ""
 	if fn, ok := decl.(*ast.FuncDecl); ok {
 		function = faultFunctionName(fn)
@@ -357,14 +290,12 @@ func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path s
 		if faultNameForwarding[path+":"+function][sourceExpression(fset, expr)] {
 			return
 		}
-		if !namedFaultConstant(fset, file, imports, expr, names) {
-			violations = append(violations, fmt.Sprintf("%s: fault name must reference a tagged fault constant, got %s", fset.Position(expr.Pos()), sourceExpression(fset, expr)))
+		if !namedFaultConstant(source.info, expr) {
+			violations = append(violations, faultSourceDiagnostic{position: fset.PositionFor(expr.Pos(), false), message: fmt.Sprintf("fault name must reference a tagged fault constant, got %s", sourceExpression(fset, expr))})
 		}
 	}
-	checkedLiterals := make(map[*ast.CompositeLit]bool)
 	calledMethods := make(map[*ast.SelectorExpr]bool)
 	checkCarrier := func(literal *ast.CompositeLit) {
-		checkedLiterals[literal] = true
 		fields := make(map[string]ast.Expr)
 		for _, field := range literal.Elts {
 			keyed, ok := field.(*ast.KeyValueExpr)
@@ -377,7 +308,7 @@ func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path s
 			}
 		}
 		if len(literal.Elts) != 2 || len(fields) != 2 || fields["BeforeRename"] == nil || fields["RenameFail"] == nil {
-			violations = append(violations, fmt.Sprintf("%s: WriteWithFaults carrier must have exactly BeforeRename and RenameFail keys, got %s", fset.Position(literal.Pos()), sourceExpression(fset, literal)))
+			violations = append(violations, faultSourceDiagnostic{position: fset.PositionFor(literal.Pos(), false), message: fmt.Sprintf("WriteWithFaults carrier must have exactly BeforeRename and RenameFail keys, got %s", sourceExpression(fset, literal))})
 			return
 		}
 		check(fields["BeforeRename"])
@@ -385,24 +316,13 @@ func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path s
 	}
 	for _, node := range source.nodes[decl] {
 		switch node := node.(type) {
-		case *ast.ImportSpec:
-			if node.Name != nil && node.Name.Name == "." {
-				importPath, err := strconv.Unquote(node.Path.Value)
-				if err == nil && importPath == faultImportPath {
-					violations = append(violations, fmt.Sprintf("%s: fault points must be spelled through a qualified fault.<Const> selector; dot imports are forbidden", fset.Position(node.Pos())))
-				}
-			}
 		case *ast.TypeSpec:
 			if filepath.Dir(path) != "internal/secret" {
-				name := ""
-				switch typ := ast.Unparen(node.Type).(type) {
-				case *ast.Ident:
-					name = typ.Name
-				case *ast.SelectorExpr:
-					name = typ.Sel.Name
-				}
-				if strings.HasSuffix(name, "WriteFaultNames") {
-					violations = append(violations, fmt.Sprintf("%s: fault-name carrier aliases and defined types are forbidden, got %s", fset.Position(node.Type.Pos()), sourceExpression(fset, node.Type)))
+				typ := source.info.TypeOf(node.Type)
+				if typ != nil {
+					if named, ok := types.Unalias(typ).(*types.Named); ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == faultModulePath+"/internal/secret" && named.Obj().Name() == "WriteFaultNames" {
+						violations = append(violations, faultSourceDiagnostic{position: fset.PositionFor(node.Type.Pos(), false), message: fmt.Sprintf("fault-name carrier aliases and defined types are forbidden, got %s", sourceExpression(fset, node.Type))})
+					}
 				}
 			}
 		case *ast.AssignStmt:
@@ -414,9 +334,9 @@ func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path s
 				}
 			}
 		case *ast.SelectorExpr:
-			symbol := index.callSymbol(source, node)
-			if symbol.pkg == faultImportPath && symbol.receiver == "Fault" && (symbol.name == "Is" || symbol.name == "PausePoint" || symbol.name == "WaitIf") && !calledMethods[node] {
-				violations = append(violations, fmt.Sprintf("%s: fault method must be called directly, not captured or assigned, got %s", fset.Position(node.Pos()), sourceExpression(fset, node)))
+			object, _ := index.callObject(source, node)
+			if faultPredicate(object) && !calledMethods[node] {
+				violations = append(violations, faultSourceDiagnostic{position: fset.PositionFor(node.Pos(), false), message: fmt.Sprintf("fault method must be called directly, not captured or assigned, got %s", sourceExpression(fset, node))})
 			}
 		case *ast.CallExpr:
 			if method, ok := ast.Unparen(node.Fun).(*ast.SelectorExpr); ok {
@@ -426,32 +346,12 @@ func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path s
 			for _, arg := range args {
 				check(arg)
 			}
-			if symbol == (faultSourceSymbol{pkg: faultModulePath + "/internal/secret", receiver: "SecretFile", name: "WriteWithFaults"}) && len(node.Args) > 0 {
+			if faultObjectReceiver(symbol, faultModulePath+"/internal/secret", "SecretFile", "WriteWithFaults") && len(node.Args) > 0 {
 				namesArg := ast.Unparen(node.Args[len(node.Args)-1])
 				if literal, ok := namesArg.(*ast.CompositeLit); ok {
 					checkCarrier(literal)
 				} else {
 					check(namesArg)
-				}
-			}
-		case *ast.CompositeLit:
-			if checkedLiterals[node] {
-				continue
-			}
-			name := ""
-			switch typ := node.Type.(type) {
-			case *ast.Ident:
-				name = typ.Name
-			case *ast.SelectorExpr:
-				name = typ.Sel.Name
-			}
-			if name == "WriteFaultNames" {
-				for _, field := range node.Elts {
-					if keyed, ok := field.(*ast.KeyValueExpr); ok {
-						check(keyed.Value)
-					} else {
-						check(field)
-					}
 				}
 			}
 		}
@@ -460,6 +360,7 @@ func (index *faultSourceIndex) declarationViolations(fset *token.FileSet, path s
 }
 
 func TestFaultNameCallShapes(t *testing.T) {
+	imports := loadFaultFixtureImports(t)
 	tests := map[string]struct {
 		decls  string
 		source string
@@ -482,22 +383,66 @@ func TestFaultNameCallShapes(t *testing.T) {
 		"violation: string literal":                         {source: `fault.Active().Is("hidden")`, want: `got "hidden"`},
 		"violation: concatenation":                          {source: `fault.Active().PausePoint("before_" + "rename")`, want: `got "before_" + "rename"`},
 		"violation: local selector":                         {source: `fault := struct{ BeforeRename string }{"hidden"}; injected.WaitIf(fault.BeforeRename)`, want: "got fault.BeforeRename"},
-		"violation: other package constant":                 {source: `fault.Active().Is(other.BeforeRename)`, want: "got other.BeforeRename"},
-		"violation: unknown tagged name":                    {source: `fault.Active().Is(fault.Unknown)`, want: "got fault.Unknown"},
-		"violation: writer literal":                         {source: `_ = secret.WriteFaultNames{BeforeRename: "hidden"}`, want: `got "hidden"`},
-		"violation: helper variable":                        {source: `point := "hidden"; abortRefreshFault(point)`, want: "got point"},
-		"control: method expression constant":               {source: `fault.Fault.Is(fault.Active(), fault.BeforeRename)`},
-		"violation: method expression variable":             {source: `point := "hidden"; fault.Fault.Is(fault.Active(), point)`, want: "got point"},
-		"violation: method value variable":                  {source: `check := fault.Active().Is; point := "hidden"; check(point)`, want: "got point", count: 2},
-		"violation: method value with constant":             {source: `check := fault.Active().Is; check(fault.BeforeRename)`, want: "not captured or assigned"},
-		"violation: reassigned method value":                {source: `var check func(string) bool; check = fault.Active().Is; check("hidden")`, want: "got fault.Active().Is"},
-		"violation: assigned pause method":                  {source: `var check func(string); check = fault.Active().PausePoint; check("hidden")`, want: "got fault.Active().PausePoint"},
-		"violation: assigned wait method":                   {source: `var check func(string); check = fault.Active().WaitIf; check("hidden")`, want: "got fault.Active().WaitIf"},
-		"violation: parenthesized method capture":           {source: `var check func(string) bool; check = (fault.Active().Is)`, want: "got fault.Active().Is"},
-		"violation: method value returned":                  {source: `return fault.Active().Is`, want: "got fault.Active().Is"},
-		"violation: method value passed as argument":        {source: `consume(fault.Active().Is)`, want: "got fault.Active().Is"},
-		"violation: named helper alias":                     {source: `check := abortRefreshFault; point := "hidden"; check(point)`, want: "got point"},
-		"control: unrelated imported Is":                    {source: `errors.Is(err, nil)`},
+		"violation: other package constant":                 {source: `fault.Active().Is(secret.ClaudeProcessName)`, want: "got secret.ClaudeProcessName"},
+		"violation: writer literal":                         {source: `writer.WriteWithFaults(ctx, doc, nil, stop, secret.WriteFaultNames{BeforeRename: "hidden", RenameFail: fault.RenameFail})`, want: `got "hidden"`},
+		"violation: reversed carrier fields follow source order": {
+			source: `writer.WriteWithFaults(ctx, doc, nil, stop, secret.WriteFaultNames{RenameFail: "first", BeforeRename: "second"})`, want: `got "first"`, count: 2,
+			order: []string{`got "first"`, `got "second"`},
+		},
+		"violation: helper variable":            {source: `point := "hidden"; abortRefreshFault(point)`, want: "got point"},
+		"control: method expression constant":   {source: `fault.Fault.Is(fault.Active(), fault.BeforeRename)`},
+		"violation: method expression variable": {source: `point := "hidden"; fault.Fault.Is(fault.Active(), point)`, want: "got point"},
+		"violation: tuple-expanded value method expression": {
+			decls:  `func pair() (fault.Fault, string) { return fault.Active(), "hidden" }`,
+			source: `fault.Fault.Is(pair())`, want: "fault name must reference a tagged fault constant, got pair()",
+		},
+		"violation: tuple-expanded pointer method expression": {
+			decls:  `func pairPtr() (*fault.Fault, string) { return new(fault.Active()), "hidden" }`,
+			source: `(*fault.Fault).Is(pairPtr())`, want: "fault name must reference a tagged fault constant, got pairPtr()",
+		},
+		"violation: tuple-expanded pause method expression": {
+			decls:  `func pair() (fault.Fault, string) { return fault.Active(), "hidden" }`,
+			source: `fault.Fault.PausePoint(pair())`, want: "fault name must reference a tagged fault constant, got pair()",
+		},
+		"violation: tuple-expanded wait method expression": {
+			decls:  `func pair() (fault.Fault, string) { return fault.Active(), "hidden" }`,
+			source: `fault.Fault.WaitIf(pair())`, want: "fault name must reference a tagged fault constant, got pair()",
+		},
+		"violation: tuple-expanded promoted method expression": {
+			decls:  `type wrapper struct{ fault.Fault }; func pair() (wrapper, string) { return wrapper{}, "hidden" }`,
+			source: `wrapper.Is(pair())`, want: "fault name must reference a tagged fault constant, got pair()",
+		},
+		"violation: tuple-expanded tagged constant requires call-site selector": {
+			decls:  `func pair() (fault.Fault, string) { return fault.Active(), fault.BeforeRename }`,
+			source: `fault.Fault.Is(pair())`, want: "fault name must reference a tagged fault constant, got pair()",
+		},
+		"violation: tuple-expanded discovered helper": {
+			decls:  `func pair() (fault.Fault, string) { return fault.Active(), "hidden" }; func namedProbe(receiver fault.Fault, name string) { receiver.Is(name) }`,
+			source: `namedProbe(pair())`, want: "fault name must reference a tagged fault constant, got pair()", count: 2,
+			order: []string{"got name", "got pair()"},
+		},
+		"violation: tuple-expanded writer carrier": {
+			decls:  `func writeArgs() (context.Context, []byte, *secret.PendingSpec, secret.StopPolicy, secret.WriteFaultNames) { return ctx, doc, nil, stop, secret.WriteFaultNames{BeforeRename: "hidden", RenameFail: fault.RenameFail} }`,
+			source: `writer.WriteWithFaults(writeArgs())`, want: "fault name must reference a tagged fault constant, got writeArgs()",
+		},
+		"violation: tuple-expanded writer method expression carrier": {
+			decls:  `func writeArgs() (*secret.SecretFile, context.Context, []byte, *secret.PendingSpec, secret.StopPolicy, secret.WriteFaultNames) { return &writer, ctx, doc, nil, stop, secret.WriteFaultNames{BeforeRename: "hidden", RenameFail: fault.RenameFail} }`,
+			source: `(*secret.SecretFile).WriteWithFaults(writeArgs())`, want: "fault name must reference a tagged fault constant, got writeArgs()",
+		},
+		"control: tuple-expanded unrelated method expression": {
+			decls:  `type predicate struct{}; func (predicate) Is(string) bool { return false }; func pair() (predicate, string) { return predicate{}, "ordinary" }`,
+			source: `predicate.Is(pair())`,
+		},
+		"violation: method value variable":           {source: `check := fault.Active().Is; point := "hidden"; check(point)`, want: "got point", count: 2},
+		"violation: method value with constant":      {source: `check := fault.Active().Is; check(fault.BeforeRename)`, want: "not captured or assigned"},
+		"violation: reassigned method value":         {source: `var check func(string) bool; check = fault.Active().Is; check("hidden")`, want: "got fault.Active().Is"},
+		"violation: assigned pause method":           {source: `var check func(string); check = fault.Active().PausePoint; check("hidden")`, want: "got fault.Active().PausePoint"},
+		"violation: assigned wait method":            {source: `var check func(string); check = fault.Active().WaitIf; check("hidden")`, want: "got fault.Active().WaitIf"},
+		"violation: parenthesized method capture":    {source: `var check func(string) bool; check = (fault.Active().Is); _ = check`, want: "got fault.Active().Is"},
+		"violation: method value returned":           {decls: `func capture() func(string) bool { return fault.Active().Is }`, want: "got fault.Active().Is"},
+		"violation: method value passed as argument": {source: `consume(fault.Active().Is)`, want: "got fault.Active().Is"},
+		"violation: named helper alias":              {source: `check := abortRefreshFault; point := "hidden"; check(point)`, want: "got point"},
+		"control: unrelated imported Is":             {source: `errors.Is(err, nil)`},
 		"violation: helper through alias method expression": {
 			decls:  `type carrier = fault.Fault; func namedProbe(name string) { carrier.Is(fault.Active(), name) }`,
 			source: `namedProbe("hidden")`, want: `got "hidden"`, count: 2,
@@ -526,29 +471,31 @@ func TestFaultNameCallShapes(t *testing.T) {
 		},
 		"violation: carrier alias":                   {decls: `type carrier = secret.WriteFaultNames`, source: `_ = carrier{BeforeRename: "hidden"}`, want: "got secret.WriteFaultNames"},
 		"violation: carrier defined type":            {decls: `type carrier secret.WriteFaultNames`, source: `_ = carrier{BeforeRename: "hidden"}`, want: "got secret.WriteFaultNames"},
-		"violation: bare carrier alias":              {decls: `type carrier = WriteFaultNames`, want: "got WriteFaultNames"},
-		"violation: carrier name suffix":             {decls: `type carrier = other.CustomWriteFaultNames`, want: "got other.CustomWriteFaultNames"},
 		"violation: carrier alias inside function":   {source: `type carrier = secret.WriteFaultNames; _ = carrier{}`, want: "got secret.WriteFaultNames"},
 		"violation: disguised writer argument":       {decls: `type carrier = struct{BeforeRename, RenameFail string}`, source: `writer.WriteWithFaults(ctx, doc, nil, stop, carrier{BeforeRename: "hidden", RenameFail: fault.BeforeRename})`, want: `got "hidden"`},
 		"control: disguised writer tagged arguments": {decls: `type carrier = struct{BeforeRename, RenameFail string}`, source: `writer.WriteWithFaults(ctx, doc, nil, stop, carrier{BeforeRename: fault.BeforeRename, RenameFail: fault.BeforeRename})`},
-		"violation: writer missing field":            {source: `writer.WriteWithFaults(ctx, doc, nil, stop, carrier{BeforeRename: fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
-		"violation: writer wrong field":              {source: `writer.WriteWithFaults(ctx, doc, nil, stop, carrier{BeforeRename: fault.BeforeRename, Other: fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
-		"violation: writer positional fields":        {source: `writer.WriteWithFaults(ctx, doc, nil, stop, carrier{fault.BeforeRename, fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
-		"violation: writer duplicate field":          {source: `writer.WriteWithFaults(ctx, doc, nil, stop, carrier{BeforeRename: fault.BeforeRename, BeforeRename: fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
+		"violation: writer missing field":            {source: `writer.WriteWithFaults(ctx, doc, nil, stop, secret.WriteFaultNames{BeforeRename: fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
+		"violation: writer positional fields":        {source: `writer.WriteWithFaults(ctx, doc, nil, stop, secret.WriteFaultNames{fault.BeforeRename, fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
 		"control: unrelated function value":          {source: `check := errors.Is; check(err, nil)`},
 		"violation: writer variable":                 {source: `var names secret.WriteFaultNames; writer.WriteWithFaults(ctx, doc, nil, stop, names)`, want: "got names"},
-		"violation: unkeyed writer literal":          {source: `_ = secret.WriteFaultNames{"hidden", fault.BeforeRename}`, want: `got "hidden"`},
-		"control: writer selectors":                  {source: `_ = secret.WriteFaultNames{BeforeRename: fault.BeforeRename, RenameFail: fault.BeforeRename}`},
+		"violation: unkeyed writer literal":          {source: `writer.WriteWithFaults(ctx, doc, nil, stop, secret.WriteFaultNames{"hidden", fault.BeforeRename})`, want: "exactly BeforeRename and RenameFail keys"},
+		"control: writer selectors":                  {source: `writer.WriteWithFaults(ctx, doc, nil, stop, secret.WriteFaultNames{BeforeRename: fault.BeforeRename, RenameFail: fault.BeforeRename})`},
+		"control: unused carrier is not a sink":      {source: `_ = secret.WriteFaultNames{BeforeRename: "ordinary"}`},
 		"control: parenthesized call":                {source: `(fault.Active().Is)(fault.BeforeRename)`},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, "fixture.go", "package codex\nimport (\""+faultImportPath+"\"; \"errors\"; \""+faultModulePath+"/internal/secret\")\nvar injected fault.Fault\nvar writer secret.SecretFile\n"+tt.decls+"\nfunc probe() {"+tt.source+"}", 0)
+			file, err := parser.ParseFile(fset, "internal/provider/codex/fixture.go", "package codex\nimport (\""+faultImportPath+"\"; \"errors\"; \"context\"; \""+faultModulePath+"/internal/secret\")\nvar injected fault.Fault\nvar writer secret.SecretFile\nvar ctx context.Context\nvar doc []byte\nvar stop = secret.StopComplete\nvar err error\nfunc consume(check func(string) bool) { _ = check }\n"+tt.decls+"\nfunc probe() {"+tt.source+"}", parser.SkipObjectResolution)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := faultSourceViolations(fset, map[string]*ast.File{"internal/provider/codex/fixture.go": file}, map[string]bool{"BeforeRename": true})
+			helper, err := parser.ParseFile(fset, "internal/provider/codex/refresh_fault_testing.go", `package codex; import "`+faultImportPath+`"; func abortRefreshFault(name string) { fault.Active().Is(name) }`, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files := map[string]*ast.File{"internal/provider/codex/fixture.go": file, "internal/provider/codex/refresh_fault_testing.go": helper}
+			got := faultSourceViolations(fset, checkFaultFixture(t, fset, files, imports))
 			t.Logf("measured violations=%d; diagnostics=%v", len(got), got)
 			if tt.order != nil {
 				var order []string

@@ -15,483 +15,548 @@
 package fault_test
 
 import (
+	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
+	"go/types"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"testing"
+
+	gocmp "github.com/google/go-cmp/cmp"
+	"golang.org/x/mod/modfile"
+	"golang.org/x/tools/go/packages"
 )
 
 const faultModulePath = "github.com/zchee/agentctl"
 
-// Symbols use nominal receiver names, not method spelling alone. This keeps
-// unrelated Is methods and same-named forwarding functions out of the inventory.
-type faultSourceSymbol struct {
-	pkg, receiver, name string
-	local               *ast.TypeSpec
-}
-
 type faultSourceFile struct {
-	file    *ast.File
-	pkg     string
-	imports map[string]string
-	nodes   map[ast.Decl][]ast.Node
+	path  string
+	file  *ast.File
+	info  *types.Info
+	pkg   *types.Package
+	nodes map[ast.Decl][]ast.Node
 }
 
-type faultSourceDeclaration struct {
-	source *faultSourceFile
-	fn     *ast.FuncDecl
-	typ    *ast.TypeSpec
-	value  *ast.ValueSpec
-}
-
-type faultSourceType struct {
+type faultSourceInitializer struct {
 	source *faultSourceFile
 	expr   ast.Expr
 }
 
 type faultSourceIndex struct {
-	files     map[string]*faultSourceFile
-	functions map[faultSourceSymbol]faultSourceDeclaration
-	types     map[faultSourceSymbol]faultSourceDeclaration
-	variables map[faultSourceSymbol]faultSourceDeclaration
+	files            map[string]*faultSourceFile
+	functions        map[string]*types.Func
+	initializers     map[types.Object]faultSourceInitializer
+	initializerTypes map[types.Object]types.Type
 }
 
-func indexFaultSources(files map[string]*ast.File) *faultSourceIndex {
-	index := &faultSourceIndex{
-		files:     make(map[string]*faultSourceFile),
-		functions: make(map[faultSourceSymbol]faultSourceDeclaration),
-		types:     make(map[faultSourceSymbol]faultSourceDeclaration),
-		variables: make(map[faultSourceSymbol]faultSourceDeclaration),
+type faultSourceImporter map[string]*types.Package
+
+func (imports faultSourceImporter) Import(path string) (*types.Package, error) {
+	if pkg := imports[path]; pkg != nil {
+		return pkg, nil
 	}
+	return nil, fmt.Errorf("fixture import %q was not loaded", path)
+}
+
+func faultModuleRoot(t *testing.T) string {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := faultModuleRootFrom(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// faultModuleRootFrom walks cwd's ancestors and validates the nearest go.mod.
+// A nested module with another identity stops discovery rather than allowing
+// the parent checkout to supply a different source-contract scope.
+func faultModuleRootFrom(cwd string) (string, error) {
+	for dir := cwd; ; {
+		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			if !info.IsDir() {
+				path := filepath.Join(dir, "go.mod")
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return "", err
+				}
+				file, err := modfile.ParseLax(path, data, nil)
+				if err != nil {
+					return "", err
+				}
+				module := ""
+				if file.Module != nil {
+					module = file.Module.Mod.Path
+				}
+				if module != faultModulePath {
+					return "", fmt.Errorf("wrong source-contract module: got %q, want %q", module, faultModulePath)
+				}
+				return dir, nil
+			}
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", fmt.Errorf("cannot locate source-contract module go.mod from %s", cwd)
+}
+
+func loadFaultPackages(t *testing.T, tests bool, patterns ...string) []*packages.Package {
+	t.Helper()
+	cfg := &packages.Config{
+		Context: t.Context(), Dir: faultModuleRoot(t), Tests: tests,
+		Env:  append(os.Environ(), "GOWORK=off"),
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+	}
+	if faultSourceBuildTag != "" {
+		cfg.BuildFlags = []string{"-tags=" + faultSourceBuildTag}
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packages.Visit(pkgs, nil, func(pkg *packages.Package) {
+		for _, err := range pkg.Errors {
+			t.Errorf("load %s: %s", pkg.ID, err)
+		}
+	})
+	if t.Failed() {
+		t.Fatal("source-contract package load failed")
+	}
+	return pkgs
+}
+
+var faultFixtureImports struct {
+	sync.Once
+	imports faultSourceImporter
+}
+
+func loadFaultFixtureImports(t *testing.T) faultSourceImporter {
+	t.Helper()
+	faultFixtureImports.Do(func() {
+		faultFixtureImports.imports = make(faultSourceImporter)
+		packages.Visit(loadFaultPackages(t, false, faultImportPath, faultModulePath+"/internal/secret", faultModulePath+"/internal/provider/codex", "errors", "math"), nil, func(pkg *packages.Package) { faultFixtureImports.imports[pkg.PkgPath] = pkg.Types })
+	})
+	return faultFixtureImports.imports
+}
+
+func checkFaultFixture(t *testing.T, fset *token.FileSet, files map[string]*ast.File, imports faultSourceImporter) map[string]*faultSourceFile {
+	t.Helper()
+	groups := make(map[string][]*ast.File)
 	for path, file := range files {
-		pkg := faultModulePath
-		if dir := filepath.ToSlash(filepath.Dir(path)); dir != "." {
-			pkg += "/" + dir
+		groups[filepath.Dir(path)+":"+file.Name.Name] = append(groups[filepath.Dir(path)+":"+file.Name.Name], file)
+	}
+	sources := make(map[string]*faultSourceFile)
+	for _, group := range groups {
+		info := &types.Info{Types: make(map[ast.Expr]types.TypeAndValue), Defs: make(map[*ast.Ident]types.Object), Uses: make(map[*ast.Ident]types.Object), Selections: make(map[*ast.SelectorExpr]*types.Selection)}
+		config := types.Config{Importer: imports, GoVersion: "go1.27", DisableUnusedImportCheck: true, Error: func(err error) { t.Errorf("fixture type check: %v", err) }}
+		path := fset.PositionFor(group[0].Pos(), false).Filename
+		pkg, err := config.Check(faultModulePath+"/"+filepath.ToSlash(filepath.Dir(path)), fset, group, info)
+		if err != nil {
+			t.Fatal("fixture must be valid Go")
 		}
-		if strings.HasSuffix(file.Name.Name, "_test") {
-			pkg += "_test"
+		for path, file := range files {
+			for _, checked := range group {
+				if file == checked {
+					sources[path] = &faultSourceFile{path: path, file: file, info: info, pkg: pkg}
+				}
+			}
 		}
-		source := &faultSourceFile{file: file, pkg: pkg, imports: sourceImports(file), nodes: make(map[ast.Decl][]ast.Node)}
-		index.files[path] = source
-		for _, decl := range file.Decls {
-			// Cache preorder once so discovery and validation share capture ordering.
+	}
+	return sources
+}
+
+func indexFaultSources(files map[string]*faultSourceFile) *faultSourceIndex {
+	index := &faultSourceIndex{files: files, functions: make(map[string]*types.Func), initializers: make(map[types.Object]faultSourceInitializer), initializerTypes: make(map[types.Object]types.Type)}
+	for _, source := range files {
+		for _, object := range source.info.Defs {
+			if fn, ok := object.(*types.Func); ok {
+				index.functions[fn.Origin().FullName()] = fn.Origin()
+			}
+		}
+	}
+	for _, source := range files {
+		source.nodes = make(map[ast.Decl][]ast.Node)
+		for _, decl := range source.file.Decls {
 			ast.Inspect(decl, func(node ast.Node) bool {
-				switch node.(type) {
-				case *ast.TypeSpec, *ast.ImportSpec, *ast.AssignStmt, *ast.SelectorExpr, *ast.CallExpr, *ast.CompositeLit:
+				switch node := node.(type) {
+				case *ast.TypeSpec, *ast.SelectorExpr, *ast.CallExpr:
 					source.nodes[decl] = append(source.nodes[decl], node)
+				case *ast.AssignStmt:
+					source.nodes[decl] = append(source.nodes[decl], node)
+					if node.Tok == token.DEFINE {
+						index.bindInitializers(source, node.Lhs, node.Rhs)
+					}
+				case *ast.ValueSpec:
+					names := make([]ast.Expr, len(node.Names))
+					for i, name := range node.Names {
+						names[i] = name
+					}
+					index.bindInitializers(source, names, node.Values)
 				}
 				return true
 			})
-			switch decl := decl.(type) {
-			case *ast.FuncDecl:
-				index.functions[source.functionSymbol(decl)] = faultSourceDeclaration{source: source, fn: decl}
-			case *ast.GenDecl:
-				for _, spec := range decl.Specs {
-					if typ, ok := spec.(*ast.TypeSpec); ok {
-						index.types[faultSourceSymbol{pkg: pkg, name: typ.Name.Name}] = faultSourceDeclaration{source: source, typ: typ}
-					}
-					if value, ok := spec.(*ast.ValueSpec); ok && decl.Tok == token.VAR {
-						for _, name := range value.Names {
-							index.variables[faultSourceSymbol{pkg: pkg, name: name.Name}] = faultSourceDeclaration{source: source, value: value}
-						}
-					}
-				}
-			}
 		}
 	}
 	return index
 }
 
-func (source *faultSourceFile) functionSymbol(fn *ast.FuncDecl) faultSourceSymbol {
-	symbol := faultSourceSymbol{pkg: source.pkg, name: fn.Name.Name}
-	if fn.Recv != nil {
-		receiver := ast.Unparen(fn.Recv.List[0].Type)
-		for {
-			switch typ := receiver.(type) {
-			case *ast.StarExpr:
-				receiver = ast.Unparen(typ.X)
-			case *ast.IndexExpr:
-				receiver = ast.Unparen(typ.X)
-			case *ast.IndexListExpr:
-				receiver = ast.Unparen(typ.X)
-			default:
-				if name, ok := receiver.(*ast.Ident); ok {
-					symbol.receiver = name.Name
-				}
-				return symbol
+func (index *faultSourceIndex) bindInitializers(source *faultSourceFile, names, values []ast.Expr) {
+	for i, expr := range names {
+		name, ok := expr.(*ast.Ident)
+		if !ok || source.info.Defs[name] == nil || len(values) == 0 {
+			continue
+		}
+		object := source.info.Defs[name]
+		if len(values) == len(names) {
+			index.initializers[object] = faultSourceInitializer{source: source, expr: values[i]}
+			index.initializerTypes[object] = source.info.TypeOf(values[i])
+		} else if len(values) == 1 {
+			if tuple, ok := source.info.TypeOf(values[0]).(*types.Tuple); ok && i < tuple.Len() {
+				index.initializerTypes[object] = tuple.At(i).Type()
 			}
 		}
 	}
-	return symbol
 }
 
-func (index *faultSourceIndex) typeSymbol(source *faultSourceFile, expr ast.Expr) faultSourceSymbol {
-	seen := make(map[faultSourceSymbol]bool)
-	var resolve func(*faultSourceFile, ast.Expr) faultSourceSymbol
-	resolve = func(source *faultSourceFile, expr ast.Expr) faultSourceSymbol {
-		if expr == nil {
-			return faultSourceSymbol{}
-		}
-		var symbol faultSourceSymbol
-		switch typ := ast.Unparen(expr).(type) {
-		case *ast.StarExpr:
-			return resolve(source, typ.X)
-		case *ast.IndexExpr:
-			return resolve(source, typ.X)
-		case *ast.IndexListExpr:
-			return resolve(source, typ.X)
-		case *ast.Ident:
-			symbol = faultSourceSymbol{pkg: source.pkg, name: typ.Name}
-			if typ.Obj != nil {
-				if decl, ok := typ.Obj.Decl.(*ast.TypeSpec); ok {
-					if index.types[symbol].typ != decl {
-						symbol.local = decl
-					}
-				} else {
-					return faultSourceSymbol{}
-				}
-			}
-		case *ast.SelectorExpr:
-			if pkg, ok := typ.X.(*ast.Ident); ok && pkg.Obj == nil && source.imports[pkg.Name] != "" {
-				symbol = faultSourceSymbol{pkg: source.imports[pkg.Name], name: typ.Sel.Name}
-			}
-		}
-		if seen[symbol] {
-			return faultSourceSymbol{}
-		}
-		seen[symbol] = true
-		decl := index.typeDeclaration(source, symbol)
-		if decl.typ != nil && decl.typ.Assign.IsValid() {
-			if _, structure := ast.Unparen(decl.typ.Type).(*ast.StructType); !structure {
-				return resolve(decl.source, decl.typ.Type)
-			}
-		}
-		return symbol
+func faultReceiver(typ types.Type) bool {
+	typ = types.Unalias(typ)
+	if pointer, ok := typ.(*types.Pointer); ok {
+		typ = types.Unalias(pointer.Elem())
 	}
-	return resolve(source, expr)
+	named, ok := typ.(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == faultImportPath && named.Obj().Name() == "Fault"
 }
 
-func (index *faultSourceIndex) typeDeclaration(source *faultSourceFile, symbol faultSourceSymbol) faultSourceDeclaration {
-	if symbol.local != nil {
-		return faultSourceDeclaration{source: source, typ: symbol.local}
+func faultPredicate(object types.Object) bool {
+	fn, ok := object.(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != faultImportPath {
+		return false
 	}
-	return index.types[symbol]
+	sig := fn.Type().(*types.Signature)
+	return sig.Recv() != nil && faultReceiver(sig.Recv().Type()) && (fn.Name() == "Is" || fn.Name() == "PausePoint" || fn.Name() == "WaitIf")
 }
 
-func (index *faultSourceIndex) underlyingType(typ faultSourceType) faultSourceType {
-	seen := make(map[faultSourceSymbol]bool)
-	for typ.expr != nil {
-		typ.expr = ast.Unparen(typ.expr)
-		switch expr := typ.expr.(type) {
-		case *ast.StarExpr:
-			typ.expr = expr.X
-		case *ast.IndexExpr:
-			typ.expr = expr.X
-		case *ast.IndexListExpr:
-			typ.expr = expr.X
-		case *ast.Ident, *ast.SelectorExpr:
-			symbol := index.typeSymbol(typ.source, typ.expr)
-			decl := index.typeDeclaration(typ.source, symbol)
-			if decl.typ == nil || seen[symbol] {
-				return faultSourceType{}
-			}
-			seen[symbol] = true
-			typ = faultSourceType{source: decl.source, expr: decl.typ.Type}
-		default:
-			return typ
-		}
-	}
-	return faultSourceType{}
-}
-
-// Resolve fields and methods at the shallowest embedding depth. An own member
-// shadows promotions, and competing members at the same depth are ambiguous.
-func (index *faultSourceIndex) member(typ faultSourceType, name string) (faultSourceType, faultSourceSymbol) {
-	seen := make(map[faultSourceType]int)
-	for depth, level := 0, []faultSourceType{typ}; len(level) > 0; depth++ {
-		var next []faultSourceType
-		var fieldType faultSourceType
-		var method faultSourceSymbol
-		matches := 0
-		for _, receiver := range level {
-			if receiver.expr == nil {
-				continue
-			}
-			if previous, ok := seen[receiver]; ok && previous < depth {
-				continue
-			}
-			seen[receiver] = depth
-			symbol := index.typeSymbol(receiver.source, receiver.expr)
-			candidate := faultSourceSymbol{pkg: symbol.pkg, receiver: symbol.name, name: name, local: symbol.local}
-			_, declared := index.functions[candidate]
-			if declared || symbol == (faultSourceSymbol{pkg: faultImportPath, name: "Fault"}) && (name == "Is" || name == "PausePoint" || name == "WaitIf") {
-				matches++
-				method = candidate
-				continue
-			}
-			underlying := index.underlyingType(receiver)
-			structure, ok := underlying.expr.(*ast.StructType)
-			if !ok {
-				continue
-			}
-			for _, field := range structure.Fields.List {
-				fieldNames := field.Names
-				if len(fieldNames) == 0 {
-					embedded := ast.Unparen(field.Type)
-				nominal:
-					for {
-						switch typ := embedded.(type) {
-						case *ast.StarExpr:
-							embedded = ast.Unparen(typ.X)
-						case *ast.IndexExpr:
-							embedded = ast.Unparen(typ.X)
-						case *ast.IndexListExpr:
-							embedded = ast.Unparen(typ.X)
-						default:
-							break nominal
-						}
-					}
-					if selector, ok := embedded.(*ast.SelectorExpr); ok {
-						fieldNames = []*ast.Ident{selector.Sel}
-					} else if identifier, ok := embedded.(*ast.Ident); ok {
-						fieldNames = []*ast.Ident{identifier}
-					}
-					next = append(next, faultSourceType{source: underlying.source, expr: field.Type})
-				}
-				for _, fieldName := range fieldNames {
-					if fieldName.Name == name {
-						matches++
-						fieldType = faultSourceType{source: underlying.source, expr: field.Type}
-						method = candidate
-					}
-				}
-			}
-		}
-		if matches > 1 {
-			return faultSourceType{}, faultSourceSymbol{}
-		}
-		if matches == 1 {
-			return fieldType, method
-		}
-		level = next
-	}
-	return faultSourceType{}, faultSourceSymbol{}
-}
-
-// This syntactic guard resolves direct and parenthesised receivers; indexed
-// slices, arrays, maps and named collections; ranges over slices, arrays, maps
-// and channels; channel receives; value, pointer, explicit, nested and generic
-// embedding; local and package types; cross-file globals; alias and promoted
-// method expressions, including instantiated concrete embeddings; instantiated
-// generics with concrete results; visibly typed function values; function-call
-// tuple results; and interface declarations with a visible fault initializer.
-// Comma-ok declarations are not resolved as positional result bindings.
-// Values whose fault origin is only known at run time are outside the guard:
-// abstract interfaces, type parameters without a concrete embedding, and
-// flow-sensitive reassignment must be caught by review.
-func (index *faultSourceIndex) expressionType(source *faultSourceFile, expr ast.Expr) faultSourceType {
-	seen := make(map[ast.Expr]bool)
-	var resolve func(*faultSourceFile, ast.Expr) faultSourceType
-	resultType := func(source *faultSourceFile, call *ast.CallExpr, position int) faultSourceType {
-		symbol := index.callSymbol(source, call.Fun)
-		if position == 0 && symbol.pkg == faultImportPath && symbol.receiver == "" && (symbol.name == "Active" || symbol.name == "None" || symbol.name == "FromList") {
-			// Fixtures need not provide the imported fault package's sources.
-			return faultSourceType{source: &faultSourceFile{pkg: faultImportPath}, expr: ast.NewIdent("Fault")}
-		}
-		var function *ast.FuncType
-		if decl, ok := index.functions[symbol]; ok {
-			source, function = decl.source, decl.fn.Type
-		} else {
-			callable := index.underlyingType(resolve(source, call.Fun))
-			source = callable.source
-			function, _ = callable.expr.(*ast.FuncType)
-		}
-		if function != nil && function.Results != nil {
-			for _, field := range function.Results.List {
-				count := max(1, len(field.Names))
-				if position < count {
-					return faultSourceType{source: source, expr: field.Type}
-				}
-				position -= count
-			}
-		}
-		return faultSourceType{}
-	}
-	resolve = func(source *faultSourceFile, expr ast.Expr) faultSourceType {
-		if expr == nil || seen[expr] {
-			return faultSourceType{}
-		}
-		seen[expr] = true
+// Type information checks Fault, *Fault and embedded receivers. Interfaces and
+// type parameters are outside the guard unless a declaration's initializer has
+// static fault type; runtime provenance and reassignment are not inferred.
+func (index *faultSourceIndex) callObject(source *faultSourceFile, expr ast.Expr) (types.Object, int) {
+	seen := make(map[types.Object]bool)
+	var resolve func(*faultSourceFile, ast.Expr) (types.Object, int)
+	resolve = func(source *faultSourceFile, expr ast.Expr) (types.Object, int) {
 		switch expr := ast.Unparen(expr).(type) {
+		case *ast.IndexExpr:
+			return resolve(source, expr.X)
+		case *ast.IndexListExpr:
+			return resolve(source, expr.X)
 		case *ast.Ident:
-			var value *ast.ValueSpec
-			if expr.Obj != nil {
-				switch decl := expr.Obj.Decl.(type) {
-				case *ast.Field:
-					return faultSourceType{source: source, expr: decl.Type}
-				case *ast.ValueSpec:
-					value = decl
-				case *ast.AssignStmt:
-					for i, lhs := range decl.Lhs {
-						if name, ok := lhs.(*ast.Ident); !ok || name.Obj != expr.Obj {
-							continue
-						}
-						if len(decl.Rhs) == 1 {
-							if ranged, ok := decl.Rhs[0].(*ast.UnaryExpr); ok && ranged.Op == token.RANGE {
-								collection := index.underlyingType(resolve(source, ranged.X))
-								switch typ := collection.expr.(type) {
-								case *ast.ArrayType:
-									if i == 1 {
-										return faultSourceType{source: collection.source, expr: typ.Elt}
-									}
-								case *ast.ChanType:
-									return faultSourceType{source: collection.source, expr: typ.Value}
-								case *ast.MapType:
-									if i == 0 {
-										return faultSourceType{source: collection.source, expr: typ.Key}
-									}
-									return faultSourceType{source: collection.source, expr: typ.Value}
-								}
-								return faultSourceType{}
-							}
-							if call, ok := ast.Unparen(decl.Rhs[0]).(*ast.CallExpr); ok && len(decl.Lhs) > 1 {
-								return resultType(source, call, i)
-							}
-						}
-						if i < len(decl.Rhs) {
-							return resolve(source, decl.Rhs[i])
-						}
-					}
-				case *ast.TypeSpec:
-					return faultSourceType{source: source, expr: expr}
-				}
-			} else if decl, ok := index.variables[faultSourceSymbol{pkg: source.pkg, name: expr.Name}]; ok {
-				source, value = decl.source, decl.value
+			object := source.info.Uses[expr]
+			if _, ok := object.(*types.Func); ok {
+				return object, 0
 			}
-			if value != nil {
-				var declared faultSourceType
-				if value.Type != nil {
-					declared = faultSourceType{source: source, expr: value.Type}
-					if _, isInterface := index.underlyingType(declared).expr.(*ast.InterfaceType); !isInterface {
-						return declared
-					}
-				}
-				for i, name := range value.Names {
-					if name.Name != expr.Name {
-						continue
-					}
-					var initialized faultSourceType
-					if len(value.Values) == 1 && len(value.Names) > 1 {
-						if call, ok := ast.Unparen(value.Values[0]).(*ast.CallExpr); ok {
-							initialized = resultType(source, call, i)
-						}
-					} else if i < len(value.Values) {
-						initialized = resolve(source, value.Values[i])
-					}
-					if declared.expr == nil {
-						return initialized
-					}
-					// Retain a directly visible fault initializer of an interface.
-					if _, method := index.member(initialized, "Is"); method == (faultSourceSymbol{pkg: faultImportPath, receiver: "Fault", name: "Is"}) {
-						return initialized
-					}
-					break
-				}
-				return declared
+			if initializer := index.initializers[object]; !seen[object] && initializer.expr != nil {
+				seen[object] = true
+				return resolve(initializer.source, initializer.expr)
 			}
-		case *ast.UnaryExpr:
-			if expr.Op == token.ARROW {
-				channel := index.underlyingType(resolve(source, expr.X))
-				if typ, ok := channel.expr.(*ast.ChanType); ok {
-					return faultSourceType{source: channel.source, expr: typ.Value}
-				}
-				return faultSourceType{}
-			}
-			return resolve(source, expr.X)
-		case *ast.StarExpr:
-			return resolve(source, expr.X)
-		case *ast.TypeAssertExpr:
-			return faultSourceType{source: source, expr: expr.Type}
-		case *ast.CompositeLit:
-			return faultSourceType{source: source, expr: expr.Type}
-		case *ast.IndexExpr, *ast.IndexListExpr:
-			if index.typeDeclaration(source, index.typeSymbol(source, expr)).typ != nil {
-				return faultSourceType{source: source, expr: expr}
-			}
-			if indexed, ok := expr.(*ast.IndexExpr); ok {
-				collection := index.underlyingType(resolve(source, indexed.X))
-				switch typ := collection.expr.(type) {
-				case *ast.ArrayType:
-					return faultSourceType{source: collection.source, expr: typ.Elt}
-				case *ast.MapType:
-					return faultSourceType{source: collection.source, expr: typ.Value}
-				}
-			}
-		case *ast.FuncLit:
-			return faultSourceType{source: source, expr: expr.Type}
-		case *ast.CallExpr:
-			if result := resultType(source, expr, 0); result.expr != nil {
-				return result
-			}
-			return faultSourceType{source: source, expr: expr.Fun}
 		case *ast.SelectorExpr:
-			if pkg, ok := expr.X.(*ast.Ident); ok && pkg.Obj == nil && source.imports[pkg.Name] != "" {
-				return faultSourceType{source: source, expr: expr}
+			if selection := source.info.Selections[expr]; selection != nil {
+				object := selection.Obj()
+				offset := 0
+				if selection.Kind() == types.MethodExpr {
+					offset = 1
+				}
+				if name, ok := ast.Unparen(expr.X).(*ast.Ident); ok && !faultPredicate(object) {
+					if typ := index.initializerTypes[source.info.Uses[name]]; typ != nil {
+						candidate, _, _ := types.LookupFieldOrMethod(typ, true, source.pkg, expr.Sel.Name)
+						if faultPredicate(candidate) {
+							object = candidate
+						}
+					}
+				}
+				return object, offset
 			}
-			typ, _ := index.member(resolve(source, expr.X), expr.Sel.Name)
-			return typ
+			return source.info.Uses[expr.Sel], 0
 		}
-		return faultSourceType{}
+		return nil, 0
 	}
-	return resolve(source, expr)
+	object, offset := resolve(source, expr)
+	// Test variants have distinct objects for the same declared function.
+	if fn, ok := object.(*types.Func); ok {
+		if canonical := index.functions[fn.Origin().FullName()]; canonical != nil {
+			object = canonical
+		}
+	}
+	return object, offset
 }
 
-func (index *faultSourceIndex) callSymbol(source *faultSourceFile, expr ast.Expr) faultSourceSymbol {
-	seen := make(map[ast.Expr]bool)
-	var resolve func(ast.Expr) faultSourceSymbol
-	resolve = func(expr ast.Expr) faultSourceSymbol {
-		if seen[expr] {
-			return faultSourceSymbol{}
-		}
-		seen[expr] = true
-		switch expr := ast.Unparen(expr).(type) {
-		case *ast.Ident:
-			if expr.Obj != nil {
-				switch decl := expr.Obj.Decl.(type) {
-				case *ast.AssignStmt:
-					for i, lhs := range decl.Lhs {
-						if name, ok := lhs.(*ast.Ident); ok && name.Obj == expr.Obj && i < len(decl.Rhs) {
-							return resolve(decl.Rhs[i])
-						}
-					}
-				case *ast.ValueSpec:
-					for i, name := range decl.Names {
-						if name.Obj == expr.Obj && i < len(decl.Values) {
-							return resolve(decl.Values[i])
-						}
-					}
-				case *ast.FuncDecl:
-					return source.functionSymbol(decl)
-				}
-				return faultSourceSymbol{}
-			}
-			return faultSourceSymbol{pkg: source.pkg, name: expr.Name}
-		case *ast.IndexExpr:
-			return resolve(expr.X)
-		case *ast.IndexListExpr:
-			return resolve(expr.X)
-		case *ast.SelectorExpr:
-			if pkg, ok := expr.X.(*ast.Ident); ok && pkg.Obj == nil && source.imports[pkg.Name] != "" {
-				return faultSourceSymbol{pkg: source.imports[pkg.Name], name: expr.Sel.Name}
-			}
-			receiver := index.expressionType(source, expr.X)
-			if _, method := index.member(receiver, expr.Sel.Name); method != (faultSourceSymbol{}) {
-				return method
-			}
-			symbol := index.typeSymbol(receiver.source, receiver.expr)
-			return faultSourceSymbol{pkg: symbol.pkg, receiver: symbol.name, name: expr.Sel.Name, local: symbol.local}
-		}
-		return faultSourceSymbol{}
+func faultObjectReceiver(object types.Object, pkg, receiver, name string) bool {
+	fn, ok := object.(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != pkg || fn.Name() != name {
+		return false
 	}
-	return resolve(expr)
+	sig := fn.Type().(*types.Signature)
+	if sig.Recv() == nil {
+		return receiver == ""
+	}
+	typ := types.Unalias(sig.Recv().Type())
+	if pointer, ok := typ.(*types.Pointer); ok {
+		typ = types.Unalias(pointer.Elem())
+	}
+	named, ok := typ.(*types.Named)
+	return ok && named.Obj().Name() == receiver
+}
+
+func faultHookField(object types.Object) bool {
+	field, ok := object.(*types.Var)
+	if !ok || !field.IsField() || field.Pkg() == nil || field.Pkg().Path() != faultModulePath+"/internal/secret" || (field.Name() != "Fault" && field.Name() != "Pause") {
+		return false
+	}
+	typ := field.Pkg().Scope().Lookup("Seams")
+	if typ == nil {
+		return false
+	}
+	structure, ok := typ.Type().Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	for field := range structure.Fields() {
+		if field == object {
+			return true
+		}
+	}
+	return false
+}
+
+func faultBaseSink(object types.Object) bool {
+	return faultPredicate(object) || faultHookField(object) || faultObjectReceiver(object, faultModulePath+"/internal/secret", "Seams", "fault") || faultObjectReceiver(object, faultModulePath+"/internal/provider/codex", "", "abortRefreshFault")
+}
+
+func faultPackageSources(t *testing.T, pkgs []*packages.Package) (*token.FileSet, map[string]*faultSourceFile) {
+	t.Helper()
+	sources := make(map[string]*faultSourceFile)
+	root := faultModuleRoot(t)
+	var fset *token.FileSet
+	foundFault := false
+	for _, pkg := range pkgs {
+		if pkg.PkgPath != faultModulePath && !strings.HasPrefix(pkg.PkgPath, faultModulePath+"/") {
+			continue
+		}
+		foundFault = foundFault || pkg.PkgPath == faultImportPath
+		fset = pkg.Fset
+		for _, file := range pkg.Syntax {
+			path, err := filepath.Rel(root, pkg.Fset.PositionFor(file.Pos(), false).Filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path = filepath.ToSlash(path)
+			if strings.HasPrefix(path, "../") {
+				continue
+			}
+			sources[pkg.ID+":"+path] = &faultSourceFile{path: path, file: file, info: pkg.TypesInfo, pkg: pkg.Types}
+		}
+	}
+	if !foundFault {
+		t.Fatalf("source-contract package scope is missing %s", faultImportPath)
+	}
+	return fset, sources
+}
+
+func TestFaultModuleRoot(t *testing.T) {
+	tests := map[string]struct {
+		module  string
+		content string
+		nested  bool
+		missing bool
+		want    string
+	}{
+		"violation: wrong module cwd":                            {module: "example.com/other", want: `wrong source-contract module: got "example.com/other", want "` + faultModulePath + `"`},
+		"violation: prefix collision module cwd":                 {module: faultModulePath + "-other", want: `wrong source-contract module: got "` + faultModulePath + `-other", want "` + faultModulePath + `"`},
+		"control: expected module cwd":                           {module: faultModulePath},
+		"violation: missing module directive":                    {content: "go 1.27\n", want: `wrong source-contract module: got "", want "` + faultModulePath + `"`},
+		"violation: invalid module syntax":                       {content: "module (\n", want: "syntax error"},
+		"violation: nested wrong module stops discovery":         {module: "example.com/nested", nested: true, want: `wrong source-contract module: got "example.com/nested", want "` + faultModulePath + `"`},
+		"violation: no ancestral module rejects source fallback": {missing: true, want: "cannot locate source-contract module go.mod from "},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			cwd := t.TempDir()
+			if tt.nested {
+				if err := os.WriteFile(filepath.Join(cwd, "go.mod"), []byte("module "+faultModulePath+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cwd = filepath.Join(cwd, "nested")
+				if err := os.Mkdir(cwd, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !tt.missing {
+				content := tt.content
+				if content == "" {
+					content = "module " + tt.module + "\ngo 1.27\n"
+				}
+				if err := os.WriteFile(filepath.Join(cwd, "go.mod"), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := tt.want
+			if tt.content == "module (\n" {
+				path := filepath.Join(cwd, "go.mod")
+				want = fmt.Sprintf("%s:2: syntax error (unterminated block started at %s:1:1)", path, path)
+			}
+			if tt.missing {
+				want += cwd
+			}
+			root, err := faultModuleRootFrom(cwd)
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			t.Logf("measured discovery error=%q; root=%q", got, root)
+			if diff := gocmp.Diff(want, got); diff != "" {
+				t.Errorf("module discovery error (-want +got):\n%s", diff)
+			}
+			wantRoot := cwd
+			if tt.want != "" {
+				wantRoot = ""
+			}
+			if diff := gocmp.Diff(wantRoot, root); diff != "" {
+				t.Errorf("module root (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestFaultPackageVariants(t *testing.T) {
+	imports := loadFaultFixtureImports(t)
+	root := faultModuleRoot(t)
+	tests := map[string]struct {
+		production      string
+		productionDecls string
+		testOnly        string
+		directive       string
+		reverse         bool
+		wantPath        string
+		wantExpressions map[string][]string
+	}{
+		"violation: test method shadows production sink":          {production: `wrapper{}.Is("hidden")`, testOnly: `func (wrapper) Is(string) bool { return false }`, wantPath: "probe.go"},
+		"violation: test method shadows production sink reversed": {production: `wrapper{}.Is("hidden")`, testOnly: `func (wrapper) Is(string) bool { return false }`, reverse: true, wantPath: "probe.go"},
+		"violation: sink exists only in test variant":             {production: `wrapper{}.Is(fault.BeforeRename)`, testOnly: `func testProbe() { fault.Active().Is("hidden") }`, wantPath: "probe_test.go"},
+		"violation: shared sink diagnostics deduplicated":         {production: `wrapper{}.Is("hidden")`, wantPath: "probe.go"},
+		"control: variants agree on tagged constant":              {production: `wrapper{}.Is(fault.BeforeRename)`},
+		"control: prefix collision package excluded":              {production: `wrapper{}.Is("hidden")`},
+		"violation: outside-root line directive retains caller": {
+			production: `fault.Active().Is("hidden")`, directive: "/private/tmp/outside-module/generated.go", wantPath: "probe.go",
+		},
+		"violation: exempt-file line directive retains caller": {
+			production: `fault.Active().Is("hidden")`, directive: filepath.Join(root, "internal/runtime/fault/fault_testing.go"), wantPath: "probe.go",
+		},
+		"violation: identical adjusted locations retain physical callers": {
+			production: `fault.Active().Is("hidden")`, testOnly: "\nfunc other() { fault.Active().Is(\"hidden\") }",
+			directive:       filepath.Join(root, "internal/commands/remapped.go"),
+			wantExpressions: map[string][]string{"probe.go": {`"hidden"`}, "probe_test.go": {`"hidden"`}},
+		},
+		"violation: production helper called from test": {
+			productionDecls: `func Forward(name string) { fault.Active().Is(name) }`, testOnly: `func testProbe() { Forward("hidden") }`,
+			wantExpressions: map[string][]string{"probe.go": {"name)"}, "probe_test.go": {`"hidden"`}},
+		},
+		"violation: production helper called from test reversed": {
+			productionDecls: `func Forward(name string) { fault.Active().Is(name) }`, testOnly: `func testProbe() { Forward("hidden") }`, reverse: true,
+			wantExpressions: map[string][]string{"probe.go": {"name)"}, "probe_test.go": {`"hidden"`}},
+		},
+		"control: production helper test caller tagged constant": {
+			productionDecls: `func Forward(name string) { fault.Active().Is(name) }`, testOnly: `func testProbe() { Forward(fault.BeforeRename) }`,
+			wantExpressions: map[string][]string{"probe.go": {"name)"}},
+		},
+		"control: production helper test caller tagged constant reversed": {
+			productionDecls: `func Forward(name string) { fault.Active().Is(name) }`, testOnly: `func testProbe() { Forward(fault.BeforeRename) }`, reverse: true,
+			wantExpressions: map[string][]string{"probe.go": {"name)"}},
+		},
+		"violation: test helper called from test": {
+			testOnly:        `func TestForward(name string) { fault.Active().Is(name) }; func testProbe() { TestForward("hidden") }`,
+			wantExpressions: map[string][]string{"probe_test.go": {"name)", `"hidden"`}},
+		},
+		"violation: test helper called from test reversed": {
+			testOnly: `func TestForward(name string) { fault.Active().Is(name) }; func testProbe() { TestForward("hidden") }`, reverse: true,
+			wantExpressions: map[string][]string{"probe_test.go": {"name)", `"hidden"`}},
+		},
+		"control: test helper caller tagged constant": {
+			testOnly:        `func TestForward(name string) { fault.Active().Is(name) }; func testProbe() { TestForward(fault.BeforeRename) }`,
+			wantExpressions: map[string][]string{"probe_test.go": {"name)"}},
+		},
+		"control: test helper caller tagged constant reversed": {
+			testOnly: `func TestForward(name string) { fault.Active().Is(name) }; func testProbe() { TestForward(fault.BeforeRename) }`, reverse: true,
+			wantExpressions: map[string][]string{"probe_test.go": {"name)"}},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			texts := map[string]string{
+				"internal/commands/probe.go":      "package commands\nimport \"" + faultImportPath + "\"\ntype wrapper struct{ fault.Fault }\nfunc probe() { " + tt.production + " }\n" + tt.productionDecls,
+				"internal/commands/probe_test.go": "package commands\nimport \"" + faultImportPath + "\"\n" + tt.testOnly,
+			}
+			if tt.directive != "" {
+				for path, text := range texts {
+					texts[path] = "//line " + tt.directive + ":1:1\n" + text
+				}
+			}
+			files := make(map[string]*ast.File)
+			for path, text := range texts {
+				file, err := parser.ParseFile(fset, filepath.Join(root, path), text, parser.SkipObjectResolution)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files[path] = file
+			}
+			const path = "internal/commands/probe.go"
+			normalFile, err := parser.ParseFile(fset, filepath.Join(root, path), texts[path], parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			normal := checkFaultFixture(t, fset, map[string]*ast.File{path: normalFile}, imports)
+			variant := checkFaultFixture(t, fset, files, imports)
+			pkgPath := faultModulePath + "/internal/commands"
+			if name == "control: prefix collision package excluded" {
+				pkgPath = faultModulePath + "-other/internal/commands"
+			}
+			pkgs := []*packages.Package{
+				{ID: pkgPath, PkgPath: pkgPath, Fset: fset, Syntax: []*ast.File{normalFile}, TypesInfo: normal[path].info, Types: normal[path].pkg},
+				{ID: pkgPath + " [commands.test]", PkgPath: pkgPath, Fset: fset, Syntax: []*ast.File{files[path], files["internal/commands/probe_test.go"]}, TypesInfo: variant[path].info, Types: variant[path].pkg},
+				{ID: faultImportPath, PkgPath: faultImportPath, Fset: fset},
+			}
+			if tt.reverse {
+				pkgs[0], pkgs[1] = pkgs[1], pkgs[0]
+			}
+			loadedFset, sources := faultPackageSources(t, pkgs)
+			got := faultSourceViolations(loadedFset, sources)
+			var want []string
+			if tt.wantPath != "" {
+				path := "internal/commands/" + tt.wantPath
+				pos := fset.File(files[path].Pos()).Pos(strings.Index(texts[path], `"hidden"`))
+				want = []string{fmt.Sprintf("%s: fault name must reference a tagged fault constant, got %s", fset.PositionFor(pos, false), `"hidden"`)}
+			}
+			for _, path := range []string{"probe.go", "probe_test.go"} {
+				for _, expr := range tt.wantExpressions[path] {
+					path := "internal/commands/" + path
+					pos := fset.File(files[path].Pos()).Pos(strings.Index(texts[path], expr))
+					want = append(want, fmt.Sprintf("%s: fault name must reference a tagged fault constant, got %s", fset.PositionFor(pos, false), strings.TrimSuffix(expr, ")")))
+				}
+			}
+			t.Logf("measured violations=%d; diagnostics=%v", len(got), got)
+			if diff := gocmp.Diff(want, got); diff != "" {
+				t.Errorf("variant diagnostics (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
