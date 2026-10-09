@@ -102,6 +102,8 @@ capture() {
     printf 'CAPTURED %s status (exit=%s)\n' "$provider" "$code"
   done
 }
+step_code=0
+step_allowed_exit=
 step() {
   local name=$1 code prefix
   shift
@@ -118,7 +120,9 @@ step() {
   printf '%s\n' "$code" >| "$prefix.exit"
   printf 'CAPTURED %s command (exit=%s)\n' "$name" "$code"
   capture "$prefix"
-  [[ "$code" == 0 ]] || { printf 'FAIL command refused; inspect captures locally, then reset the clone\n' >&2; exit 1; }
+  step_code=$code
+  [[ "$code" == 0 || "$code" == "$step_allowed_exit" ]] ||
+    { printf 'FAIL command refused; inspect captures locally, then reset the clone\n' >&2; exit 1; }
 }
 
 pause 'Use the ONE disposable Claude account (account A) for this manual login too. The browser opens automatically; paste code#state here and press Enter (input will be hidden). If needed, inspect the local command .stdout/.stderr files in a second guest Terminal for the URL or consent prompt; do not copy them to a report.'
@@ -143,20 +147,16 @@ if grep -q '^RECORDED applied outcome' "$captures/forward-undo.txt"; then
   # Both implementations discard the displaced grant when it is the incoming
   # account's own, older credential, so this undo has nothing to put back and
   # refuses; the refusal is the recorded fact, not a failure of the sequence.
-  undo_prefix="$captures/claude-undo-$implementation"
-  tty_state=$(stty -g)
-  stty -echo
-  if "$binary" --config-dir "$store" claude use --undo --yes --json >| "$undo_prefix.stdout" 2>| "$undo_prefix.stderr"; then undo_code=0
-  else undo_code=$?; fi
-  stty "$tty_state"
-  tty_state=
-  printf '%s\n' "$undo_code" >| "$undo_prefix.exit"
-  printf 'CAPTURED claude-undo command (exit=%s)\n' "$undo_code"
-  capture "$undo_prefix"
-  if [[ "$undo_code" == 1 ]] && grep -Eq 'nothing to put back|recorded no displaced credential' "$undo_prefix.stderr"; then
+  step_allowed_exit=1
+  step claude-undo claude use --undo --yes --json
+  step_allowed_exit=
+  # Only the whole refusal line counts, so a stray mention elsewhere in the
+  # output cannot stand in for the refusal.
+  if [[ "$step_code" == 1 ]] && grep -Eq '^(agentctl|agctl): (the credential that (live )?swap displaced .* nothing to put back.*|the live swap to undo recorded no displaced credential .*)$' \
+    "$captures/claude-undo-$implementation.stderr"; then
     printf 'RECORDED undo refused after the discarded displaced grant; no reversal on the single account\n' | tee -a "$captures/forward-undo.txt"
   else
-    printf 'FAIL expected the undo to refuse with nothing to put back (exit=%s); inspect captures locally, then reset the clone\n' "$undo_code" >&2
+    printf 'FAIL expected the undo to refuse with nothing to put back (exit=%s); inspect captures locally, then reset the clone\n' "$step_code" >&2
     exit 1
   fi
 else
