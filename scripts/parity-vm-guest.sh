@@ -134,7 +134,7 @@ elif jq -e '.outcome == "applied"' "$captures/claude-live-$implementation.stdout
   # The manual login above mints a grant newer than the keychain item of the
   # same account, so both implementations install it instead of answering
   # already-active; the undo that follows reverses that credential swap.
-  printf 'RECORDED applied outcome on the single account: a newer grant replaced the keychain item; the undo reverses it\n' | tee "$captures/forward-undo.txt"
+  printf 'RECORDED applied outcome on the single account: a newer grant replaced the keychain item; the undo that follows refuses\n' | tee "$captures/forward-undo.txt"
 else
   printf 'FAIL expected the already-active or applied outcome of the single account; no other reversal claim is permitted\n' >&2
   exit 1
