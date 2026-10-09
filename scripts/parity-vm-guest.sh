@@ -150,9 +150,10 @@ if grep -q '^RECORDED applied outcome' "$captures/forward-undo.txt"; then
   step_allowed_exit=1
   step claude-undo claude use --undo --yes --json
   step_allowed_exit=
-  # Only the whole refusal line counts, so a stray mention elsewhere in the
-  # output cannot stand in for the refusal.
-  if [[ "$step_code" == 1 ]] && grep -Eq '^(agentctl|agctl): (the credential that (live )?swap displaced .* nothing to put back.*|the live swap to undo recorded no displaced credential .*)$' \
+  # Only one of the three complete refusal messages counts, so neither a
+  # stray mention elsewhere in the output nor trailing text can stand in for
+  # the refusal.
+  if [[ "$step_code" == 1 ]] && grep -Eq '^(agentctl|agctl): (the credential that swap displaced is no longer in .[^ ]*., so there is nothing to put back|the credential that live swap displaced \(.[0-9a-f]{8}.\) is not in its own account.s namespace in any store agentctl owns, so there is nothing to put back; .agentctl claude doctor. reports what each namespace holds|the live swap to undo recorded no displaced credential \(it wrote .[0-9a-f]{8}.\), so agentctl cannot tell which credential to put back)$' \
     "$captures/claude-undo-$implementation.stderr"; then
     printf 'RECORDED undo refused after the discarded displaced grant; no reversal on the single account\n' | tee -a "$captures/forward-undo.txt"
   else
