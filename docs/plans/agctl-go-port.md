@@ -890,3 +890,9 @@ database; `gofrs/flock`, `go-runewidth`, `x/net/http2` not used.
   single account's newer grant is `applied` and discards the displaced grant in both implementations, so the undo refuses; the final
   Codex status is the partial exit 2 because the guest never logs the vendor CLI in. Record in `docs/research/agctl-parity.md`
   (`4c40212`, `3d7b04a`), verified by verify-w10e2; full parity sign-off stays incomplete on the reference axis.
+- 2026-10-10 00:02:52 JST: a security review of everything after `13c9b46` (run on the user's instruction on a Grok reviewer; the first two
+  attempts fell back to another model until the agent definition named the gateway id and a five-tool allowlist kept it under
+  the gateway's 350-tool limit) found one MEDIUM: the fault guard's module-root walk started from the unresolved working
+  directory, so a decoy module reached through a symlink could capture the scan. Fixed as `1b37ffa` (symlinks resolved before
+  the walk, three root regressions; 202 table cases per mode), verified by verify-w12e and the security re-review (APPROVE WITH
+  FINDINGS); the guest parity script's refusal match was anchored to the three complete messages (`71a161c`, `57b3684`).
