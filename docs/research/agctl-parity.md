@@ -14,6 +14,14 @@ An exit 0 proves only the checks that ran. It does not waive skipped
 Claude status, credential writes, or HTTP comparisons. No testing tag was
 used to make the Go release binary accept fixture overrides.
 
+The manual run of 2026-10-09 (section "Manual run") executed the skipped
+keychain commands against a real keychain for the Go artifact only: six of
+the seven commands exit 0, the undo refuses by the rule both
+implementations share, and real usage success is observed for Claude and
+Codex. The reference side of those commands was not run, so the sign-off
+stays incomplete on the parity axis while the Go keychain path now has
+real-environment evidence.
+
 ## Reproduction and binary identities
 
 Run from the Go module root:
@@ -164,6 +172,70 @@ fixture comparison could test these paths, but it would not be parity
 against the shipped untagged Go artifact. A real-keychain manual run in a
 disposable environment is a separate operator-approved check, not silently
 performed here.
+
+## Manual run (2026-10-09, Go implementation only)
+
+The keychain steps that the automated sign-off skips were executed once
+against a real macOS keychain in a disposable tart guest, for the Go
+implementation only. The reference half of the comparison was not run:
+the reference executable the scripts default to is a `testing`-feature
+build whose keychain reader is disabled by construction, its guest
+sequence stopped at `claude import --from keychain` with exit 1 and the
+message `the keychain is not available (disabled)`, and the operator
+chose not to repeat the sequence with a release build of the reference.
+This section therefore records real-keychain evidence for the Go
+artifact, not parity.
+
+| Item | Value |
+|---|---|
+| Host work directory | `.omc/artifacts/parity-vm/2026-10-09_21-25-32-operator` (untracked; raw captures stay there and in the guest) |
+| Guest image | `macos-golden-gate-xcode`; macOS 27.0 (26A428); Claude Code 2.1.267; codex-cli 0.155.1; jq 1.8.2 |
+| Base snapshot | `agentctl-e2e-base`, measured 2026-10-09 22:43:31 JST after one GUI Claude Code login with the single disposable account |
+| Go artifact | `GOTOOLCHAIN=go1.27.2 go build -trimpath -ldflags='-s -w'`, untagged, module `v0.0.0-20261009123533-909acd21ce70` (commit `909acd2`), SHA-256 `bfb2eeaba0e20791a725452dafb4da5cb6974f433c82f385b25dbe89b1b0b197` |
+| Reference artifact copied | SHA-256 `dd14f021b21d696e90d62e7ef153e0ec10b8d8a9ff8647221896cc607644d736` (the same debug executable as the automated run; sequence aborted at import, see above) |
+| Guest sequence | `scripts/parity-vm-guest.sh go` at the state of commit `c692a46`, copied into the clone `agentctl-parity-go` after `reset go` |
+| Comparison | `scripts/parity-vm.sh compare` at the state of commit `6d114a4`, rerun on the host at 2026-10-09 23:18:24 JST |
+
+Per-command results of the Go sequence (the status columns are the exit
+codes of `claude status --json --all` and `codex status --json --all`
+captured after each command):
+
+| Command | Exit | Claude status | Codex status | Recorded fact |
+|---|---|---|---|---|
+| `claude login --manual --label parity` | 0 | 0 | 2 | one owned row for the disposable account |
+| `claude import --from keychain` | 0 | 0 | 2 | the keychain item is the same account; no row added |
+| `claude use <account> --live --yes --json` | 0 | 0 | 2 | `applied`, digest `449dedb2` (GUI login item) replaced by `66c57eb2` (the manual login's newer grant) |
+| `claude use --undo --yes --json` | 1 | 0 | 2 | refused: the displaced grant was discarded, nothing to put back |
+| `claude doctor` | 0 | 0 | 2 | keychain unlocked, one live and one owned Claude row, both `ok` |
+| `codex login --no-refresh --label parity` | 0 | 0 | 2 | one owned Codex row |
+| `codex accounts set <account> --refresh auto` | 0 | 0 | 2 | owned Codex row `ok`; the guest's own Codex CLI stays `needs_login` (live row), which is the partial exit 2 |
+
+Comparison output restricted to the Go side: 9 PASS (seven commands, the
+completed guest sequence, Claude and Codex real usage success), 2 RECORDED
+(the applied forward swap and the refused undo), 0 FAIL. The 74 FAIL
+lines of the full output are the absent reference captures.
+
+Two facts about the single-account design surfaced during the run and
+were folded into the scripts rather than treated as defects of either
+implementation:
+
+- A forward swap onto the account's own newer grant is `applied`, not
+  `already_active`, in both implementations (Go
+  `internal/commands/use_live_engine.go`, reference `src/commands/use.rs`:
+  the item's expiry must be at least the incoming credential's for the
+  short circuit), and both discard the displaced older grant (Go
+  `internal/provider/claude/adopt.go`, reference
+  `src/provider/claude/adopt.rs`), so the undo that follows has nothing
+  to put back and refuses with exit 1. A reversal test needs two
+  disposable accounts; this run records the refusal (`c37f763`,
+  `c692a46`, `b395fc2`).
+- The guest never logs the vendor Codex CLI in, so the final Codex status
+  is the partial exit 2 with the live row at `needs_login`; the owned row
+  is the one whose real usage success the run observes (`6d114a4`).
+
+Still not run: the reference half of these seven commands, a forward/undo
+pair between distinct accounts, and refresh coverage (deferred until a
+disposable grant legitimately expires).
 
 ## Manual follow-up to complete the skipped coverage
 
