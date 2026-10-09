@@ -139,7 +139,29 @@ else
   printf 'FAIL expected the already-active or applied outcome of the single account; no other reversal claim is permitted\n' >&2
   exit 1
 fi
-step claude-undo claude use --undo --yes --json
+if grep -q '^RECORDED applied outcome' "$captures/forward-undo.txt"; then
+  # Both implementations discard the displaced grant when it is the incoming
+  # account's own, older credential, so this undo has nothing to put back and
+  # refuses; the refusal is the recorded fact, not a failure of the sequence.
+  undo_prefix="$captures/claude-undo-$implementation"
+  tty_state=$(stty -g)
+  stty -echo
+  if "$binary" --config-dir "$store" claude use --undo --yes --json >| "$undo_prefix.stdout" 2>| "$undo_prefix.stderr"; then undo_code=0
+  else undo_code=$?; fi
+  stty "$tty_state"
+  tty_state=
+  printf '%s\n' "$undo_code" >| "$undo_prefix.exit"
+  printf 'CAPTURED claude-undo command (exit=%s)\n' "$undo_code"
+  capture "$undo_prefix"
+  if [[ "$undo_code" == 1 ]] && grep -Eq 'nothing to put back|recorded no displaced credential' "$undo_prefix.stderr"; then
+    printf 'RECORDED undo refused after the discarded displaced grant; no reversal on the single account\n' | tee -a "$captures/forward-undo.txt"
+  else
+    printf 'FAIL expected the undo to refuse with nothing to put back (exit=%s); inspect captures locally, then reset the clone\n' "$undo_code" >&2
+    exit 1
+  fi
+else
+  step claude-undo claude use --undo --yes --json
+fi
 step claude-doctor claude doctor
 pause 'Authorize Codex in the guest browser with a disposable account. Inspect local codex-login .stdout/.stderr in a second guest Terminal for any consent question; answer in this terminal. No output or authorization code may be shared.'
 step codex-login codex login --no-refresh --label parity

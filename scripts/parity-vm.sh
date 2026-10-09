@@ -256,6 +256,10 @@ compare_runs() {
         code=$(<"$file")
         if [[ "$code" == 0 ]]; then
           result PASS "$step $implementation command (exit=0)"
+        elif [[ "$step" == claude-undo && "$code" == 1 ]] &&
+          grep -q '^RECORDED undo refused' "$work/captures/$implementation/forward-undo.txt" 2>/dev/null; then
+          # The single-account sequence discards the displaced grant, so the guest recorded the refusal.
+          printf 'RECORDED %s %s command refused after the discarded displaced grant (exit=1)\n' "$step" "$implementation"
         elif [[ "$code" =~ ^[0-9]+$ ]]; then
           result FAIL "$step $implementation command (exit=$code)"
         else result FAIL "$step $implementation command: invalid exit capture"; fi
