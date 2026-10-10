@@ -74,13 +74,15 @@ func (swap useLiveSwap) swapIn(ctx context.Context, incoming useIncoming, store 
 	defer cancel()
 	var target *string
 	var warnings []string
-	report := swap.swapPhases(ctx, incoming, store, opts, &target, &warnings)
+	var rc *useRemoteControl
+	report := swap.swapPhases(ctx, incoming, store, opts, &target, &warnings, &rc)
 	report.target = target
 	report.warnings = append(warnings, report.warnings...)
+	report.rc = rc
 	return report
 }
 
-func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, store *config.AccountRecord, opts cli.ClaudeUseOptions, target **string, warnings *[]string) *useReport {
+func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, store *config.AccountRecord, opts cli.ClaudeUseOptions, target **string, warnings *[]string, rc **useRemoteControl) *useReport {
 	subject, refused := useBuildSubject(swap.paths, swap.env, swap.live, store, swap.inherited)
 	if refused != nil {
 		return refused
@@ -95,7 +97,14 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	if swap.live {
 		hints = useScanSessions(ctx, claude.SessionsDir(swap.env))
 		if hints.unreadable != "" {
-			swap.noteUse(ctx, warnings, fmt.Sprintf("agentctl could not read Claude Code's session registry (%s), so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again", hints.unreadable))
+			swap.noteUse(ctx, warnings, useUnreadableRegistryNote(hints.unreadable))
+		}
+		if opts.RestartRemoteControl {
+			var refusal *useReport
+			*rc, refusal = swap.remoteControlPreflight(ctx, &hints, service)
+			if refusal != nil {
+				return refusal
+			}
 		}
 	}
 	item, err := useReadKeychain(ctx, secret.NewReader(), service)

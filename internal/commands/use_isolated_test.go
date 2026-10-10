@@ -160,8 +160,7 @@ func TestRunUseUnavailableModes(t *testing.T) {
 		opts cli.ClaudeUseOptions
 		want string
 	}{
-		"error: missing id":                     {want: "an account id is required"},
-		"error: remote control not implemented": {opts: cli.ClaudeUseOptions{RestartRemoteControl: true}, want: "not implemented"},
+		"error: missing id": {want: "an account id is required"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

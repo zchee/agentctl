@@ -62,6 +62,7 @@ func (p SessionProcess) RunUndo(ctx context.Context, globals cli.Globals, opts c
 	swap := useLiveSwap{paths: paths, config: registry, env: &env, live: reversal.live, inherited: reversal.inherited, process: p}
 	incoming := useIncoming{record: &reversal.owner, direction: secret.DirectionUndo, source: reversal.source, undone: reversal.undone}
 	report := swap.swapIn(ctx, incoming, reversal.store, opts)
+	p.followUpRemoteControl(ctx, opts, report)
 	if err := p.emitUse(report, opts.JSON); err != nil {
 		return err
 	}

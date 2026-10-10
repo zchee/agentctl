@@ -29,8 +29,12 @@ func (p SessionProcess) RunUse(ctx context.Context, globals cli.Globals, opts cl
 	if opts.Forget != "" {
 		return p.RunForget(ctx, globals, opts)
 	}
-	if opts.RestartRemoteControl {
-		return errs.NewNotImplemented("claude use remote-control restart")
+	if opts.RestartRemoteControl && !useRemoteControlSupported {
+		report := useRemoteControlPlatformRefusal()
+		if err := p.emitUse(report, opts.JSON); err != nil {
+			return err
+		}
+		return &errs.ChildExit{Code: report.outcome.ExitCode()}
 	}
 	if opts.Undo {
 		return p.RunUndo(ctx, globals, opts)

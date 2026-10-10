@@ -270,7 +270,7 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 				}
 			}
 			if test.registryFailure != "" {
-				expected := fmt.Sprintf("agentctl could not read Claude Code's session registry (%s), so it cannot say whether a running session has Remote Control on. A session that does keeps its claude.ai history only if Remote Control is disconnected there before the swap: decline this swap (answer n, or run without `--yes`), disconnect it there, and run this command again", test.registryFailure)
+				expected := fmt.Sprintf("agentctl could not read Claude Code's session registry (%s), so it cannot say whether a running session has Remote Control on. In a session that does and reads this store, Claude Code stops Remote Control after the swap (now, or on its next account check), and `/remote-control` there starts it again", test.registryFailure)
 				wantCount := 1
 				if !test.live || test.envToken {
 					wantCount = 0

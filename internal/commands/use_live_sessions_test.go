@@ -85,13 +85,19 @@ func TestUseSessionHintsBoundedAndNamesStayHumanOnly(t *testing.T) {
 				if diff := gocmp.Diff(test.wantName, hints.names[0]); diff != "" {
 					t.Fatal(diff)
 				}
-				if !strings.Contains(hints.consent(), "120-second") || hints.completion(false) == "" {
+				if !strings.Contains(hints.consent(), "`/remote-control` there starts it again") || hints.completion(false) == "" {
 					t.Fatal("missing advisory")
 				}
 				for _, text := range []string{hints.consent(), hints.completion(true), hints.completion(false)} {
 					if strings.Contains(text, "private-id") || strings.Contains(text, fmt.Sprint(os.Getpid())) {
 						t.Fatalf("registry identity exposed: %s", text)
 					}
+					if strings.Contains(text, "claude.ai") || strings.Contains(text, "history") || strings.Contains(text, "conversation") {
+						t.Fatalf("the advisory makes a claim about remote history: %s", text)
+					}
+				}
+				if len(hints.sessions) != 1 || hints.sessions[0].pid != uint32(os.Getpid()) || !hints.sessions[0].record.Bridge.Present() {
+					t.Fatalf("the scan kept no bridged session for the follow-up: %+v", hints.sessions)
 				}
 				if test.wantName != "" && strings.Contains(hints.completion(false), test.wantName) {
 					t.Fatal("JSON warning contains human name")

@@ -29,14 +29,38 @@ import (
 	"syscall"
 	"unicode"
 
+	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/proc"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
+// useSessionHints is what the registry scan found: the bridged sessions
+// still to be named in the manual advisory, the ones the Remote Control
+// follow-up will handle, and why the registry could not be read.
 type useSessionHints struct {
-	names      []string
+	// names are the human names of the bridged sessions the advisory
+	// names, in scan order.
+	names []string
+	// sessions are every bridged, live session the scan found.
+	sessions []useBridgedSession
+	// handled counts the sessions the Remote Control follow-up will ask
+	// to start it again; they are not in names.
+	handled    int
 	unreadable string
 }
+
+// useBridgedSession is one registry record that named a bridge and a live
+// process.
+type useBridgedSession struct {
+	path    string
+	name    string
+	pid     uint32
+	record  claude.RegistryRecord
+	decoded bool
+}
+
+// useRegistryRecordLimit bounds one registry record read.
+const useRegistryRecordLimit = 64*1024 - 1
 
 func useScanSessions(ctx context.Context, dir string) useSessionHints {
 	entries, err := os.ReadDir(dir)
@@ -56,7 +80,8 @@ func useScanSessions(ctx context.Context, dir string) useSessionHints {
 			break
 		}
 		considered++
-		read, err := secret.ReadFile(filepath.Join(dir, entry.Name()), 64*1024-1)
+		path := filepath.Join(dir, entry.Name())
+		read, err := secret.ReadFile(path, useRegistryRecordLimit)
 		if err != nil || !read.Present {
 			continue
 		}
@@ -97,7 +122,9 @@ func useScanSessions(ctx context.Context, dir string) useSessionHints {
 				name = string(chars[:47]) + "…"
 			}
 		}
+		record, err := claude.DecodeRegistryRecord(read.Bytes)
 		result.names = append(result.names, name)
+		result.sessions = append(result.sessions, useBridgedSession{path: path, name: name, pid: uint32(pid), record: record, decoded: err == nil})
 	}
 	return result
 }
@@ -239,14 +266,22 @@ func (hints useSessionHints) list() string {
 }
 
 func (hints useSessionHints) consent() string {
+	text := ""
+	if hints.handled != 0 {
+		plural, have := "", "has"
+		if hints.handled != 1 {
+			plural, have = "s", "have"
+		}
+		text = fmt.Sprintf(". After the swap, agentctl will ask the %d running Claude Code session%s that %s Remote Control on and read this store to start it again", hints.handled, plural, have)
+	}
 	if len(hints.names) == 0 {
-		return ""
+		return text
 	}
 	plural, have := "", "has"
 	if len(hints.names) != 1 {
 		plural, have = "s", "have"
 	}
-	return fmt.Sprintf(". %d running Claude Code session%s (%s) %s Remote Control on, and agentctl cannot tell which of them use this store. To keep a session's claude.ai history, answer n, run `/remote-control` in that session and disconnect, then run this command again — do not leave this question open while you do it, because it counts against this swap's 120-second limit. If you answer y, Remote Control stops in each session that uses this store, and starting it again there begins a remote session without the earlier conversation", len(hints.names), plural, hints.list(), have)
+	return text + fmt.Sprintf(". %d running Claude Code session%s (%s) %s Remote Control on, and agentctl cannot tell which of them use this store. In each one that does, Claude Code stops Remote Control after the swap (now, or on its next account check), and `/remote-control` there starts it again", len(hints.names), plural, hints.list(), have)
 }
 
 func (hints useSessionHints) completion(names bool) string {
@@ -260,5 +295,5 @@ func (hints useSessionHints) completion(names bool) string {
 	if names {
 		list = " (" + hints.list() + ")"
 	}
-	return fmt.Sprintf("%d Claude Code session%s%s had Remote Control on when this swap started, and agentctl cannot tell which of them use this store. In each one that does, Remote Control stops (now, or on its next account check): run `/remote-control` there to start it again. Its earlier conversation reaches claude.ai only if Remote Control was disconnected there before the swap", len(hints.names), plural, list)
+	return fmt.Sprintf("%d Claude Code session%s%s had Remote Control on when this swap started, and agentctl cannot tell which of them use this store. In each one that does, Remote Control stops (now, or on its next account check): run `/remote-control` there to start it again", len(hints.names), plural, list)
 }

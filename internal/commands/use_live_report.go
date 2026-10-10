@@ -60,6 +60,9 @@ type useOutcomeDocument struct {
 	Refusal   *string                  `json:"refusal"`
 	Config    *claude.ConfigReportJSON `json:"config"`
 	Reason    *string                  `json:"reason,omitzero"`
+	// RemoteControl is present only when `--restart-remote-control` was
+	// given, and then always, with every count.
+	RemoteControl *claude.RemoteControlCounts `json:"remote_control,omitzero"`
 }
 
 type usePlanDocument struct {
@@ -85,6 +88,10 @@ type useReport struct {
 	warnings    []string
 	note        *string
 	config      *claude.ConfigReport
+	// remoteControl is the follow-up's counts, set only with the flag.
+	remoteControl *claude.RemoteControlCounts
+	// rc is the preflight's result, which the follow-up acts on.
+	rc *useRemoteControl
 }
 
 func useRefused(refusal claude.SwapRefusal, service, note string) *useReport {
@@ -94,16 +101,17 @@ func useRefused(refusal claude.SwapRefusal, service, note string) *useReport {
 func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 	if asJSON {
 		doc := useOutcomeDocument{
-			Kind:      "outcome",
-			Outcome:   report.outcome.Word(),
-			Target:    report.target,
-			Service:   report.service,
-			From:      useDigestReport{Digest8: report.fromDigest8},
-			To:        useDigestReport{Digest8: report.toDigest8},
-			AdoptedTo: report.adoptedTo,
-			Lock:      report.lock,
-			Warnings:  report.warnings,
-			Note:      report.note,
+			Kind:          "outcome",
+			Outcome:       report.outcome.Word(),
+			Target:        report.target,
+			Service:       report.service,
+			From:          useDigestReport{Digest8: report.fromDigest8},
+			To:            useDigestReport{Digest8: report.toDigest8},
+			AdoptedTo:     report.adoptedTo,
+			Lock:          report.lock,
+			Warnings:      report.warnings,
+			Note:          report.note,
+			RemoteControl: report.remoteControl,
 		}
 		doc.Audit.ID = report.auditID
 		if report.config != nil {

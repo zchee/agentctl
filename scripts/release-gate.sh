@@ -50,6 +50,7 @@ testing_env=(
 	AGENTCTL_FAULT_RESUME
 	AGENTCTL_KEYCHAIN_BACKEND
 	AGENTCTL_NO_BROWSER
+	AGENTCTL_REMOTE_CONTROL_TIME_SCALE
 	AGENTCTL_SECURITY_BIN
 	AGENTCTL_SWAP_DEADLINE_MS
 	AGENTCTL_TEST_EXIT_DEFERRAL
@@ -101,6 +102,7 @@ production=(
 )
 seam_files=(
 	internal/commands/use_live_deadline_testing.go
+	internal/commands/use_live_remote_control_testing.go
 	internal/provider/claude/browser_testing.go
 	internal/provider/claude/oauth_endpoint_testing.go
 	internal/provider/claude/oauth_login_endpoint_testing.go
