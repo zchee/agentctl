@@ -321,10 +321,11 @@ func TestRemoteControlActionFor(t *testing.T) {
 
 func TestRemoteControlWarnings(t *testing.T) {
 	tests := map[string]struct {
-		counts  RemoteControlCounts
-		results []string
-		action  RemoteControlAction
-		want    []string
+		counts     RemoteControlCounts
+		results    []string
+		rejections []string
+		action     RemoteControlAction
+		want       []string
 	}{
 		"success: all reconnected warns nothing": {
 			counts: RemoteControlCounts{Eligible: 2, Dropped: 2, Reconnected: 2},
@@ -363,6 +364,51 @@ func TestRemoteControlWarnings(t *testing.T) {
 				"1 Claude Code session with Remote Control on refused agentctl's request because the request file's owner or mode was not what the mod expects, so agentctl asked it nothing more",
 			},
 		},
+		"error: a reconnect refused busy after the drop names its reason": {
+			counts:     RemoteControlCounts{Eligible: 1, Dropped: 1, Unreachable: 1},
+			rejections: []string{"busy"},
+			action:     RemoteControlReconnect,
+			want:       []string{"Remote Control was not restarted in 1 Claude Code session that refused agentctl's request (reason: busy); run `/remote-control` there"},
+		},
+		"error: refusals after the drop are grouped by reason in order": {
+			counts:     RemoteControlCounts{Eligible: 4, Dropped: 4, Unreachable: 3, VersionRejected: 1},
+			rejections: []string{"name", "busy", "busy", "version"},
+			action:     RemoteControlReconnect,
+			want: []string{
+				"Remote Control was not restarted in 2 Claude Code sessions that refused agentctl's request (reason: busy); run `/remote-control` there",
+				"Remote Control was not restarted in 1 Claude Code session that refused agentctl's request (reason: name); run `/remote-control` there",
+				"Remote Control was not restarted in 1 Claude Code session that refused agentctl's request (reason: version); run `/remote-control` there",
+			},
+		},
+		"error: a version refusal after the drop leaves the release-floor warning to the preflight ones": {
+			counts:     RemoteControlCounts{Eligible: 1, Dropped: 1, VersionRejected: 3},
+			rejections: []string{"version"},
+			action:     RemoteControlReconnect,
+			want: []string{
+				"2 Claude Code sessions with Remote Control on run a Claude Code release older than 2.1.287, or record none, so agentctl asked them nothing",
+				"Remote Control was not restarted in 1 Claude Code session that refused agentctl's request (reason: version); run `/remote-control` there",
+			},
+		},
+		"error: a metadata refusal after the drop keeps the metadata warning alone": {
+			counts:     RemoteControlCounts{Eligible: 1, Dropped: 1, MetadataRejected: 1},
+			rejections: []string{"metadata"},
+			action:     RemoteControlReconnect,
+			want:       []string{"1 Claude Code session with Remote Control on refused agentctl's request because the request file's owner or mode was not what the mod expects, so agentctl asked it nothing more"},
+		},
+		"error: a missing or foreign reason is never echoed": {
+			counts:     RemoteControlCounts{Eligible: 2, Dropped: 2, Unreachable: 2},
+			rejections: []string{"", "\x1b[31mBUSY"},
+			action:     RemoteControlReconnect,
+			want: []string{
+				"Remote Control was not restarted in 1 Claude Code session that refused agentctl's request (reason: none given); run `/remote-control` there",
+				"Remote Control was not restarted in 1 Claude Code session that refused agentctl's request (reason: unrecognized); run `/remote-control` there",
+			},
+		},
+		"success: refusals are not warned about outside a reconnect": {
+			counts:     RemoteControlCounts{Eligible: 1, Restored: 1},
+			rejections: []string{"busy"},
+			action:     RemoteControlKeep,
+		},
 		"error: config recovery names the recovery first": {
 			counts: RemoteControlCounts{Eligible: 3, VersionRejected: 1},
 			action: RemoteControlConfigRecovery,
@@ -385,7 +431,7 @@ func TestRemoteControlWarnings(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := RemoteControlWarnings(tt.counts, tt.results, tt.action)
+			got := RemoteControlWarnings(tt.counts, tt.results, tt.rejections, tt.action)
 			if diff := gocmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("warnings mismatch (-want +got):\n%s", diff)
 			}

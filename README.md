@@ -129,7 +129,7 @@ ids or URLs:
 |---|---|
 | `eligible` | had Remote Control on, answered, and read the swapped credential. |
 | `provenance_skipped` | read another credential, used a credential override, or ran behind a gateway. |
-| `unreachable` | did not answer through the mod. |
+| `unreachable` | did not answer through the mod, or refused agentctl's request for a reason other than the request file's owner, mode or the release (for example `busy`). |
 | `unavailable` | answered that Remote Control cannot start there. |
 | `version_rejected` | run a Claude Code release older than 2.1.287, or recorded none. |
 | `metadata_rejected` | refused the request file because of its owner or mode. |

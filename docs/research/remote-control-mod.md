@@ -171,7 +171,8 @@ the reference that existed to make keystrokes safe is gone, and its JSON and ref
   under the exit-table name `remote_control_refused`. Two reasons exist now:
   `remote_control_unsupported_platform` (a platform other than macOS, decided before anything is read) and
   `remote_control_unreachable` (a session with Remote Control on did not answer the status request within
-  the 5-second preflight, or the session registry could not be read, so no session's eligibility can be
+  the 5-second preflight or refused it for a reason other than the request file's owner, mode or the
+  release, such as `busy`; or the session registry could not be read, so no session's eligibility can be
   established). The reference's `remote_control_not_disconnected` (a pane failed to disconnect before the
   swap) has no counterpart because nothing is disconnected.
 - **No disconnect step.** The reference typed `/remote-control` and then `Up Up Enter` in each pane before

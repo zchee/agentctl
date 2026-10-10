@@ -490,6 +490,51 @@ func TestUseRCRejectionClasses(t *testing.T) {
 	}
 }
 
+// TestUseUnreachableRefusal pins the refusal text: a session that answered
+// with a rejection is said to have refused, with its reason, and only a
+// silent one is said not to have answered.
+func TestUseUnreachableRefusal(t *testing.T) {
+	const tail = " without `--restart-remote-control` and start Remote Control by hand where it stops"
+	tests := map[string]struct {
+		silent  int
+		refused []string
+		want    string
+	}{
+		"error: one silent session did not answer": {
+			silent: 1,
+			want:   "1 Claude Code session with Remote Control on did not answer agentctl's request (the agentctl Remote Control mod is not installed there, or did not answer within 5 s), so nothing was written. Install the mod in it, or run this again" + tail,
+		},
+		"error: two silent sessions did not answer": {
+			silent: 2,
+			want:   "2 Claude Code sessions with Remote Control on did not answer agentctl's request (the agentctl Remote Control mod is not installed there, or did not answer within 5 s), so nothing was written. Install the mod in them, or run this again" + tail,
+		},
+		"error: a busy session refused with its reason": {
+			refused: []string{"busy"},
+			want:    "1 Claude Code session with Remote Control on refused agentctl's request (reason: busy), so nothing was written. Run this again once the mod there takes the request, or run it again" + tail,
+		},
+		"error: refusals are grouped by reason in order": {
+			refused: []string{"name", "busy", "busy"},
+			want:    "2 Claude Code sessions with Remote Control on refused agentctl's request (reason: busy); 1 Claude Code session with Remote Control on refused agentctl's request (reason: name), so nothing was written. Run this again once the mod there takes the request, or run it again" + tail,
+		},
+		"error: silent and refused sessions are both named": {
+			silent:  1,
+			refused: []string{"busy"},
+			want:    "1 Claude Code session with Remote Control on did not answer agentctl's request (the agentctl Remote Control mod is not installed there, or did not answer within 5 s); 1 Claude Code session with Remote Control on refused agentctl's request (reason: busy), so nothing was written. Install the mod where a session did not answer and run this again once the others take the request, or run it again" + tail,
+		},
+		"error: a missing or foreign reason is never echoed": {
+			refused: []string{"", "\x1b[2J"},
+			want:    "1 Claude Code session with Remote Control on refused agentctl's request (reason: none given); 1 Claude Code session with Remote Control on refused agentctl's request (reason: unrecognized), so nothing was written. Run this again once the mod there takes the request, or run it again" + tail,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gocmp.Diff(tt.want, useUnreachableRefusal(tt.silent, tt.refused)); diff != "" {
+				t.Fatalf("refusal mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestUseRCReadsTheModMetadataRejection crosses the two halves: the bytes the
 // mod's own test pins for a request file with the wrong owner or mode (an
 // empty action, because the mod rejects it before reading the body) must
@@ -1007,7 +1052,7 @@ func TestUseRemoteControlFollowUp(t *testing.T) {
 			}
 			wantStderr := strings.Join(lines, "\n")
 			if tt.note {
-				wantStderr = "note: the Remote Control follow-up was interrupted: 0 reconnected, 0 already connected, 0 unavailable, 1 not confirmed, 0 not dropped" + strings.TrimSuffix("\n"+wantStderr, "\n")
+				wantStderr = "note: the Remote Control follow-up was interrupted: 0 reconnected, 0 already connected, 0 unavailable, 0 unreachable, 1 not confirmed, 0 not dropped" + strings.TrimSuffix("\n"+wantStderr, "\n")
 			}
 			if diff := gocmp.Diff(wantStderr, strings.TrimSuffix(stderr.String(), "\n")); diff != "" {
 				t.Fatalf("stderr mismatch (-want +got):\n%s", diff)

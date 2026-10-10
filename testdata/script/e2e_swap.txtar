@@ -303,6 +303,8 @@ swapfixture live rc-busy
 rcmod seed a status=reject:busy
 exec expectexit 30 agentctl claude use $INCOMING --live --yes --json --restart-remote-control
 stdout '"reason": "remote_control_unreachable"'
+stdout '1 Claude Code session with Remote Control on refused agentctl''s request \(reason: busy\), so nothing was written. Run this again once the mod there takes the request, or run it again without `--restart-remote-control` and start Remote Control by hand where it stops'
+! stdout 'did not answer'
 rcmod counts unreachable=1
 swap-check 0 0 0
 rcmod check a 1 0
@@ -405,7 +407,7 @@ wait rccancel
 rcmod exited 130
 stdout '"outcome": "applied"'
 rcmod counts eligible=1 dropped=1 not_confirmed=1
-stderr -count=1 '^note: the Remote Control follow-up was interrupted: 0 reconnected, 0 already connected, 0 unavailable, 1 not confirmed, 0 not dropped$'
+stderr -count=1 '^note: the Remote Control follow-up was interrupted: 0 reconnected, 0 already connected, 0 unavailable, 0 unreachable, 1 not confirmed, 0 not dropped$'
 stderr -count=1 '^warning: 1 Claude Code session did not confirm that Remote Control started again; run `/remote-control` there$'
 rcmod check a 1 1
 
@@ -416,6 +418,16 @@ exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
 stdout '"outcome": "applied"'
 rcmod counts eligible=1 dropped=1 metadata_rejected=1
 stderr -count=1 '^warning: 1 Claude Code session with Remote Control on refused agentctl''s request because the request file''s owner or mode was not what the mod expects, so agentctl asked it nothing more$'
+rcmod check a 1 1
+
+# remote_control_restart_warns_about_a_reconnect_refused_busy (arm: rc-reconnect-busy)
+swapfixture live rc-reconnect-busy
+rcmod seed a reconnect=reject:busy
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 unreachable=1
+stderr -count=1 '^warning: Remote Control was not restarted in 1 Claude Code session that refused agentctl''s request \(reason: busy\); run `/remote-control` there$'
+stdout -count=1 '"Remote Control was not restarted in 1 Claude Code session that refused agentctl''s request \(reason: busy\); run `/remote-control` there"'
 rcmod check a 1 1
 
 # remote_control_restart_retries_a_truncated_ack_until_a_valid_one (arm: rc-truncated)

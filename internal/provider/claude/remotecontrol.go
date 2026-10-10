@@ -31,6 +31,8 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -220,7 +222,8 @@ type RemoteControlCounts struct {
 	Eligible int `json:"eligible"`
 	// ProvenanceSkipped sessions read another item, an override, or a gateway.
 	ProvenanceSkipped int `json:"provenance_skipped"`
-	// Unreachable sessions did not answer through the mod.
+	// Unreachable sessions did not answer through the mod, or refused the
+	// request for a reason other than the file's metadata or the release.
 	Unreachable int `json:"unreachable"`
 	// Unavailable sessions answered that Remote Control cannot start there.
 	Unavailable int `json:"unavailable"`
@@ -306,19 +309,37 @@ func RemoteControlActionFor(outcome SwapOutcomeKind, configApplied bool) RemoteC
 }
 
 // RemoteControlWarnings derives the follow-up's warnings from the counts,
-// the action, and the multiset of reconnect result words (only the number
-// of expired requests is read from it). A session that was never eligible
-// is the plain completion warning's to name, not these.
-func RemoteControlWarnings(counts RemoteControlCounts, results []string, action RemoteControlAction) []string {
+// the action, the multiset of reconnect result words (only the number of
+// expired requests is read from it), and the reasons of the reconnect
+// requests the mod refused after the old bridge dropped. A session that was
+// never eligible is the plain completion warning's to name, not these.
+func RemoteControlWarnings(counts RemoteControlCounts, results, rejections []string, action RemoteControlAction) []string {
 	var warnings []string
 	add := func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
 	switch action {
 	case RemoteControlReconnect:
-		if counts.VersionRejected != 0 {
-			add("%s with Remote Control on %s a Claude Code release older than %s, or %s none, so agentctl asked %s nothing", sessionCount(counts.VersionRejected), verb(counts.VersionRejected, "runs", "run"), RemoteControlMinVersion, verb(counts.VersionRejected, "records", "record"), pronoun(counts.VersionRejected))
+		// A refused reconnect is counted under its reason's class, but the
+		// session lost its bridge to the swap, so it needs its own warning
+		// telling the user to start Remote Control by hand. A metadata
+		// refusal is the one the metadata warning already words for both
+		// moments; every other reason is named here.
+		byReason := map[string]int{}
+		for _, reason := range rejections {
+			if reason != "metadata" {
+				byReason[RemoteControlRejectionReason(reason)]++
+			}
+		}
+		// The release-floor warning says agentctl asked those sessions
+		// nothing, which is false for a session refused after the drop.
+		if n := max(counts.VersionRejected-byReason["version"], 0); n != 0 {
+			add("%s with Remote Control on %s a Claude Code release older than %s, or %s none, so agentctl asked %s nothing", sessionCount(n), verb(n, "runs", "run"), RemoteControlMinVersion, verb(n, "records", "record"), pronoun(n))
 		}
 		if counts.MetadataRejected != 0 {
 			add("%s with Remote Control on refused agentctl's request because the request file's owner or mode was not what the mod expects, so agentctl asked %s nothing more", sessionCount(counts.MetadataRejected), pronoun(counts.MetadataRejected))
+		}
+		for _, reason := range slices.Sorted(maps.Keys(byReason)) {
+			n := byReason[reason]
+			add("Remote Control was not restarted in %s that refused agentctl's request (reason: %s); run `/remote-control` there", sessionCount(n), reason)
 		}
 		if counts.NotDropped != 0 {
 			add("%s still had the earlier Remote Control bridge %d s after the swap, so agentctl did not ask %s to start it again; Claude Code stops it on its next account check, then run `/remote-control` there", sessionCount(counts.NotDropped), RemoteControlDropWaitSeconds, pronoun(counts.NotDropped))
@@ -378,4 +399,18 @@ func verb(n int, singular, plural string) string {
 		return singular
 	}
 	return plural
+}
+
+// RemoteControlRejectionReason is the reason word a warning or a refusal
+// prints. The mod writes it into a file agentctl only reads, so anything
+// but a short lowercase word is replaced rather than echoed to the
+// terminal.
+func RemoteControlRejectionReason(reason string) string {
+	if reason == "" {
+		return "none given"
+	}
+	if len(reason) > 32 || strings.ContainsFunc(reason, func(r rune) bool { return (r < 'a' || r > 'z') && r != '_' }) {
+		return "unrecognized"
+	}
+	return reason
 }

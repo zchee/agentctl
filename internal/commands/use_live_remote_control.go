@@ -35,11 +35,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -560,9 +562,10 @@ func (swap useLiveSwap) remoteControlPreflight(ctx context.Context, hints *useSe
 	defer cancel()
 	classes := make([]useRCClass, len(hints.sessions))
 	dirs := make([]string, len(hints.sessions))
+	rejections := make([]*string, len(hints.sessions))
 	var wg sync.WaitGroup
 	for i, session := range hints.sessions {
-		wg.Go(func() { classes[i], dirs[i] = rc.classify(ctx, session) })
+		wg.Go(func() { classes[i], dirs[i], rejections[i] = rc.classify(ctx, session) })
 	}
 	wg.Wait()
 	var names []string
@@ -576,50 +579,86 @@ func (swap useLiveSwap) remoteControlPreflight(ctx context.Context, hints *useSe
 	}
 	hints.names, hints.handled = names, len(rc.eligible)
 	slog.DebugContext(ctx, "remote control preflight", slog.String("stage", "preflight"), slog.Any("counts", rc.counts), slog.Int64("elapsed_ms", time.Since(started).Milliseconds()))
-	if n := rc.counts.Unreachable; n != 0 {
-		them := "them"
-		if n == 1 {
-			them = "it"
+	if rc.counts.Unreachable != 0 {
+		var refused []string
+		for i, class := range classes {
+			if class == useRCUnreachable && rejections[i] != nil {
+				refused = append(refused, *rejections[i])
+			}
 		}
-		return rc, useRefused(claude.SwapRefusal{Kind: claude.SwapRemoteControlUnreachable}, service, fmt.Sprintf("%s with Remote Control on did not answer agentctl's request (the agentctl Remote Control mod is not installed there, or did not answer within %d s), so nothing was written. Install the mod in %s, or run this again without `--restart-remote-control` and start Remote Control by hand where it stops", useRemoteControlSessions(n), int(useRCPreflightBudget/time.Second), them))
+		return rc, useRefused(claude.SwapRefusal{Kind: claude.SwapRemoteControlUnreachable}, service, useUnreachableRefusal(rc.counts.Unreachable-len(refused), refused))
 	}
 	return rc, nil
 }
 
+// useUnreachableRefusal words the refusal for sessions the preflight could
+// not use: silent ones did not answer, while refused ones answered with a
+// rejection, and saying they did not answer would send the user to install
+// a mod that is already there.
+func useUnreachableRefusal(silent int, refused []string) string {
+	var clauses []string
+	if silent != 0 {
+		clauses = append(clauses, fmt.Sprintf("%s with Remote Control on did not answer agentctl's request (the agentctl Remote Control mod is not installed there, or did not answer within %d s)", useRemoteControlSessions(silent), int(useRCPreflightBudget/time.Second)))
+	}
+	byReason := map[string]int{}
+	for _, reason := range refused {
+		byReason[claude.RemoteControlRejectionReason(reason)]++
+	}
+	for _, reason := range slices.Sorted(maps.Keys(byReason)) {
+		clauses = append(clauses, fmt.Sprintf("%s with Remote Control on refused agentctl's request (reason: %s)", useRemoteControlSessions(byReason[reason]), reason))
+	}
+	var advice string
+	switch {
+	case len(refused) == 0:
+		them := "them"
+		if silent == 1 {
+			them = "it"
+		}
+		advice = fmt.Sprintf("Install the mod in %s, or run this again", them)
+	case silent == 0:
+		advice = "Run this again once the mod there takes the request, or run it again"
+	default:
+		advice = "Install the mod where a session did not answer and run this again once the others take the request, or run it again"
+	}
+	return strings.Join(clauses, "; ") + ", so nothing was written. " + advice + " without `--restart-remote-control` and start Remote Control by hand where it stops"
+}
+
 // classify asks one session for its status. The registry's version is
 // checked first, so a session too old for the mod gets no request at all.
-func (rc *useRemoteControl) classify(ctx context.Context, session useBridgedSession) (useRCClass, string) {
+// The third result is the reason of a rejected acknowledgement, or nil when
+// the mod refused nothing.
+func (rc *useRemoteControl) classify(ctx context.Context, session useBridgedSession) (useRCClass, string, *string) {
 	version, ok := claude.ParseVersion(session.record.Version)
 	if !session.decoded || !ok || version.Less(claude.RemoteControlMinVersion) {
-		return useRCVersionRejected, ""
+		return useRCVersionRejected, "", nil
 	}
 	// The registry names each record after its process, and the transport
 	// directory is named after the pid. A record whose pid is not its own
 	// file name could steer a request at another process, so it is refused,
 	// which refuses the swap.
 	if session.record.PID == 0 || filepath.Base(session.path) != strconv.FormatUint(uint64(session.record.PID), 10)+".json" {
-		return useRCUnreachable, ""
+		return useRCUnreachable, "", nil
 	}
 	dir, err := rc.transport.open(session.record.PID)
 	if err != nil {
 		slog.DebugContext(ctx, "the Remote Control transport directory was refused", slog.Any("error", err))
-		return useRCUnreachable, ""
+		return useRCUnreachable, "", nil
 	}
 	answer := rc.transport.exchange(ctx, dir, useRCActionStatus, rc.service, rc.transport.timing.status)
 	switch answer.kind {
 	case useRCAnswered:
 		if !answer.response.listed {
 			// The command is not offered there, so no request could start it.
-			return useRCUnavailable, dir
+			return useRCUnavailable, dir, nil
 		}
 		if answer.response.provenance.Concerns(rc.service) {
-			return useRCEligible, dir
+			return useRCEligible, dir, nil
 		}
-		return useRCProvenanceSkipped, dir
+		return useRCProvenanceSkipped, dir, nil
 	case useRCRejected:
-		return useRCRejection(answer.reason), dir
+		return useRCRejection(answer.reason), dir, &answer.reason
 	default:
-		return useRCUnreachable, dir
+		return useRCUnreachable, dir, nil
 	}
 }
 
@@ -633,6 +672,10 @@ type useRCOutcome struct {
 	result string
 	// counted reports whether result is to be counted.
 	counted bool
+	// rejected reports that the mod refused the reconnect request after
+	// the old bridge dropped; reason is the word it gave.
+	rejected bool
+	reason   string
 }
 
 // followUpRemoteControl runs after the swap released every lock and before
@@ -664,7 +707,7 @@ func (p SessionProcess) followUpRemoteControl(ctx context.Context, opts cli.Clau
 		}
 	}
 	wg.Wait()
-	var results []string
+	var results, rejections []string
 	for _, outcome := range outcomes {
 		if outcome.dropped {
 			counts.Dropped++
@@ -680,16 +723,19 @@ func (p SessionProcess) followUpRemoteControl(ctx context.Context, opts cli.Clau
 			counts.CountResult(outcome.result)
 			results = append(results, outcome.result)
 		}
+		if outcome.rejected {
+			rejections = append(rejections, outcome.reason)
+		}
 	}
 	report.remoteControl = &counts
 	slog.DebugContext(ctx, "remote control follow-up", slog.String("stage", "follow-up"), slog.Any("counts", counts), slog.Int64("elapsed_ms", time.Since(started).Milliseconds()))
 	if ctx.Err() != nil && action == claude.RemoteControlReconnect {
-		note := fmt.Sprintf("the Remote Control follow-up was interrupted: %d reconnected, %d already connected, %d unavailable, %d not confirmed, %d not dropped", counts.Reconnected, counts.AlreadyConnected, counts.Unavailable, counts.NotConfirmed, counts.NotDropped)
+		note := fmt.Sprintf("the Remote Control follow-up was interrupted: %d reconnected, %d already connected, %d unavailable, %d unreachable, %d not confirmed, %d not dropped", counts.Reconnected, counts.AlreadyConnected, counts.Unavailable, counts.Unreachable, counts.NotConfirmed, counts.NotDropped)
 		if err := tell(p.Err, "note: "+note); err != nil {
 			slog.ErrorContext(ctx, "the Remote Control note could not be written", slog.Any("error", err))
 		}
 	}
-	for _, warning := range claude.RemoteControlWarnings(counts, results, action) {
+	for _, warning := range claude.RemoteControlWarnings(counts, results, rejections, action) {
 		report.warnings = append(report.warnings, warning)
 		if err := tell(p.Err, "warning: "+warning); err != nil {
 			slog.ErrorContext(ctx, "the Remote Control warning could not be written", slog.Any("error", err))
@@ -760,6 +806,7 @@ func (rc *useRemoteControl) reconnect(ctx context.Context, session useRCSession)
 		outcome.result, outcome.counted = answer.response.result, true
 	case useRCRejected:
 		outcome.class = useRCRejection(answer.reason)
+		outcome.rejected, outcome.reason = true, answer.reason
 	default:
 		outcome.counted = true
 	}
