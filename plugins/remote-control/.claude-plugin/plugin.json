@@ -1,0 +1,7 @@
+{
+  "name": "agentctl-remote-control",
+  "version": "0.1.0",
+  "description": "Restarts this session's Remote Control bridge when agentctl asks after a live account swap, and reports the bridge's presence with /agentctl-rc.",
+  "author": { "name": "Koichi Shiraishi" },
+  "types": "./types/index.d.ts"
+}

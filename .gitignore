@@ -58,3 +58,6 @@ bench.txt
 
 # profile
 *.pprof
+
+# Claude Code writes its type declarations beside a plugin it loads from a folder.
+plugins/remote-control/.claude-plugin/types/

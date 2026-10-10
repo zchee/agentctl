@@ -1,0 +1,12 @@
+{
+  "name": "agentctl",
+  "owner": { "name": "Koichi Shiraishi" },
+  "description": "Claude Code plugins that accompany agentctl.",
+  "plugins": [
+    {
+      "name": "agentctl-remote-control",
+      "source": "./plugins/remote-control",
+      "description": "Restarts a session's Remote Control bridge when agentctl asks after a live account swap; /agentctl-rc reports the bridge's presence."
+    }
+  ]
+}
