@@ -211,9 +211,244 @@ stdout '"outcome": "busy"'
 ! stderr SENTINEL
 swap-check 0 0 2
 
-# supplemental: remote-control restart remains an explicit not-implemented refusal
-exec expectexit 1 agentctl claude use $INCOMING --live --restart-remote-control
-stderr 'not implemented'
+# remote_control_restart_reconnects_a_session_whose_bridge_dropped (arm: rc-reconnected)
+swapfixture live rc-reconnected
+rcmod seed a
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 reconnected=1
+! stderr 'Remote Control'
+! stdout 'rcmod-bridge|rcmod-local|rcmod-private|rcmod-a'
+! stderr 'rcmod-bridge|rcmod-local|rcmod-private'
+! stdout SENTINEL
+! stderr SENTINEL
+rcmod check a 1 1
+swap-check 1 0 2
+
+# remote_control_restart_counts_an_expired_request_as_not_confirmed (arm: rc-not-confirmed)
+swapfixture live rc-not-confirmed
+rcmod seed a reconnect=expired
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 not_confirmed=1
+stderr -count=1 '^warning: 1 Claude Code session did not confirm that Remote Control started again \(its request expired before the session was idle\); run `/remote-control` there$'
+stdout -count=1 '"1 Claude Code session did not confirm that Remote Control started again \(its request expired before the session was idle\); run `/remote-control` there"'
+rcmod check a 1 1
+
+# remote_control_restart_refuses_the_swap_when_a_bridged_session_does_not_answer (arm: rc-unreachable)
+swapfixture live rc-unreachable
+rcmod seed a status=silent
+exec expectexit 30 agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "refused"'
+stdout '"reason": "remote_control_unreachable"'
+stdout '1 Claude Code session with Remote Control on did not answer agentctl''s request'
+rcmod counts unreachable=1
+! stdout '"kind": "plan"'
+swap-check 0 0 0
+swap-io 0 0 0
+swap-audit none 0
+rcmod check a 1 0
+
+# remote_control_restart_reports_an_unavailable_session (arm: rc-unavailable)
+swapfixture live rc-unavailable
+rcmod seed a reconnect=unavailable
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 unavailable=1
+stderr -count=1 '^warning: Remote Control cannot start in 1 Claude Code session \(the command is missing, or the session answers through a gateway or a third-party provider\), so it stays off there$'
+rcmod check a 1 1
+
+# remote_control_restart_classes_a_session_without_the_command_unavailable_before_the_swap (arm: rc-unlisted)
+swapfixture live rc-unlisted
+rcmod seed a listed=false drop=never
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts unavailable=1
+stderr -count=1 '^warning: Remote Control cannot start in 1 Claude Code session \(the command is missing, or the session answers through a gateway or a third-party provider\), so it stays off there$'
+stderr -count=1 '^warning: 1 Claude Code session \(`rcmod-a`\) had Remote Control on when this swap started'
+rcmod check a 1 0
+
+# remote_control_restart_sends_nothing_to_a_release_below_the_floor (arm: rc-version-rejected)
+swapfixture live rc-version-rejected
+rcmod seed a version=2.1.200
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts version_rejected=1
+stderr -count=1 '^warning: 1 Claude Code session with Remote Control on runs a Claude Code release older than 2.1.287, or records none, so agentctl asked it nothing$'
+stderr -count=1 '^warning: 1 Claude Code session \(`rcmod-a`\) had Remote Control on when this swap started'
+! stdout 'rcmod-a'
+rcmod check a 0 0
+
+# remote_control_restart_counts_a_metadata_rejection_at_status (arm: rc-metadata-rejected)
+swapfixture live rc-metadata-rejected
+rcmod seed a status=reject:metadata
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts metadata_rejected=1
+stderr -count=1 '^warning: 1 Claude Code session with Remote Control on refused agentctl''s request because the request file''s owner or mode was not what the mod expects, so agentctl asked it nothing more$'
+stderr -count=1 '^warning: 1 Claude Code session \(`rcmod-a`\) had Remote Control on when this swap started'
+rcmod check a 1 0
+
+# remote_control_restart_skips_the_session_that_shares_the_registry_but_not_the_item (arm: rc-provenance-skipped)
+swapfixture live rc-provenance-skipped
+rcmod seed a
+rcmod seed b provenance=explicit drop=never
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 provenance_skipped=1 dropped=1 reconnected=1
+stderr -count=1 '^warning: 1 Claude Code session \(`rcmod-b`\) had Remote Control on when this swap started'
+! stderr 'rcmod-a'
+rcmod check a 1 1
+rcmod check b 1 0
+
+# remote_control_restart_sends_no_request_while_the_old_bridge_stays (arm: rc-not-dropped)
+swapfixture live rc-not-dropped
+rcmod seed a drop=never
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 not_dropped=1
+stderr -count=1 '^warning: 1 Claude Code session still had the earlier Remote Control bridge 45 s after the swap, so agentctl did not ask it to start it again; Claude Code stops it on its next account check, then run `/remote-control` there$'
+rcmod check a 1 0
+
+# remote_control_restart_handles_sessions_in_parallel_inside_the_follow_up_cap (arm: rc-multiple)
+swapfixture live rc-multiple
+rcmod seed a
+rcmod seed b delay=3000
+rcmod seed c
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=3 dropped=3 reconnected=3
+! stderr 'Remote Control'
+rcmod check a 1 1
+rcmod check b 1 1
+rcmod check c 1 1
+
+# remote_control_restart_reconnects_after_an_undo_too (arm: rc-undo)
+swapfixture live rc-undo
+undo-setup
+rcmod seed a
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 reconnected=1
+exec agentctl claude use --undo --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 reconnected=1
+! stderr 'Remote Control'
+rcmod check a 2 2
+
+# remote_control_restart_sends_nothing_for_a_namespace_undo (arm: rc-namespace-undo)
+swapfixture namespace rc-namespace-undo
+undo-setup
+rcmod seed a
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'remote_control'
+exec agentctl claude use --undo --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts
+rcmod check a 0 0
+
+# remote_control_restart_sends_nothing_on_the_already_active_catch_up (arm: rc-catch-up)
+swapfixture live-duplicate rc-catch-up
+rcmod seed a drop=never
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "already_active"'
+rcmod counts eligible=1 restored=1
+! stderr 'Remote Control'
+rcmod check a 1 0
+
+# remote_control_restart_names_the_config_recovery_first (arm: rc-config-absent)
+swapfixture live rc-config-absent
+undo-setup
+rm $UNDO_CONFIG
+rcmod seed a
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+stdout '"reason": "absent"'
+rcmod counts eligible=1
+stderr -count=1 '^warning: the swap applied but Claude Code''s configuration was not updated, so agentctl asked no session to start Remote Control again: recover the configuration first, then run `/remote-control` in the 1 Claude Code session that had it on$'
+rcmod check a 1 0
+
+# remote_control_restart_names_status_first_after_an_unknown_write (arm: rc-unknown-write)
+swapfixture live-timeout rc-unknown-write
+rcmod seed a
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "unknown"'
+rcmod counts eligible=1
+stderr -count=1 '^warning: the swap''s outcome is unknown, so agentctl asked no session to start Remote Control again: run `agentctl claude status` first; if the credential changed, run `/remote-control` in the 1 Claude Code session that had it on once it stops there$'
+rcmod check a 1 0
+
+# remote_control_restart_interrupted_counts_pending_sessions_and_keeps_the_signal_exit (arm: rc-cancel)
+swapfixture live rc-cancel
+rcmod seed a reconnect=silent
+! exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control &rccancel&
+rcmod interrupt
+wait rccancel
+rcmod exited 130
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 not_confirmed=1
+stderr -count=1 '^note: the Remote Control follow-up was interrupted: 0 reconnected, 0 already connected, 0 unavailable, 1 not confirmed, 0 not dropped$'
+stderr -count=1 '^warning: 1 Claude Code session did not confirm that Remote Control started again; run `/remote-control` there$'
+rcmod check a 1 1
+
+# remote_control_restart_counts_a_rejected_reconnect_by_its_reason (arm: rc-reconnect-rejected)
+swapfixture live rc-reconnect-rejected
+rcmod seed a reconnect=reject:metadata
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 metadata_rejected=1
+stderr -count=1 '^warning: 1 Claude Code session with Remote Control on refused agentctl''s request because the request file''s owner or mode was not what the mod expects, so agentctl asked it nothing more$'
+rcmod check a 1 1
+
+# remote_control_restart_retries_a_truncated_ack_until_a_valid_one (arm: rc-truncated)
+swapfixture live rc-truncated
+rcmod seed a status=truncated reconnect=truncated
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 reconnected=1
+! stderr 'Remote Control'
+rcmod check a 1 1
+
+# remote_control_restart_ignores_a_response_for_another_request (arm: rc-wrong-id)
+swapfixture live rc-wrong-id
+rcmod seed a reconnect=wrongid
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 reconnected=1
+rcmod check a 1 1
+
+# remote_control_restart_retries_an_unknown_result_to_the_deadline (arm: rc-unknown-result)
+swapfixture live rc-unknown-result
+rcmod seed a reconnect=unknown
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 not_confirmed=1
+stderr -count=1 '^warning: 1 Claude Code session did not confirm that Remote Control started again; run `/remote-control` there$'
+rcmod check a 1 1
+
+# remote_control_restart_takes_a_response_written_before_its_ack (arm: rc-response-first)
+swapfixture live rc-response-first
+rcmod seed a reconnect=early
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 reconnected=1
+rcmod check a 1 1
+
+# remote_control_restart_counts_a_replaced_bridge_as_already_connected (arm: rc-replaced)
+swapfixture live rc-replaced
+rcmod seed a drop=replace
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts eligible=1 already_connected=1
+! stderr 'Remote Control'
+rcmod check a 1 0
+
+# remote_control_restart_is_refused_off_macOS_before_any_read (arm: rc-platform)
+[!darwin] swapfixture live rc-platform
+[!darwin] exec expectexit 30 agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+[!darwin] stdout '"reason": "remote_control_unsupported_platform"'
+[!darwin] rcmod counts
+[!darwin] swap-io 0 0 0
 
 # refusal_d_on_the_stored_blob_is_decided_before_any_child_exists
 swapfixture line-too-long

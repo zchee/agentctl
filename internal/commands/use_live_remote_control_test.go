@@ -107,7 +107,7 @@ func rcAck(request useRCRequest, state, reason string) string {
 }
 
 func rcStatus(request useRCRequest, provenance string) string {
-	return fmt.Sprintf(`{"v":1,"id":%q,"action":"status","result":"ok","answeredAt":%d,"bridge":{"present":true,"generation":1},"surfaces":["terminal"],"version":"2.1.296","provenance":%s}`, request.ID, time.Now().UnixMilli(), provenance)
+	return fmt.Sprintf(`{"v":1,"id":%q,"action":"status","result":"ok","answeredAt":%d,"bridge":{"present":true,"generation":1},"surfaces":["terminal"],"version":"2.1.296","remoteControlListed":true,"provenance":%s}`, request.ID, time.Now().UnixMilli(), provenance)
 }
 
 func rcReconnect(request useRCRequest, result string) string {
@@ -350,6 +350,14 @@ func TestUseRCWait(t *testing.T) {
 			},
 			wantKind: useRCNoResponse,
 		},
+		"error: a status answer without remoteControlListed is retried": {
+			action: useRCActionStatus,
+			handle: func(t *testing.T, dir string, r useRCRequest) {
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAck(r, "accepted", ""))
+				writeRCFile(t, filepath.Join(dir, r.ID+".response.json"), strings.Replace(rcStatus(r, rcLiveProvenance), `"remoteControlListed":true,`, "", 1))
+			},
+			wantKind: useRCNoResponse,
+		},
 		"error: a status answer without provenance is retried": {
 			action: useRCActionStatus,
 			handle: func(t *testing.T, dir string, r useRCRequest) {
@@ -480,6 +488,9 @@ func TestUseRemoteControlPreflight(t *testing.T) {
 			writeRCFile(t, filepath.Join(dir, r.ID+".response.json"), rcStatus(r, provenance))
 		}
 	}
+	unlisted := func(t *testing.T, dir string, r useRCRequest) {
+		writeRCFile(t, filepath.Join(dir, r.ID+".response.json"), strings.Replace(rcStatus(r, rcLiveProvenance), `"remoteControlListed":true`, `"remoteControlListed":false`, 1))
+	}
 	reject := func(reason string) func(t *testing.T, dir string, r useRCRequest) {
 		return func(t *testing.T, dir string, r useRCRequest) {
 			writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAck(r, "rejected", reason))
@@ -505,9 +516,10 @@ func TestUseRemoteControlPreflight(t *testing.T) {
 				{version: "", handle: answer(rcLiveProvenance)},
 				{version: "2.1.296", handle: reject("metadata")},
 				{version: "2.1.296", handle: reject("version")},
+				{version: "2.1.296", handle: unlisted},
 			},
-			want:  claude.RemoteControlCounts{Eligible: 1, ProvenanceSkipped: 2, VersionRejected: 3, MetadataRejected: 1},
-			names: 6,
+			want:  claude.RemoteControlCounts{Eligible: 1, ProvenanceSkipped: 2, VersionRejected: 3, MetadataRejected: 1, Unavailable: 1},
+			names: 7,
 		},
 		"error: a silent session refuses the swap": {
 			sessions: []session{{version: "2.1.296", handle: answer(rcLiveProvenance)}, {version: "2.1.296", handle: func(*testing.T, string, useRCRequest) {}}},

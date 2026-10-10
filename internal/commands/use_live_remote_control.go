@@ -278,6 +278,7 @@ type useRCResponse struct {
 	Bridge     *useRCBridge                    `json:"bridge"`
 	Surfaces   []string                        `json:"surfaces"`
 	Version    *string                         `json:"version"`
+	Listed     *bool                           `json:"remoteControlListed"`
 	Provenance *claude.RemoteControlProvenance `json:"provenance"`
 	Reason     *string                         `json:"reason"`
 }
@@ -321,7 +322,7 @@ func (t useRCTransport) readResponse(dir, id, action string) (useRCResponse, boo
 	for _, result := range useRCResults[action] {
 		known = known || result == *response.Result
 	}
-	if !known || action == useRCActionStatus && (response.Provenance == nil || response.Version == nil) {
+	if !known || action == useRCActionStatus && (response.Provenance == nil || response.Version == nil || response.Listed == nil) {
 		return useRCResponse{}, false
 	}
 	return response, true
@@ -403,6 +404,7 @@ const (
 	useRCUnreachable
 	useRCVersionRejected
 	useRCMetadataRejected
+	useRCUnavailable
 )
 
 // useRCRejection maps a rejected acknowledgement's reason to its class.
@@ -429,6 +431,8 @@ func (c useRCClass) count(counts *claude.RemoteControlCounts) {
 		counts.VersionRejected++
 	case useRCMetadataRejected:
 		counts.MetadataRejected++
+	case useRCUnavailable:
+		counts.Unavailable++
 	}
 }
 
@@ -519,6 +523,10 @@ func (rc *useRemoteControl) classify(ctx context.Context, session useBridgedSess
 	answer := rc.transport.exchange(ctx, dir, useRCActionStatus, rc.service, rc.transport.timing.status)
 	switch answer.kind {
 	case useRCAnswered:
+		if !*answer.response.Listed {
+			// The command is not offered there, so no request could start it.
+			return useRCUnavailable, dir
+		}
 		if answer.response.Provenance.Concerns(rc.service) {
 			return useRCEligible, dir
 		}
