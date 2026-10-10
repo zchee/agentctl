@@ -28,16 +28,29 @@ decides which sessions are eligible, and, in later sections, the verification re
   Body (`v` is the contract version):
   `{"v":1,"id":"<id>","action":"status"|"reconnect","issuedAt":<ms epoch>,"expiresAt":<ms epoch>,
   "subject":{"service":"<keychain service name>"}}`. Lifetimes: `status` 3 000 ms, `reconnect` 75 000 ms.
-- Acknowledgement `<id>.ack.json`, written by the mod at most once, immediately after validation:
+  The mod refuses, with reason `expired`, a request whose `expiresAt` lies more than 600 000 ms after the
+  moment it reads the file.
+- Acknowledgement `<id>.ack.json`, written by the mod at most once per admission, immediately after validation:
   `{"v":1,"id","action","state":"accepted"|"rejected","reason"?,"answeredAt"}` with reasons `name`, `expired`,
-  `duplicate`, `metadata`, `action`, `subject`, `version`.
+  `duplicate`, `metadata`, `action`, `subject`, `version`, `busy`. A rejected ack may carry `action: ""` when
+  the body could not be read (reasons `name`, `metadata`, `version`, `busy`); the mod writes `""` for
+  `metadata`, `version` and `busy`, and the request's own action for every reason it learns after reading
+  the body (`expired`, `duplicate`, `action`, `subject`, `name`). An accepted ack always carries the
+  request's action.
 - Response `<id>.response.json`, written by the mod exactly once per accepted request, when final:
   `{"v":1,"id","action","result","answeredAt","bridge":{"present":bool,"generation":n},"surfaces":[...],
   "version":"<base>","remoteControlListed":bool,"provenance":{...},"reason"?}` (`remoteControlListed` is whether `remote-control` is in `$.command.list()` at answer time; a `status` answer with it false classes the session `unavailable` at preflight). Results: `status` → `ok`; `reconnect` → `reconnected`,
   `already_connected`, `unavailable`, `not_confirmed`, `expired`, `cancelled`.
 - Mod state per request, kept in `$.state` under the mod's name (`requests: {id: {phase, action,
-  expiresAt, runStartedAt?, observeUntil?, terminal?: {response, published: bool}}}`, bounded at 64 entries,
-  oldest `published` entry evicted first). Admission and recovery are distinct: the unseen-id check applies
+  expiresAt, runStartedAt?, observeUntil?, terminal?: {response, published: bool}}}`). The table is bounded:
+  when 64 entries are pending (not `published`) or the table holds 1 024 entries, a new request file whose
+  name and path checks passed gets a `rejected` ack with reason `busy`, written once per id without reading
+  the file, and `/agentctl-rc reconnect` answers that too many requests are pending. An entry leaves the
+  table only once it is `published` and its `expiresAt` has passed; nothing is evicted before its
+  `expiresAt`, published or not, so a request file still lying in the directory cannot be admitted, or run,
+  a second time. A rejection is remembered for 600 000 ms, the longest lifetime a request may ask for, so a
+  request file still present once its entry has left the table is refused again on sight (as `expired` when
+  its body is readable, which then answers it a second time) and is never admitted. Admission and recovery are distinct: the unseen-id check applies
   only to a file whose id is not in the table; an id in the table is recovered at its recorded phase, never
   re-validated. Phases: `accepted` → (`waiting_idle` | `running` | `final`) → `published`. Every transition
   is written to `$.state` before the side effect it enables (the run, the file write). Rules, evaluated in
@@ -56,7 +69,10 @@ decides which sessions are eligible, and, in later sections, the verification re
      `final(not_confirmed)`.
   7. `final(x)`: the terminal response payload is stored in `$.state` (`terminal.response`), then written to
      `<id>.response.json`, then `published: true` is stored. The response content is immutable once stored;
-     a rewrite after a reload writes the identical bytes (idempotent republication).
+     a rewrite after a reload writes the identical bytes (idempotent republication). Publication, of the
+     ack and of the response alike, advances only after the file write succeeded: while the transport
+     directory is missing the entry stays pending and the identical stored bytes are tried again on a later
+     tick.
   - Reload: `session.start` reloads the table and resumes each entry at its phase: `running` entries are never
     run again and are observed against their stored `observeUntil`; `final` entries with `published: false`
     are republished; `waiting_idle` and `accepted` entries re-enter the rule list. The ack is written at
@@ -64,9 +80,11 @@ decides which sessions are eligible, and, in later sections, the verification re
     `ack.published` flag).
 - agentctl side: an ack or response file is read only when `Lstat` shows a regular file (never a symlink)
   owned by agentctl's own uid, through the bounded reader already used for registry records; its mode is
-  not checked because the response carries no secret. A file is used only if its `v`, `id` and `action` equal the request's; an ack with
+  not checked because the response carries no secret. An accepted ack and every response are used only if
+  their `v`, `id` and `action` equal the request's; a rejected ack is used when its `v` and `id` match and
+  its `action` is the request's or empty. An ack with
   `state: rejected` ends the wait and maps its reason (`metadata` → `metadata_rejected`, `version` →
-  `version_rejected`, every other reason → `unreachable`); a response whose `result` is not one of the
+  `version_rejected`, `busy` and every other reason → `unreachable`); a response whose `result` is not one of the
   allowed arms for the action, or lacks a required field, is treated as "not yet" and retried until the
   deadline, as is any unparsable or truncated ack or response; a response that arrives before its ack is
   accepted. agentctl waits for the ack up to the status lifetime and for the response up to the request's
@@ -82,8 +100,9 @@ decides which sessions are eligible, and, in later sections, the verification re
   both by absolute path and never through a shell (`/usr/bin/id -u`, run once at session start, and
   `/usr/bin/stat -f '%u %Lp %HT' <path>`, whose answer must be `<uid> <octal mode> Regular File`; any
   failure or other shape fails closed), answer own uid, mode `600`, regular file; JSON parses with `v: 1`, known `action`, `expiresAt`
-  in the future, `id` unseen; `subject.service` present. Any failure writes a `rejected` ack (when the name
-  and path checks passed) or ignores the file (when they did not).
+  in the future and at most 600 000 ms ahead, `id` unseen; `subject.service` present. Any failure writes a
+  `rejected` ack (when the name and path checks passed) or ignores the file (when they did not). A full
+  table answers `busy` after the name and path checks and before any of the others.
 - Cancellation: SIGINT to agentctl during the post-swap phase cancels the context; sessions still pending are
   counted `not_confirmed`, a counts-only note is written to stderr, and the signal exit path is unchanged
   (the reference rule). The mod finishes or expires its request on its own.

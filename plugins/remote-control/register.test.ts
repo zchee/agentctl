@@ -17,6 +17,10 @@ const SERVICE = 'Claude Code-credentials'
 const ID_A = 'a'.repeat(32)
 const ID_B = 'b'.repeat(32)
 const ID_C = '0123456789abcdef0123456789abcdef'
+// The bytes the mod writes for a metadata rejection of ID_C at START + 500;
+// plugins/remote-control/testdata/ack-metadata-rejected.json holds the same
+// bytes for agentctl's own test of the envelope.
+const METADATA_REJECTED = `{"v":1,"id":"${ID_C}","action":"","state":"rejected","reason":"metadata","answeredAt":1760000000500}`
 
 type FileRec = { kind: 'file' | 'dir'; text: string; uid: number; mode: string; real?: string }
 type RecordFields = { pid: number; sessionId: string; status: string; version: string; messagingSocketPath: string; bridgeSessionId?: string }
@@ -25,6 +29,8 @@ type WorldOptions = {
   bridge?: string
   status?: string
   env?: Record<string, string>
+  /** The refusal of the first session.version call, which is the one the mod makes at start. */
+  versionError?: string
 }
 
 function ran(exitCode: number, stdout: string) {
@@ -55,9 +61,11 @@ class World {
   record: RecordFields
   readonly clock: MockClock
   private readonly version: string
+  private versionError: string | undefined
 
   constructor(on: On, options: WorldOptions = {}) {
     this.version = options.version ?? '2.1.296'
+    this.versionError = options.versionError
     this.record = { pid: PID, sessionId: 'sess-1', status: options.status ?? 'idle', version: this.version, messagingSocketPath: SOCKET }
     if (options.bridge !== undefined) this.record.bridgeSessionId = options.bridge
     this.dir(CONFIG_HOME)
@@ -132,7 +140,12 @@ class World {
       // The real command can print the bridge URL; the mod must never repeat it.
       return { text: `Remote Control active: https://claude.ai/code/${SEEDED}` }
     })
-    on('session.version', () => ({ value: { version: this.version, base: this.version } }))
+    on('session.version', () => {
+      const failure = this.versionError
+      this.versionError = undefined
+      if (failure !== undefined) return { deny: failure }
+      return { value: { version: this.version, base: this.version } }
+    })
     on('session.authorize', () => ({ value: this.isAuthorized ? { handle: 'opaque', kind: 'bearer' as const } : null }))
     on('session.surfaces', () => ({ value: ['terminal' as const] }))
     on('ui.toast', (_$, e) => {
@@ -182,6 +195,17 @@ class World {
 
   writesTo(suffix: string): { path: string; text: string }[] {
     return this.writes.filter((w) => w.path.endsWith(suffix))
+  }
+
+  /** Places `count` reconnect requests with distinct ids; the ids sort in the order given. */
+  requests(count: number, first: number, body: (i: number) => Record<string, unknown> = () => ({})): string[] {
+    const ids: string[] = []
+    for (let i = 0; i < count; i++) {
+      const id = (first + i).toString(16).padStart(32, '0')
+      this.request(id, body(i))
+      ids.push(id)
+    }
+    return ids
   }
 
   /** Everything the mod produced that a person or agentctl could read. */
@@ -240,6 +264,39 @@ describe('admission', () => {
     expect(w.ack(ID_A)).toEqual({ v: 1, id: ID_A, action: '', state: 'rejected', reason: 'metadata', answeredAt: START + 500 })
     expect(w.response(ID_A)).toBeUndefined()
     expect(w.runs).toEqual([])
+  })
+
+  test('writes a metadata rejection with an empty action, byte for byte', async ($, on) => {
+    const w = new World(on)
+    w.request(ID_C, { action: 'status', expiresAt: START + 3_000 }, { mode: '644' })
+    await start($)
+    await w.clock.advance(2_000)
+    const acks = w.writesTo(`${ID_C}.ack.json`)
+    expect(acks.length).toBe(1)
+    expect(acks[0]?.text).toBe(METADATA_REJECTED)
+    expect(w.writesTo('.response.json')).toEqual([])
+  })
+
+  test('rejects an unknown version with an empty action and keeps the action once the body is read', async ($, on) => {
+    const w = new World(on)
+    w.request(ID_A, { v: 2, action: 'status' })
+    w.request(ID_B, { action: 'status', subject: {} })
+    await start($)
+    await w.clock.advance(500)
+    expect(w.ack(ID_A)).toEqual({ v: 1, id: ID_A, action: '', state: 'rejected', reason: 'version', answeredAt: START + 500 })
+    expect(w.ack(ID_B)).toEqual({ v: 1, id: ID_B, action: 'status', state: 'rejected', reason: 'subject', answeredAt: START + 500 })
+  })
+
+  test('rejects a request that asks for a lifetime beyond 600 000 ms', async ($, on) => {
+    const w = new World(on)
+    w.request(ID_A, { action: 'status', expiresAt: START + 500 + 600_001 })
+    w.request(ID_B, { action: 'status', expiresAt: START + 500 + 600_000 })
+    await start($)
+    await w.clock.advance(500)
+    expect(w.ack(ID_A)).toEqual({ v: 1, id: ID_A, action: 'status', state: 'rejected', reason: 'expired', answeredAt: START + 500 })
+    expect(w.response(ID_A)).toBeUndefined()
+    expect(w.ack(ID_B)?.state).toBe('accepted')
+    expect(w.response(ID_B)?.result).toBe('ok')
   })
 
   test('rejects a request whose mode is not 600', async ($, on) => {
@@ -460,6 +517,85 @@ describe('reconnect rules', () => {
   })
 })
 
+describe('bounds', () => {
+  test('answers busy while 64 requests are pending, once per id, and admits again after one expires', async ($, on) => {
+    const w = new World(on)
+    const held = w.requests(64, 1, (i) => (i === 0 ? { expiresAt: START + 5_000 } : {}))
+    await start($)
+    await turnStart($)
+    await w.clock.advance(500)
+    for (const id of held) expect(w.ack(id)?.state).toBe('accepted')
+    const refused = 'e'.repeat(32)
+    w.request(refused)
+    await w.clock.advance(500)
+    expect(w.ack(refused)).toEqual({ v: 1, id: refused, action: '', state: 'rejected', reason: 'busy', answeredAt: START + 1_000 })
+    expect(await command($, 'reconnect')).toBe('Too many requests are pending; try again shortly.')
+    // The full table answers busy without reading the file.
+    expect(w.argv.filter((a) => a[3] === `${DIR}/${refused}.request.json`)).toEqual([])
+    await w.clock.advance(4_500)
+    expect(w.response(held[0] ?? '')?.result).toBe('expired')
+    const admitted = 'd'.repeat(32)
+    w.request(admitted)
+    await w.clock.advance(500)
+    expect(w.ack(admitted)?.state).toBe('accepted')
+    expect(w.writesTo(`${refused}.ack.json`).length).toBe(1)
+    expect(w.ack(refused)?.reason).toBe('busy')
+    expect(w.runs).toEqual([])
+  })
+
+  test('never runs a retained reconnect file twice, across 64 later requests, a lost bridge and a reload', async ($, on) => {
+    const w = new World(on)
+    w.onRemoteControl = () => w.setRecord({ bridgeSessionId: NEXT_BRIDGE })
+    w.request(ID_A)
+    await start($)
+    await w.clock.advance(1_000)
+    expect(w.runs).toEqual(['remote-control'])
+    const answer = w.writesTo(`${ID_A}.response.json`)
+    expect(answer.length).toBe(1)
+    const statuses = w.requests(64, 1, () => ({ action: 'status', expiresAt: w.clock.now() + 3_000 }))
+    await w.clock.advance(500)
+    for (const id of statuses) expect(w.response(id)?.result).toBe('ok')
+    await w.clock.advance(5_000)
+    w.onRemoteControl = undefined
+    w.setRecord({ bridgeSessionId: '' })
+    await reload($)
+    await w.clock.advance(10_000)
+    expect(w.runs).toEqual(['remote-control'])
+    expect(w.writesTo(`${ID_A}.response.json`)).toEqual(answer)
+    expect(w.writesTo(`${ID_A}.ack.json`).length).toBe(1)
+    // Past its expiry the entry may leave the table; the file still lying
+    // there is then refused as expired and never admitted.
+    await w.clock.advance(60_000)
+    expect(w.ack(ID_A)).toMatchObject({ action: 'reconnect', state: 'rejected', reason: 'expired' })
+    await w.clock.advance(5_000)
+    expect(w.runs).toEqual(['remote-control'])
+    expect(w.writesTo(`${ID_A}.response.json`)).toEqual(answer)
+    expect(w.writesTo(`${ID_A}.ack.json`).length).toBe(2)
+  })
+
+  test('keeps an answer pending while the directory is missing and writes the stored bytes once it is back', async ($, on) => {
+    const w = new World(on)
+    w.request(ID_A, { expiresAt: START + 2_200 })
+    await start($)
+    await turnStart($)
+    await w.clock.advance(500)
+    expect(w.ack(ID_A)?.state).toBe('accepted')
+    w.files.delete(DIR)
+    await w.clock.advance(2_000)
+    expect(w.writesTo('.response.json')).toEqual([])
+    await w.clock.advance(3_000)
+    expect(w.writesTo('.response.json')).toEqual([])
+    w.dir(DIR)
+    await w.clock.advance(500)
+    const delivered = w.writesTo(`${ID_A}.response.json`)
+    expect(delivered.length).toBe(1)
+    // Stored when it expired, not computed when the directory came back.
+    expect(JSON.parse(delivered[0]?.text ?? '{}')).toMatchObject({ result: 'expired', answeredAt: START + 2_500 })
+    await w.clock.advance(2_000)
+    expect(w.writesTo('.response.json').length).toBe(1)
+  })
+})
+
 describe('reload', () => {
   test('resumes a request waiting for idle after a reload', async ($, on) => {
     const w = new World(on, { status: 'busy' })
@@ -597,8 +733,10 @@ describe('/agentctl-rc', () => {
     expect(text).toContain('Surfaces: terminal')
     expect(text).toContain('Claude Code: 2.1.296')
     expect(text).toContain('remote-control command: listed')
-    expect(text).toContain('CLAUDE_CONFIG_DIR                "/Users/tester/.claude"')
+    expect(text).toContain('HOME                             set')
+    expect(text).toContain('CLAUDE_CONFIG_DIR                set')
     expect(text).toContain('CLAUDE_SECURESTORAGE_CONFIG_DIR  unset')
+    expect(text).not.toContain(HOME)
     expect(text).toContain('first-party authorization        yes')
     expect(text).not.toContain(SEEDED)
     expect(text).not.toContain('https://')
@@ -668,6 +806,20 @@ describe('redaction', () => {
     expect(everything).not.toContain(SEEDED)
     expect(everything).not.toContain(NEXT_BRIDGE)
     expect(everything).not.toContain('https://')
+  })
+
+  test('redacts a start-up error in the inactive status and reconnect answers', async ($, on) => {
+    const w = new World(on, { versionError: `bridge lookup failed at https://claude.ai/code/${SEEDED} for ${NEXT_BRIDGE}` })
+    await start($)
+    const status = await command($)
+    const reconnect = await command($, 'reconnect')
+    for (const text of [status, reconnect, ...w.logs]) {
+      expect(text).toContain('inactive')
+      expect(text).toContain('[URL redacted]')
+      expect(text).not.toContain(SEEDED)
+      expect(text).not.toContain(NEXT_BRIDGE)
+      expect(text).not.toContain('https://')
+    }
   })
 
   test('redact replaces Remote Control URLs and bridge ids', () => {

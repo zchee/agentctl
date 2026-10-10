@@ -21,7 +21,7 @@ export type AgentctlRcPhase = 'accepted' | 'waiting_idle' | 'running' | 'final' 
 export type AgentctlRcResult = 'ok' | 'reconnected' | 'already_connected' | 'unavailable' | 'not_confirmed' | 'expired' | 'cancelled'
 
 /** Why a request file was rejected at admission. */
-export type AgentctlRcRejectReason = 'name' | 'expired' | 'duplicate' | 'metadata' | 'action' | 'subject' | 'version'
+export type AgentctlRcRejectReason = 'name' | 'expired' | 'duplicate' | 'metadata' | 'action' | 'subject' | 'version' | 'busy'
 
 /** An environment variable as the session sees it: whether it is set, and its spelling when it is. */
 export type AgentctlRcEnvValue = { set: boolean; value: string }
@@ -40,7 +40,11 @@ export type AgentctlRcProvenance = {
   authorized: boolean
 }
 
-/** The acknowledgement file `<id>.ack.json`, written once per admitted file. */
+/**
+ * The acknowledgement file `<id>.ack.json`, written once per admitted file.
+ * A rejection carries an empty `action` when the body was not read or its
+ * version is unknown.
+ */
 export type AgentctlRcAck = {
   v: 1
   id: string
@@ -75,6 +79,10 @@ export type AgentctlRcEntry = {
   action: AgentctlRcAction
   origin: AgentctlRcOrigin
   admittedAt: number
+  /**
+   * When the request expires. For a rejection, how long the refusal is
+   * remembered. No entry leaves the table before this time.
+   */
   expiresAt: number
   /** When `remote-control` was issued. */
   runStartedAt?: number
@@ -91,7 +99,7 @@ export type AgentctlRcEntry = {
 declare module 'claude-code' {
   interface PluginState {
     'agentctl-remote-control': {
-      /** Every request this session admitted, bounded at 64 entries. */
+      /** Every request this session admitted: at most 1 024 entries, 64 of them not yet answered. */
       requests: Record<string, AgentctlRcEntry>
       /** How many distinct bridges this session has been seen to hold. */
       generation: number

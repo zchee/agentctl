@@ -36,8 +36,9 @@ that should be reconnected by agentctl needs the mod loaded.
 - `/agentctl-rc` prints whether this session's registry record shows a
   Remote Control bridge, how many distinct bridges the mod has seen it hold
   (its generation), the surfaces the session draws on, the Claude Code
-  release, and the environment the session's keychain item name derives
-  from. It never prints a bridge id or URL.
+  release, and whether each environment variable the session's keychain
+  item name derives from is set. It never prints a bridge id, a URL or a
+  directory spelling.
 - `/agentctl-rc reconnect` asks for the same guarded reconnect agentctl asks
   for and answers `requested`. The result appears as a toast when it is
   final: reconnected, already connected, unavailable, not confirmed, or
