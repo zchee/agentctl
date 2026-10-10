@@ -146,11 +146,13 @@ const (
 	// Decided before any lock, prompt or write, so nothing is written.
 	SwapExitIdentityUnavailable = 29
 
-	// SwapExitRCNotDisconnected means Remote Control could not be
-	// disconnected before a live swap: the preflight found an unsupported
-	// platform, no TTY to attest at, or a session that stayed connected.
-	// Nothing is written.
-	SwapExitRCNotDisconnected = 30
+	// SwapExitRemoteControl means `--restart-remote-control` could not be
+	// honoured, so the swap was not made: the platform has no live swap, or a
+	// running session with Remote Control on did not answer agentctl's
+	// request, so nothing can say whether it would start Remote Control
+	// again. The JSON report carries reason "remote_control_unsupported_platform"
+	// or "remote_control_unreachable". Nothing is written.
+	SwapExitRemoteControl = 30
 )
 
 // SwapExitCodes pairs every swap exit name with its code, for the
@@ -177,5 +179,5 @@ var SwapExitCodes = [...]struct {
 	{Name: "live_item_absent", Code: SwapExitLiveItemAbsent},
 	{Name: "live_undo_item_changed", Code: SwapExitLiveUndoItemChanged},
 	{Name: "identity_unavailable", Code: SwapExitIdentityUnavailable},
-	{Name: "remote_control_not_disconnected", Code: SwapExitRCNotDisconnected},
+	{Name: "remote_control_refused", Code: SwapExitRemoteControl},
 }

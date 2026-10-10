@@ -351,7 +351,7 @@ func (c *CLI) newClaudeUseCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.BoolVar(&opts.Live, "live", false, "Hot-swap the live Claude Code credential instead of starting an isolated session.")
-	f.BoolVar(&opts.RestartRemoteControl, "restart-remote-control", false, "Before a live swap, disconnect Remote Control in each running Claude Code session that has it on and runs in a tmux pane, and start it again there after the swap, so the claude.ai conversation carries over.")
+	f.BoolVar(&opts.RestartRemoteControl, "restart-remote-control", false, "After a live swap, ask each running Claude Code session that had Remote Control on and has the agentctl Remote Control mod to start Remote Control again. The swap is refused, with nothing written, if such a session does not answer.")
 	f.BoolVar(&opts.NewOnly, "new-only", false, "Accepted as a synonym for the default (isolated-session) behaviour.")
 	f.BoolVar(&opts.Undo, "undo", false, "Undo the most recent --live swap.")
 	f.StringVar(&opts.Forget, "forget", "", "Remove the session directory created by an earlier use <id>.")
@@ -365,7 +365,6 @@ func (c *CLI) newClaudeUseCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("live", "forget")
 	cmd.MarkFlagsMutuallyExclusive("undo", "forget")
 	cmd.MarkFlagsMutuallyExclusive("restart-remote-control", "forget")
-	cmd.MarkFlagsMutuallyExclusive("restart-remote-control", "yes")
 	return cmd
 }
 

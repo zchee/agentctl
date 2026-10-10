@@ -440,22 +440,22 @@ func TestClaudeUseUndoAndForgetConflictWithAnIDAndWithEachOther(t *testing.T) {
 	}
 }
 
-func TestClaudeUseRestartRemoteControlRequiresALivePassAndFreshConsent(t *testing.T) {
+func TestClaudeUseRestartRemoteControlRequiresALivePass(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
 		flags    []string
 		accepted bool
 	}{
-		"success: with --live":                        {flags: []string{"--live", "--restart-remote-control"}, accepted: true},
-		"success: with --live and an id":              {flags: []string{"--live", "account", "--restart-remote-control"}, accepted: true},
-		"success: with --undo":                        {flags: []string{"--undo", "--restart-remote-control"}, accepted: true},
-		"success: --live --yes without the restart":   {flags: []string{"--live", "--yes"}, accepted: true},
-		"error: alone":                                {flags: []string{"--restart-remote-control"}},
-		"error: with an isolated session id":          {flags: []string{"account", "--restart-remote-control"}},
-		"error: with --forget":                        {flags: []string{"--forget", "account", "--restart-remote-control"}},
-		"error: --live --yes skips the fresh consent": {flags: []string{"--live", "--yes", "--restart-remote-control"}},
-		"error: --undo --yes skips the fresh consent": {flags: []string{"--undo", "--yes", "--restart-remote-control"}},
+		"success: with --live":                      {flags: []string{"--live", "--restart-remote-control"}, accepted: true},
+		"success: with --live and an id":            {flags: []string{"--live", "account", "--restart-remote-control"}, accepted: true},
+		"success: with --undo":                      {flags: []string{"--undo", "--restart-remote-control"}, accepted: true},
+		"success: --live --yes without the restart": {flags: []string{"--live", "--yes"}, accepted: true},
+		"error: alone":                              {flags: []string{"--restart-remote-control"}},
+		"error: with an isolated session id":        {flags: []string{"account", "--restart-remote-control"}},
+		"error: with --forget":                      {flags: []string{"--forget", "account", "--restart-remote-control"}},
+		"success: --live --yes with the restart":    {flags: []string{"--live", "--yes", "--restart-remote-control"}, accepted: true},
+		"success: --undo --yes with the restart":    {flags: []string{"--undo", "--yes", "--restart-remote-control"}, accepted: true},
 	}
 
 	for name, tt := range tests {

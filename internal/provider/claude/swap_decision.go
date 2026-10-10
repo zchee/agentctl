@@ -57,7 +57,7 @@ func (r SwapRefusal) DecidedIn() SwapPhase {
 	switch r.Kind {
 	case SwapCompromisedHold:
 		return SwapHeld
-	case SwapLineTooLong, SwapCannotAdopt, SwapAuditRefused, SwapRemoteControlNotDisconnected:
+	case SwapLineTooLong, SwapCannotAdopt, SwapAuditRefused:
 		return SwapPrepare
 	default:
 		return SwapReadOnly
@@ -67,7 +67,7 @@ func (r SwapRefusal) DecidedIn() SwapPhase {
 // SwapDecisionOrder returns independent values in the refusal precedence order.
 func SwapDecisionOrder() []SwapRefusal {
 	return []SwapRefusal{
-		{Kind: SwapNotOwned}, {Kind: SwapLiveNamespaceEnv}, {Kind: SwapLiveUnreachable}, {Kind: SwapEnvToken}, {Kind: SwapLiveItemAbsent}, {Kind: SwapProfileUnavailable}, {Kind: SwapLiveUndoForeignLogin}, {Kind: SwapLineTooLong}, {Kind: SwapAuditRefused}, {Kind: SwapRemoteControlNotDisconnected}, {Kind: SwapCannotAdopt, Adoption: AdoptionNewerCopy}, {Kind: SwapCompromisedHold},
+		{Kind: SwapRemoteControlUnsupportedPlatform}, {Kind: SwapNotOwned}, {Kind: SwapLiveNamespaceEnv}, {Kind: SwapLiveUnreachable}, {Kind: SwapEnvToken}, {Kind: SwapRemoteControlUnreachable}, {Kind: SwapLiveItemAbsent}, {Kind: SwapProfileUnavailable}, {Kind: SwapLiveUndoForeignLogin}, {Kind: SwapLineTooLong}, {Kind: SwapAuditRefused}, {Kind: SwapCannotAdopt, Adoption: AdoptionNewerCopy}, {Kind: SwapCompromisedHold},
 	}
 }
 

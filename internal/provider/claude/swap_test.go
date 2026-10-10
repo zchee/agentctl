@@ -22,19 +22,20 @@ func TestSwapRefusalVocabulary(t *testing.T) {
 		letter, reason string
 		exit           int
 	}{
-		"error: compromised":           {SwapCompromisedHold, "A", "", 10},
-		"error: token environment":     {SwapEnvToken, "C", "", 11},
-		"error: line bound":            {SwapLineTooLong, "D", "", 12},
-		"error: namespace environment": {SwapLiveNamespaceEnv, "E", "", 13},
-		"error: adoption":              {SwapCannotAdopt, "F", "", 14},
-		"error: ownership":             {SwapNotOwned, "", "not_owned", 15},
-		"error: audit":                 {SwapAuditRefused, "", "audit_refused", 22},
-		"error: unreachable":           {SwapLiveUnreachable, "", "live_unreachable", 23},
-		"error: absent item":           {SwapLiveItemAbsent, "", "live_item_absent", 24},
-		"error: foreign login":         {SwapLiveUndoForeignLogin, "", "live_undo_foreign_login", 27},
-		"error: profile":               {SwapProfileUnavailable, "", "profile_unavailable", 29},
-		"error: expired":               {SwapTokenExpired, "", "live_token_expired", 29},
-		"error: remote control":        {SwapRemoteControlNotDisconnected, "", "remote_control_not_disconnected", 30},
+		"error: compromised":                {SwapCompromisedHold, "A", "", 10},
+		"error: token environment":          {SwapEnvToken, "C", "", 11},
+		"error: line bound":                 {SwapLineTooLong, "D", "", 12},
+		"error: namespace environment":      {SwapLiveNamespaceEnv, "E", "", 13},
+		"error: adoption":                   {SwapCannotAdopt, "F", "", 14},
+		"error: ownership":                  {SwapNotOwned, "", "not_owned", 15},
+		"error: audit":                      {SwapAuditRefused, "", "audit_refused", 22},
+		"error: unreachable":                {SwapLiveUnreachable, "", "live_unreachable", 23},
+		"error: absent item":                {SwapLiveItemAbsent, "", "live_item_absent", 24},
+		"error: foreign login":              {SwapLiveUndoForeignLogin, "", "live_undo_foreign_login", 27},
+		"error: profile":                    {SwapProfileUnavailable, "", "profile_unavailable", 29},
+		"error: expired":                    {SwapTokenExpired, "", "live_token_expired", 29},
+		"error: remote control platform":    {SwapRemoteControlUnsupportedPlatform, "", "remote_control_unsupported_platform", 30},
+		"error: remote control unreachable": {SwapRemoteControlUnreachable, "", "remote_control_unreachable", 30},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

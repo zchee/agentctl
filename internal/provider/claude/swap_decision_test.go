@@ -27,7 +27,7 @@ func TestSwapDecisionPhases(t *testing.T) {
 		refusal SwapRefusalKind
 		phase   SwapPhase
 	}{
-		"success: ownership": {SwapNotOwned, SwapReadOnly}, "success: namespace environment": {SwapLiveNamespaceEnv, SwapReadOnly}, "success: missing live tree": {SwapLiveUnreachable, SwapReadOnly}, "success: override token": {SwapEnvToken, SwapReadOnly}, "success: missing item": {SwapLiveItemAbsent, SwapReadOnly}, "success: profile unavailable": {SwapProfileUnavailable, SwapReadOnly}, "success: expired token": {SwapTokenExpired, SwapReadOnly}, "success: foreign login": {SwapLiveUndoForeignLogin, SwapReadOnly}, "success: line size": {SwapLineTooLong, SwapPrepare}, "success: refused audit": {SwapAuditRefused, SwapPrepare}, "success: remote session": {SwapRemoteControlNotDisconnected, SwapPrepare}, "success: adoption": {SwapCannotAdopt, SwapPrepare}, "success: compromised hold": {SwapCompromisedHold, SwapHeld},
+		"success: ownership": {SwapNotOwned, SwapReadOnly}, "success: namespace environment": {SwapLiveNamespaceEnv, SwapReadOnly}, "success: missing live tree": {SwapLiveUnreachable, SwapReadOnly}, "success: override token": {SwapEnvToken, SwapReadOnly}, "success: missing item": {SwapLiveItemAbsent, SwapReadOnly}, "success: profile unavailable": {SwapProfileUnavailable, SwapReadOnly}, "success: expired token": {SwapTokenExpired, SwapReadOnly}, "success: foreign login": {SwapLiveUndoForeignLogin, SwapReadOnly}, "success: line size": {SwapLineTooLong, SwapPrepare}, "success: refused audit": {SwapAuditRefused, SwapPrepare}, "success: remote control platform": {SwapRemoteControlUnsupportedPlatform, SwapReadOnly}, "success: remote control unreachable": {SwapRemoteControlUnreachable, SwapReadOnly}, "success: adoption": {SwapCannotAdopt, SwapPrepare}, "success: compromised hold": {SwapCompromisedHold, SwapHeld},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -49,7 +49,7 @@ func TestSwapDecisionPhases(t *testing.T) {
 	}
 	order := SwapDecisionOrder()
 	order[0].Kind = SwapCompromisedHold
-	if SwapDecisionOrder()[0].Kind != SwapNotOwned {
+	if SwapDecisionOrder()[0].Kind != SwapRemoteControlUnsupportedPlatform {
 		t.Fatal("decision table is mutable")
 	}
 	if diff := gocmp.Diff([]string{"a", "b", "c"}, []string{SwapReadOnly.Name(), SwapPrepare.Name(), SwapHeld.Name()}); diff != "" {

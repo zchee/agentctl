@@ -80,8 +80,8 @@ func TestSwapExitCodeTable(t *testing.T) {
 		"success: 29 identity_unavailable fires when nothing can say whose credential the live item holds": {
 			name: "identity_unavailable", code: SwapExitIdentityUnavailable,
 		},
-		"success: 30 remote_control_not_disconnected fires when the remote-control preflight fails": {
-			name: "remote_control_not_disconnected", code: SwapExitRCNotDisconnected,
+		"success: 30 remote_control_refused fires on an unsupported platform or a bridged session that does not answer": {
+			name: "remote_control_refused", code: SwapExitRemoteControl,
 		},
 	}
 
@@ -138,8 +138,8 @@ func TestSwapExitCodesAreUniqueAndRetireTwentyFiveTwentySixAndTwentyEight(t *tes
 	if SwapExitIdentityUnavailable != 29 {
 		t.Fatalf("identity_unavailable = %d, want the fresh 29", SwapExitIdentityUnavailable)
 	}
-	if SwapExitRCNotDisconnected != 30 {
-		t.Fatalf("remote_control_not_disconnected = %d, want 30", SwapExitRCNotDisconnected)
+	if SwapExitRemoteControl != 30 {
+		t.Fatalf("remote_control_refused = %d, want 30", SwapExitRemoteControl)
 	}
 }
 

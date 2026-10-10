@@ -29,7 +29,8 @@ const (
 	SwapLiveUnreachable
 	SwapLiveItemAbsent
 	SwapAuditRefused
-	SwapRemoteControlNotDisconnected
+	SwapRemoteControlUnsupportedPlatform
+	SwapRemoteControlUnreachable
 	SwapProfileUnavailable
 	SwapTokenExpired
 	SwapLiveUndoForeignLogin
@@ -70,8 +71,10 @@ func (r SwapRefusal) Reason() string {
 		return "live_item_absent"
 	case SwapAuditRefused:
 		return "audit_refused"
-	case SwapRemoteControlNotDisconnected:
-		return "remote_control_not_disconnected"
+	case SwapRemoteControlUnsupportedPlatform:
+		return "remote_control_unsupported_platform"
+	case SwapRemoteControlUnreachable:
+		return "remote_control_unreachable"
 	case SwapProfileUnavailable:
 		return "profile_unavailable"
 	case SwapTokenExpired:
@@ -104,8 +107,8 @@ func (r SwapRefusal) ExitCode() int {
 		return cli.SwapExitLiveItemAbsent
 	case SwapAuditRefused:
 		return cli.SwapExitAuditRefused
-	case SwapRemoteControlNotDisconnected:
-		return cli.SwapExitRCNotDisconnected
+	case SwapRemoteControlUnsupportedPlatform, SwapRemoteControlUnreachable:
+		return cli.SwapExitRemoteControl
 	case SwapProfileUnavailable, SwapTokenExpired:
 		return cli.SwapExitIdentityUnavailable
 	case SwapLiveUndoForeignLogin:
