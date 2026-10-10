@@ -41,18 +41,36 @@ decides which sessions are eligible, and, in later sections, the verification re
   `{"v":1,"id","action","result","answeredAt","bridge":{"present":bool,"generation":n},"surfaces":[...],
   "version":"<base>","remoteControlListed":bool,"provenance":{...},"reason"?}` (`remoteControlListed` is whether `remote-control` is in `$.command.list()` at answer time; a `status` answer with it false classes the session `unavailable` at preflight). Results: `status` → `ok`; `reconnect` → `reconnected`,
   `already_connected`, `unavailable`, `not_confirmed`, `expired`, `cancelled`.
+- Provenance in the response: `{"home","configDir":{"set":bool,"value"?},"secureStorageDir":{"set":bool,
+  "value"?},"oauthTokenSet","apiKeySet","baseUrlSet","authorized"}`. In `configDir` and `secureStorageDir`,
+  `value` is required only when `set` is true; for an unset variable it may be absent, and agentctl decides
+  unset from `set`, never from the value. A response with `{"set":false}` and no `value` is complete. The mod
+  writes an empty string for an unset variable, which agentctl ignores.
 - Mod state per request, kept in `$.state` under the mod's name (`requests: {id: {phase, action,
-  expiresAt, runStartedAt?, observeUntil?, terminal?: {response, published: bool}}}`). The table is bounded:
-  when 64 entries are pending (not `published`) or the table holds 1 024 entries, a new request file whose
-  name and path checks passed gets a `rejected` ack with reason `busy`, written once per id without reading
-  the file, and `/agentctl-rc reconnect` answers that too many requests are pending. An entry leaves the
-  table only once it is `published` and its `expiresAt` has passed; nothing is evicted before its
-  `expiresAt`, published or not, so a request file still lying in the directory cannot be admitted, or run,
-  a second time. A rejection is remembered for 600 000 ms, the longest lifetime a request may ask for, so a
-  request file still present once its entry has left the table is refused again on sight (as `expired` when
-  its body is readable, which then answers it a second time) and is never admitted. Admission and recovery are distinct: the unseen-id check applies
-  only to a file whose id is not in the table; an id in the table is recovered at its recorded phase, never
-  re-validated. Phases: `accepted` → (`waiting_idle` | `running` | `final`) → `published`. Every transition
+  expiresAt, runStartedAt?, observeUntil?, terminal?: {response, published: bool}}}`). The table holds
+  admitted requests only and is bounded: when 64 entries are pending (not `published`) or the table holds
+  1 024 entries, a new request file whose name, path and metadata checks passed gets a `rejected` ack with
+  reason `busy`, without its body being read, and `/agentctl-rc reconnect` answers that too many requests
+  are pending. An entry leaves the table only once it is `published` and its `expiresAt` has passed; nothing
+  is evicted before its `expiresAt`, published or not, so a request file still lying in the directory
+  cannot be admitted, or run, a second time. Once its entry has left the table, such a file can only be
+  refused (as `expired`, which answers it a second time).
+- Refused files, kept in `$.state` under the mod's name as a list, oldest first (`rejected: [{id, reason,
+  expiresAt, ack?}]`, `ack` holding the acknowledgement text until it is written). Every rejection the mod
+  answers, `busy` included, is recorded there before its ack is written, and a file whose id is listed is
+  never admitted or validated again; after a reload the list is read from `$.state` before the first
+  admission, so a refused file is not admitted later even once capacity frees. A refusal whose body was not
+  read or not trusted (`metadata`, `version`, `busy`) and a `name` or `expired` refusal are kept until 600 000
+  ms after the refusal, the longest lifetime a request may ask for, so a file still lying there afterwards can
+  only be refused as `expired`; an `action`, `duplicate` or `subject` refusal is kept until the request's own
+  `expiresAt` when that is valid, else for 600 000 ms. The list holds
+  at most 256 entries, and an entry is evicted only to make room: the oldest one whose `expiresAt` has passed
+  first. When all 256 are unexpired, the newest rejection is still answered and recorded by evicting the
+  oldest entry; a file of the evicted id still in the directory is examined again on a later tick and can be
+  answered a second time, and, if it was refused only as `busy` and has not expired, admitted. An unwritten
+  ack in the list is retried with the identical bytes on every tick, across reloads.
+- Admission and recovery are distinct: the unseen-id check applies only to a file whose id is in neither the
+  table nor the refused list; an id in the table is recovered at its recorded phase, never re-validated. Phases: `accepted` → (`waiting_idle` | `running` | `final`) → `published`. Every transition
   is written to `$.state` before the side effect it enables (the run, the file write). Rules, evaluated in
   this order on every poll tick (500 ms) for each non-published `reconnect` entry, and once immediately at admission (a `status` request is answered at admission and has no rule list). An entry in `running` is subject to rule 6 only, never to rules 1 to 5, so a run is issued at most once per id:
   1. `expiresAt` passed and no run issued → `final(expired)`.
@@ -102,7 +120,8 @@ decides which sessions are eligible, and, in later sections, the verification re
   failure or other shape fails closed), answer own uid, mode `600`, regular file; JSON parses with `v: 1`, known `action`, `expiresAt`
   in the future and at most 600 000 ms ahead, `id` unseen; `subject.service` present. Any failure writes a
   `rejected` ack (when the name and path checks passed) or ignores the file (when they did not). A full
-  table answers `busy` after the name and path checks and before any of the others.
+  table answers `busy` only after the name, path and metadata checks passed, and before the body is read;
+  a file that fails the metadata check gets its `metadata` rejection, never `busy`.
 - Cancellation: SIGINT to agentctl during the post-swap phase cancels the context; sessions still pending are
   counted `not_confirmed`, a counts-only note is written to stderr, and the signal exit path is unchanged
   (the reference rule). The mod finishes or expires its request on its own.

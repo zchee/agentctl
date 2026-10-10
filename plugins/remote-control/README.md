@@ -59,9 +59,16 @@ request runs `/remote-control` only when the session is idle and its registry
 record, read on the same tick, shows no bridge; it then watches the record
 for up to 30 seconds for a new bridge. Requests live in the session's
 `$.state`, so a hot reload of the mod neither answers one twice nor runs
-`/remote-control` twice. The mod creates no directory, deletes nothing, and
-never reads the `*.key` files beside the registry records. The full contract
-is in `docs/research/remote-control-mod.md` at the repository root.
+`/remote-control` twice. A refused request is remembered in `$.state` too, in
+a list of at most 256 entries, so a file answered `busy` while the mod's table
+was full is not admitted later, after a reload included. The bound has one
+residual: when 256 unexpired refusals are held, the newest is still answered
+and recorded by forgetting the oldest, and a file of that forgotten id still
+in the directory is examined again; it can be answered a second time and, if
+it was refused only as `busy` and has not expired, admitted. The mod creates
+no directory, deletes nothing, and never reads the `*.key` files beside the
+registry records. The full contract is in `docs/research/remote-control-mod.md`
+at the repository root.
 
 ## The remaining race
 

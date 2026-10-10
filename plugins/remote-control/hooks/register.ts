@@ -5,6 +5,7 @@ import type {
   AgentctlRcAction,
   AgentctlRcEntry,
   AgentctlRcProvenance,
+  AgentctlRcRejected,
   AgentctlRcRejectReason,
   AgentctlRcResponse,
   AgentctlRcResult,
@@ -18,14 +19,16 @@ const OBSERVE_MS = 30_000
 // The lifetime of a reconnect asked for with `/agentctl-rc reconnect`, the
 // same as agentctl gives its own reconnect requests.
 const COMMAND_LIFETIME_MS = 75_000
-// The longest lifetime a request may ask for, ten times agentctl's longest.
-// A rejection is remembered this long, so a request file still lying there
-// afterwards is refused again, as expired when its body is readable, and is
-// never admitted.
+// The longest lifetime a request may ask for, eight times agentctl's longest.
+// A refusal of a file whose body was not read is remembered this long, so a
+// request file still lying there afterwards is refused again, as expired when
+// its body is readable, and is never admitted.
 const MAX_LIFETIME_MS = 600_000
 // Bounds on the table: entries not yet answered, and entries of any phase.
 const MAX_PENDING = 64
 const MAX_ENTRIES = 1024
+// Bound on the list of refused request files.
+const MAX_REJECTED = 256
 // agentctl reads registry records with the same bound.
 const MAX_RECORD_BYTES = 64 * 1024
 const MAX_REQUEST_BYTES = 64 * 1024
@@ -84,9 +87,6 @@ let isPolling = false
 let bridgeMark: string | undefined
 let sawAbsent = false
 let queue: Promise<unknown> = Promise.resolve()
-// Ids already answered `busy`. They are not stored in the table, which may
-// be full, so this set is what keeps that answer to one write per id.
-let answeredBusy = new Set<string>()
 
 /** Replaces Remote Control URLs and bridge ids in text bound for a log or an answer. */
 export function redact(text: string): string {
@@ -482,24 +482,71 @@ function rejectedAck(id: string, action: string, reason: AgentctlRcRejectReason,
   return JSON.stringify(ack)
 }
 
-function rejection(id: string, action: string, reason: AgentctlRcRejectReason, now: number): AgentctlRcEntry {
-  return {
-    phase: 'final',
-    action: 'status',
-    origin: 'file',
-    admittedAt: now,
-    expiresAt: now + MAX_LIFETIME_MS,
-    ack: { text: rejectedAck(id, action, reason, now), published: false },
-  }
+/** Why one file is refused, the action its acknowledgement names, and how long the refusal is remembered. */
+type Refusal = { reason: AgentctlRcRejectReason; action: string; expiresAt: number }
+
+function refuse(reason: AgentctlRcRejectReason, action: string, expiresAt: number): Refusal {
+  return { reason, action, expiresAt }
 }
 
-// Validates the body and metadata of one request file whose name and real
-// path already passed, in the contract's order, and answers the entry to store.
-async function validate($: EngineInterface, ctx: Context, table: Table, id: string, path: string, size: number, now: number): Promise<AgentctlRcEntry> {
-  const meta = await hostStat($, path)
-  if (meta === undefined || meta.uid !== ctx.uid || meta.mode !== '600' || meta.type !== 'Regular File' || size > MAX_REQUEST_BYTES) {
-    return rejection(id, '', 'metadata', now)
+// How long a refusal of a readable body is remembered: until the request's
+// own expiry when that is valid, after which the file can only be refused as
+// expired, else for the longest lifetime a request may ask for.
+function lifetimeOf(expiresAt: unknown, now: number): number {
+  const isValid = typeof expiresAt === 'number' && Number.isFinite(expiresAt) && expiresAt > now && expiresAt - now <= MAX_LIFETIME_MS
+  return isValid ? expiresAt : now + MAX_LIFETIME_MS
+}
+
+async function loadRejected($: EngineInterface): Promise<AgentctlRcRejected[]> {
+  const held = await $.state.get({ plugin: 'agentctl-remote-control', key: 'rejected' })
+  return [...(held.value ?? [])]
+}
+
+async function saveRejected($: EngineInterface, rejected: AgentctlRcRejected[]): Promise<void> {
+  await $.state.set({ plugin: 'agentctl-remote-control', key: 'rejected' }, rejected)
+}
+
+// Adds a refusal to the bounded list, oldest first. Room is made by evicting
+// the oldest entry whose expiry has passed; when none has, the oldest entry
+// goes, so the newest refusal is still recorded and answered.
+function remember(rejected: AgentctlRcRejected[], entry: AgentctlRcRejected, now: number): void {
+  while (rejected.length >= MAX_REJECTED) {
+    const expired = rejected.findIndex((r) => now >= r.expiresAt)
+    rejected.splice(expired === -1 ? 0 : expired, 1)
   }
+  rejected.push(entry)
+}
+
+// Writes a refusal's acknowledgement once the directory exists, then forgets
+// its text; until then the same bytes are tried again on every poll.
+async function deliverRejection($: EngineInterface, ctx: Context, rejected: AgentctlRcRejected[], entry: AgentctlRcRejected): Promise<void> {
+  if (entry.ack === undefined) return
+  if (!(await writeTransport($, ctx, `${entry.id}.ack.json`, entry.ack))) return
+  delete entry.ack
+  await saveRejected($, rejected)
+}
+
+// Stores the refusal before answering it, so a reload in between delivers the
+// identical bytes and never examines the file again.
+async function reject($: EngineInterface, ctx: Context, rejected: AgentctlRcRejected[], id: string, refusal: Refusal, now: number): Promise<void> {
+  const entry: AgentctlRcRejected = { id, reason: refusal.reason, expiresAt: refusal.expiresAt, ack: rejectedAck(id, refusal.action, refusal.reason, now) }
+  remember(rejected, entry, now)
+  await saveRejected($, rejected)
+  log($, `request ${id}: rejected (${refusal.reason})`)
+  await deliverRejection($, ctx, rejected, entry)
+}
+
+// The owner uid, mode, type and size checks, which come before anything else
+// is decided about a file whose name and real path passed.
+async function isOwnFile($: EngineInterface, ctx: Context, path: string, size: number): Promise<boolean> {
+  const meta = await hostStat($, path)
+  return meta !== undefined && meta.uid === ctx.uid && meta.mode === '600' && meta.type === 'Regular File' && size <= MAX_REQUEST_BYTES
+}
+
+// Validates the body of one request file whose name, real path and metadata
+// already passed, in the contract's order, and answers the entry to store or
+// the refusal. `known` holds every id the session admitted or refused.
+async function validate($: EngineInterface, known: (id: string) => boolean, id: string, path: string, now: number): Promise<AgentctlRcEntry | Refusal> {
   const text = await $.fs.read(path).catch(() => undefined)
   let body: unknown
   try {
@@ -508,57 +555,62 @@ async function validate($: EngineInterface, ctx: Context, table: Table, id: stri
     body = undefined
   }
   // A body under an unknown version cannot be trusted to name its action.
-  if (!isObject(body) || body.v !== 1) return rejection(id, '', 'version', now)
+  if (!isObject(body) || body.v !== 1) return refuse('version', '', now + MAX_LIFETIME_MS)
   const rawAction = stringOf(body.action) ?? ''
-  if (rawAction !== 'status' && rawAction !== 'reconnect') return rejection(id, rawAction, 'action', now)
+  if (rawAction !== 'status' && rawAction !== 'reconnect') return refuse('action', rawAction, lifetimeOf(body.expiresAt, now))
   const action: AgentctlRcAction = rawAction
   const expiresAt = body.expiresAt
   // A lifetime beyond the cap would keep its entry, and the table slot,
   // longer than the table's eviction rule allows for.
   if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= now || expiresAt - now > MAX_LIFETIME_MS) {
-    return rejection(id, action, 'expired', now)
+    return refuse('expired', action, now + MAX_LIFETIME_MS)
   }
   if (body.id !== id) {
     const other = stringOf(body.id)
-    return rejection(id, action, other !== undefined && other in table ? 'duplicate' : 'name', now)
+    if (other !== undefined && known(other)) return refuse('duplicate', action, expiresAt)
+    return refuse('name', action, now + MAX_LIFETIME_MS)
   }
   const subject = body.subject
-  if (!isObject(subject) || typeof subject.service !== 'string' || subject.service === '') return rejection(id, action, 'subject', now)
+  if (!isObject(subject) || typeof subject.service !== 'string' || subject.service === '') return refuse('subject', action, expiresAt)
 
   const ack: AgentctlRcAck = { v: 1, id, action, state: 'accepted', answeredAt: now }
   return { phase: 'accepted', action, origin: 'file', admittedAt: now, expiresAt, ack: { text: JSON.stringify(ack), published: false } }
 }
 
-// Admits the request files not yet in the table. A file whose name or real
-// path fails is ignored without an answer; past that, a full table answers
-// `busy` once per id without reading the file, and admits nothing.
-async function admit($: EngineInterface, ctx: Context, table: Table, inputs: Inputs, now: number): Promise<void> {
+// Admits the request files neither in the table nor in the refused list. A
+// file whose name or real path fails is ignored without an answer; one whose
+// metadata fails is refused as such; past that, a full table answers `busy`
+// without reading the body, and admits nothing.
+async function admit($: EngineInterface, ctx: Context, table: Table, rejected: AgentctlRcRejected[], inputs: Inputs, now: number): Promise<void> {
   const realDir = await transportReal($, ctx)
   if (realDir === undefined) return
+  const refused = new Set(rejected.map((r) => r.id))
+  const known = (id: string): boolean => id in table || refused.has(id)
   const ids = new Map<string, string>()
   for (const entry of await $.fs.list(ctx.transportDir)) {
     const match = entry.isLink ? null : REQUEST_NAME.exec(entry.name)
     if (match !== null) ids.set(entry.name, match[1] ?? '')
   }
-  const listed = new Set(ids.values())
-  for (const id of answeredBusy) if (!listed.has(id)) answeredBusy.delete(id)
   for (const name of [...ids.keys()].sort()) {
     const id = ids.get(name) ?? ''
-    if (id in table || answeredBusy.has(id)) continue
+    if (known(id)) continue
     try {
       const path = joinPath(ctx.transportDir, name)
       const stat = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
       if (stat?.realPath !== joinPath(realDir, name)) continue
-      if (isFull(table)) {
-        if (await writeTransport($, ctx, `${id}.ack.json`, rejectedAck(id, '', 'busy', now))) answeredBusy.add(id)
-        log($, `request ${id}: rejected, the table is full`)
+      let outcome: AgentctlRcEntry | Refusal
+      if (!(await isOwnFile($, ctx, path, stat.size))) outcome = refuse('metadata', '', now + MAX_LIFETIME_MS)
+      else if (isFull(table)) outcome = refuse('busy', '', now + MAX_LIFETIME_MS)
+      else outcome = await validate($, known, id, path, now)
+      if ('reason' in outcome) {
+        refused.add(id)
+        await reject($, ctx, rejected, id, outcome, now)
         continue
       }
-      const entry = await validate($, ctx, table, id, path, stat.size, now)
-      table[id] = entry
+      table[id] = outcome
       await save($, table)
-      log($, `request ${id}: ${entry.phase === 'accepted' ? `accepted ${entry.action}` : 'rejected'}`)
-      await step($, ctx, table, inputs, id, entry, now)
+      log($, `request ${id}: accepted ${outcome.action}`)
+      await step($, ctx, table, inputs, id, outcome, now)
     } catch {
       log($, `request file ${name}: admission failed`)
     }
@@ -578,7 +630,15 @@ async function poll($: EngineInterface, ctx: Context): Promise<void> {
       log($, `request ${id}: delivery failed; retrying on the next poll`)
     }
   }
-  await admit($, ctx, table, inputs, now)
+  const rejected = await loadRejected($)
+  for (const entry of rejected) {
+    try {
+      await deliverRejection($, ctx, rejected, entry)
+    } catch {
+      log($, `request ${entry.id}: delivery failed; retrying on the next poll`)
+    }
+  }
+  await admit($, ctx, table, rejected, inputs, now)
 }
 
 function tick($: EngineInterface): void {
@@ -663,7 +723,6 @@ export const register: Register = (on) => {
     bridgeMark = undefined
     sawAbsent = false
     queue = Promise.resolve()
-    answeredBusy = new Set<string>()
 
     await $.command.register({
       name: 'agentctl-rc',

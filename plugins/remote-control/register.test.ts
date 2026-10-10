@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
 import { meetsFloor, redact } from './hooks/register'
+import type { AgentctlRcEntry, AgentctlRcRejected } from './types'
 
 const HOME = '/Users/tester'
 const CONFIG_HOME = `${HOME}/.claude`
@@ -13,6 +14,7 @@ const DIR = `${CONFIG_HOME}/agentctl/remote-control/${PID}`
 const SEEDED = 'session_01SEEDEDbridgeSecretXyz'
 const NEXT_BRIDGE = 'session_01NEXTbridgeSecretAbc'
 const START = 1_760_000_000_000
+const PLUGIN = 'agentctl-remote-control'
 const SERVICE = 'Claude Code-credentials'
 const ID_A = 'a'.repeat(32)
 const ID_B = 'b'.repeat(32)
@@ -50,9 +52,15 @@ class World {
   readonly logs: string[] = []
   readonly writes: { path: string; text: string }[] = []
   readonly failedWrites: { path: string; text: string }[] = []
+  readonly reads: string[] = []
+  /** What the mod last wrote to each of its `$.state` keys. */
+  readonly state = new Map<string, unknown>()
+  /** A value `$.state` answers for a key the mod has not written yet, as an earlier session would have left it. */
+  readonly seeds = new Map<string, unknown>()
   readonly registered: string[] = []
   readonly lists: string[] = []
   failResponseWrites = 0
+  failAckWrites = 0
   isListed = true
   isAuthorized = true
   isRunRefused = false
@@ -86,6 +94,7 @@ class World {
       return { value: e.resolve ? { ...stat, realPath: rec.real ?? e.path } : stat }
     })
     on('fs.read', (_$, e) => {
+      this.reads.push(e.path)
       const rec = this.files.get(e.path)
       return rec?.kind === 'file' ? { value: rec.text } : { deny: `ENOENT: ${e.path}` }
     })
@@ -99,6 +108,11 @@ class World {
     on('fs.write', (_$, e) => {
       if (e.path.endsWith('.response.json') && this.failResponseWrites > 0) {
         this.failResponseWrites -= 1
+        this.failedWrites.push({ path: e.path, text: e.text })
+        return { deny: 'EIO: simulated write failure' }
+      }
+      if (e.path.endsWith('.ack.json') && this.failAckWrites > 0) {
+        this.failAckWrites -= 1
         this.failedWrites.push({ path: e.path, text: e.text })
         return { deny: 'EIO: simulated write failure' }
       }
@@ -155,6 +169,18 @@ class World {
     on('ui.log', (_$, e) => {
       this.logs.push(e.text)
       return { value: undefined }
+    })
+    // The kit's own store sits beneath these two; they only seed and observe it.
+    on('state.get', async (_$, e, next) => {
+      // A hook answers `{ value: read }`, the read being `{ version, value? }`.
+      const held = await next(e)
+      const seed = e.plugin === PLUGIN ? this.seeds.get(e.key) : undefined
+      if (seed === undefined || held.value === undefined || held.value.value !== undefined) return held
+      return { value: { ...held.value, value: seed } }
+    })
+    on('state.set', async (_$, e, next) => {
+      if (e.plugin === PLUGIN) this.state.set(e.key, structuredClone(e.value))
+      return next(e)
     })
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
@@ -226,6 +252,29 @@ const reload = start
 async function command($: Engine, args = ''): Promise<string> {
   const typed = { command: 'agentctl-rc', args, origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 120 } }
   return (await $.command.run(typed)).text ?? ''
+}
+
+/** An id for the n-th seeded entry, apart from every id a test writes a file for. */
+function seededId(n: number): string {
+  return (0x100000 + n).toString(16).padStart(32, '0')
+}
+
+/** Fills the request table with `count` published status entries, as earlier polls would have left them. */
+function seedTable(w: World, count: number, expiresAt: (i: number) => number): void {
+  const requests: Record<string, AgentctlRcEntry> = {}
+  for (let i = 0; i < count; i++) {
+    requests[seededId(i)] = { phase: 'published', action: 'status', origin: 'file', admittedAt: START, expiresAt: expiresAt(i) }
+  }
+  w.seeds.set('requests', requests)
+}
+
+/** The request table as the mod last stored it, or the seed when it has stored none. */
+function tableOf(w: World): Record<string, AgentctlRcEntry> {
+  return (w.state.get('requests') ?? w.seeds.get('requests') ?? {}) as Record<string, AgentctlRcEntry>
+}
+
+function rejectedOf(w: World): AgentctlRcRejected[] {
+  return (w.state.get('rejected') ?? []) as AgentctlRcRejected[]
 }
 
 async function turnStart($: Engine, turnId = 'turn-1'): Promise<void> {
@@ -530,8 +579,10 @@ describe('bounds', () => {
     await w.clock.advance(500)
     expect(w.ack(refused)).toEqual({ v: 1, id: refused, action: '', state: 'rejected', reason: 'busy', answeredAt: START + 1_000 })
     expect(await command($, 'reconnect')).toBe('Too many requests are pending; try again shortly.')
-    // The full table answers busy without reading the file.
-    expect(w.argv.filter((a) => a[3] === `${DIR}/${refused}.request.json`)).toEqual([])
+    // The metadata check runs first; the full table then answers busy
+    // without reading the body.
+    expect(w.argv.filter((a) => a[3] === `${DIR}/${refused}.request.json`).length).toBe(1)
+    expect(w.reads).not.toContain(`${DIR}/${refused}.request.json`)
     await w.clock.advance(4_500)
     expect(w.response(held[0] ?? '')?.result).toBe('expired')
     const admitted = 'd'.repeat(32)
@@ -541,6 +592,109 @@ describe('bounds', () => {
     expect(w.writesTo(`${refused}.ack.json`).length).toBe(1)
     expect(w.ack(refused)?.reason).toBe('busy')
     expect(w.runs).toEqual([])
+  })
+
+  test('answers busy at the 1 024-entry cap without evicting an unexpired entry, and admits once one expires', async ($, on) => {
+    const w = new World(on)
+    seedTable(w, 1024, (i) => (i === 0 ? START + 1_000 : START + 600_000))
+    await start($)
+    const refused = 'e'.repeat(32)
+    w.request(refused, { action: 'status', expiresAt: START + 3_000 })
+    await w.clock.advance(500)
+    expect(w.ack(refused)).toEqual({ v: 1, id: refused, action: '', state: 'rejected', reason: 'busy', answeredAt: START + 500 })
+    expect(w.reads).not.toContain(`${DIR}/${refused}.request.json`)
+    const held = tableOf(w)
+    expect(Object.keys(held).length).toBe(1024)
+    expect(held[seededId(0)]?.phase).toBe('published')
+    expect(refused in held).toBe(false)
+    const admitted = 'd'.repeat(32)
+    w.request(admitted, { action: 'status', expiresAt: START + 3_000 })
+    await w.clock.advance(500)
+    const after = tableOf(w)
+    expect(seededId(0) in after).toBe(false)
+    expect(Object.keys(after).length).toBe(1024)
+    expect(w.ack(admitted)?.state).toBe('accepted')
+    expect(w.response(admitted)?.result).toBe('ok')
+    expect(w.writesTo(`${refused}.ack.json`).length).toBe(1)
+    expect(w.response(refused)).toBeUndefined()
+  })
+
+  test('never admits a request answered busy, across reloads, while full and after capacity frees', async ($, on) => {
+    const w = new World(on)
+    seedTable(w, 1024, (i) => (i === 0 ? START + 1_000 : START + 600_000))
+    await start($)
+    w.request(ID_A)
+    await w.clock.advance(500)
+    const busy = w.writesTo(`${ID_A}.ack.json`)
+    expect(busy.length).toBe(1)
+    expect(JSON.parse(busy[0]?.text ?? '{}')).toMatchObject({ state: 'rejected', reason: 'busy' })
+    // Still full: the reload must not answer the same file again.
+    await reload($)
+    await w.clock.advance(500)
+    expect(seededId(0) in tableOf(w)).toBe(false)
+    // A slot is free now; a second reload must still not admit the file.
+    await reload($)
+    await w.clock.advance(5_000)
+    expect(w.runs).toEqual([])
+    expect(w.writesTo(`${ID_A}.ack.json`)).toEqual(busy)
+    expect(w.response(ID_A)).toBeUndefined()
+    expect(ID_A in tableOf(w)).toBe(false)
+    expect(rejectedOf(w)).toEqual([{ id: ID_A, reason: 'busy', expiresAt: START + 500 + 600_000 }])
+  })
+
+  test('answers a full table with the metadata rejection, never busy, for a file that fails the metadata check', async ($, on) => {
+    const w = new World(on)
+    w.requests(64, 1)
+    await start($)
+    await turnStart($)
+    await w.clock.advance(500)
+    w.request(ID_A, {}, { mode: '644' })
+    w.request(ID_B, {}, { uid: 502 })
+    w.request(ID_C, {}, { real: '/Users/tester/elsewhere/planted.request.json' })
+    await w.clock.advance(500)
+    expect(w.ack(ID_A)).toEqual({ v: 1, id: ID_A, action: '', state: 'rejected', reason: 'metadata', answeredAt: START + 1_000 })
+    expect(w.ack(ID_B)).toEqual({ v: 1, id: ID_B, action: '', state: 'rejected', reason: 'metadata', answeredAt: START + 1_000 })
+    expect(w.ack(ID_C)).toBeUndefined()
+    expect(w.writes.filter((x) => x.text.includes('"busy"'))).toEqual([])
+    expect(w.runs).toEqual([])
+  })
+
+  test('keeps at most 256 refusals, evicting the oldest expired one first, else the oldest', async ($, on) => {
+    const w = new World(on)
+    const seeded: AgentctlRcRejected[] = []
+    for (let i = 0; i < 256; i++) {
+      seeded.push({ id: seededId(i), reason: 'metadata', expiresAt: i === 3 || i === 7 ? START + 100 : START + 600_000 })
+    }
+    w.seeds.set('rejected', seeded)
+    await start($)
+    const ids = w.requests(3, 0xa0, () => ({ v: 2 }))
+    await w.clock.advance(500)
+    const held = rejectedOf(w)
+    expect(held.length).toBe(256)
+    const kept = new Set(held.map((r) => r.id))
+    expect(kept.has(seededId(3))).toBe(false)
+    expect(kept.has(seededId(7))).toBe(false)
+    expect(kept.has(seededId(0))).toBe(false)
+    expect(kept.has(seededId(1))).toBe(true)
+    expect(held.slice(-3).map((r) => r.id)).toEqual(ids)
+    for (const id of ids) expect(w.ack(id)?.reason).toBe('version')
+  })
+
+  test('republishes an unwritten rejection with the same bytes after a reload, and examines the file no further', async ($, on) => {
+    const w = new World(on)
+    w.failAckWrites = 1
+    w.request(ID_A, {}, { mode: '644' })
+    await start($)
+    await w.clock.advance(500)
+    expect(w.failedWrites.length).toBe(1)
+    expect(w.ack(ID_A)).toBeUndefined()
+    await reload($)
+    await w.clock.advance(1_500)
+    const delivered = w.writesTo(`${ID_A}.ack.json`)
+    expect(delivered.length).toBe(1)
+    expect(delivered[0]?.text).toBe(w.failedWrites[0]?.text)
+    expect(w.argv.filter((a) => a[3] === `${DIR}/${ID_A}.request.json`).length).toBe(1)
+    expect(rejectedOf(w)).toEqual([{ id: ID_A, reason: 'metadata', expiresAt: START + 500 + 600_000 }])
   })
 
   test('never runs a retained reconnect file twice, across 64 later requests, a lost bridge and a reload', async ($, on) => {

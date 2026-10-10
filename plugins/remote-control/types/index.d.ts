@@ -23,8 +23,12 @@ export type AgentctlRcResult = 'ok' | 'reconnected' | 'already_connected' | 'una
 /** Why a request file was rejected at admission. */
 export type AgentctlRcRejectReason = 'name' | 'expired' | 'duplicate' | 'metadata' | 'action' | 'subject' | 'version' | 'busy'
 
-/** An environment variable as the session sees it: whether it is set, and its spelling when it is. */
-export type AgentctlRcEnvValue = { set: boolean; value: string }
+/**
+ * An environment variable as the session sees it: whether it is set, and its
+ * spelling when it is. `value` is required only when `set` is true; for an
+ * unset variable it may be absent and is ignored.
+ */
+export type AgentctlRcEnvValue = { set: boolean; value?: string }
 
 /**
  * The environment the session's keychain service name is derived from.
@@ -70,6 +74,19 @@ export type AgentctlRcResponse = {
   reason?: string
 }
 
+/**
+ * A request file the mod refused. A file whose id is listed is never admitted.
+ * The entry is kept at least until `expiresAt`, and is evicted only to make
+ * room, oldest expired first.
+ */
+export type AgentctlRcRejected = {
+  id: string
+  reason: AgentctlRcRejectReason
+  expiresAt: number
+  /** The acknowledgement text while it is not yet written; absent once it is. */
+  ack?: string
+}
+
 /** A delivery that must happen exactly once: the exact text, and whether it went out. */
 export type AgentctlRcDelivery = { text: string; published: boolean }
 
@@ -79,10 +96,7 @@ export type AgentctlRcEntry = {
   action: AgentctlRcAction
   origin: AgentctlRcOrigin
   admittedAt: number
-  /**
-   * When the request expires. For a rejection, how long the refusal is
-   * remembered. No entry leaves the table before this time.
-   */
+  /** When the request expires. No entry leaves the table before this time. */
   expiresAt: number
   /** When `remote-control` was issued. */
   runStartedAt?: number
@@ -101,6 +115,8 @@ declare module 'claude-code' {
     'agentctl-remote-control': {
       /** Every request this session admitted: at most 1 024 entries, 64 of them not yet answered. */
       requests: Record<string, AgentctlRcEntry>
+      /** The request files this session refused, oldest first: at most 256 entries. */
+      rejected: AgentctlRcRejected[]
       /** How many distinct bridges this session has been seen to hold. */
       generation: number
       /** The uid `/usr/bin/id -u` answered at session start. */
