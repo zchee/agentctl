@@ -255,7 +255,7 @@ rcmod seed a reconnect=unavailable
 exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
 stdout '"outcome": "applied"'
 rcmod counts eligible=1 dropped=1 unavailable=1
-stderr -count=1 '^warning: Remote Control cannot start in 1 Claude Code session \(the command is missing, or the session answers through a gateway or a third-party provider\), so it stays off there$'
+stderr -count=1 '^warning: agentctl cannot restart Remote Control in 1 Claude Code session automatically \(the command is missing there, or the session answers through a gateway or a third-party provider\); if Remote Control stops there, run `/remote-control` there$'
 rcmod check a 1 1
 
 # remote_control_restart_classes_a_session_without_the_command_unavailable_before_the_swap (arm: rc-unlisted)
@@ -264,7 +264,7 @@ rcmod seed a listed=false drop=never
 exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
 stdout '"outcome": "applied"'
 rcmod counts unavailable=1
-stderr -count=1 '^warning: Remote Control cannot start in 1 Claude Code session \(the command is missing, or the session answers through a gateway or a third-party provider\), so it stays off there$'
+stderr -count=1 '^warning: agentctl cannot restart Remote Control in 1 Claude Code session automatically \(the command is missing there, or the session answers through a gateway or a third-party provider\); if Remote Control stops there, run `/remote-control` there$'
 stderr -count=1 '^warning: 1 Claude Code session \(`rcmod-a`\) had Remote Control on when this swap started'
 rcmod check a 1 0
 
@@ -287,6 +287,24 @@ stdout '"outcome": "applied"'
 rcmod counts metadata_rejected=1
 stderr -count=1 '^warning: 1 Claude Code session with Remote Control on refused agentctl''s request because the request file''s owner or mode was not what the mod expects, so agentctl asked it nothing more$'
 stderr -count=1 '^warning: 1 Claude Code session \(`rcmod-a`\) had Remote Control on when this swap started'
+rcmod check a 1 0
+
+# remote_control_restart_counts_a_version_rejection_at_status (arm: rc-status-version-rejected)
+swapfixture live rc-status-version-rejected
+rcmod seed a status=reject:version
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
+rcmod counts version_rejected=1
+stderr -count=1 '^warning: 1 Claude Code session with Remote Control on runs a Claude Code release older than 2.1.287, or records none, so agentctl asked it nothing$'
+rcmod check a 1 0
+
+# remote_control_restart_refuses_the_swap_when_a_session_is_busy (arm: rc-busy)
+swapfixture live rc-busy
+rcmod seed a status=reject:busy
+exec expectexit 30 agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"reason": "remote_control_unreachable"'
+rcmod counts unreachable=1
+swap-check 0 0 0
 rcmod check a 1 0
 
 # remote_control_restart_skips_the_session_that_shares_the_registry_but_not_the_item (arm: rc-provenance-skipped)
@@ -414,7 +432,17 @@ swapfixture live rc-wrong-id
 rcmod seed a reconnect=wrongid
 exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
 stdout '"outcome": "applied"'
+rcmod counts eligible=1 dropped=1 not_confirmed=1
+stderr -count=1 '^warning: 1 Claude Code session did not confirm that Remote Control started again; run `/remote-control` there$'
+rcmod check a 1 1
+
+# remote_control_restart_takes_the_valid_response_after_a_foreign_one (arm: rc-wrong-id-then)
+swapfixture live rc-wrong-id-then
+rcmod seed a reconnect=wrongid-then
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control
+stdout '"outcome": "applied"'
 rcmod counts eligible=1 dropped=1 reconnected=1
+! stderr 'Remote Control'
 rcmod check a 1 1
 
 # remote_control_restart_retries_an_unknown_result_to_the_deadline (arm: rc-unknown-result)

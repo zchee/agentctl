@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build agentctl_testing
+
 package testutil
 
 import (
@@ -139,8 +141,8 @@ func rcmodCmd(ts *testscript.TestScript, neg bool, args []string) {
 // (live, explicit, isolated, gateway, token), drop (milliseconds after a
 // status answer before the bridge vanishes, or never, replace, vanish),
 // reconnect (reconnected, unavailable, expired, silent, unknown, wrongid,
-// early, truncated, reject:<reason>), delay (milliseconds before a
-// reconnect answer) and listed (false when `remote-control` is not among
+// wrongid-then, early, truncated, reject:<reason>), delay (milliseconds
+// before a reconnect answer) and listed (false when `remote-control` is not among
 // the session's commands).
 func (world *rcmodWorld) seed(ts *testscript.TestScript, name string, args []string) {
 	behavior := map[string]string{"version": "2.1.296", "status": "ok", "provenance": "live", "drop": "200", "reconnect": "reconnected", "delay": "0", "listed": "true"}
@@ -250,11 +252,17 @@ func (s *rcmodSession) serve(ctx context.Context, wg *sync.WaitGroup) {
 
 func (s *rcmodSession) answer(ctx context.Context, dir, id, action string) {
 	ack := func(state, reason string) string {
-		member := ""
+		member, echoed := "", action
 		if reason != "" {
 			member = fmt.Sprintf(",%q:%q", "reason", reason)
 		}
-		return fmt.Sprintf(`{"v":1,"id":%q,"action":%q,"state":%q%s,"answeredAt":%d}`, id, action, state, member, time.Now().UnixMilli())
+		// The real mod rejects these before it has read the action, so its
+		// rejection carries an empty one.
+		switch reason {
+		case "metadata", "version", "busy":
+			echoed = ""
+		}
+		return fmt.Sprintf(`{"v":1,"id":%q,"action":%q,"state":%q%s,"answeredAt":%d}`, id, echoed, state, member, time.Now().UnixMilli())
 	}
 	response := func(responseID, result string) string {
 		s.mu.Lock()
@@ -331,6 +339,12 @@ func (s *rcmodSession) answer(ctx context.Context, dir, id, action string) {
 		case behavior == "wrongid":
 			write(".ack.json", ack("accepted", ""))
 			write(".response.json", response(strings.Repeat("f", 32), "reconnected"))
+			return
+		case behavior == "wrongid-then":
+			// The foreign answer carries another result word, so a client that
+			// took it would count it instead of the valid one that follows.
+			write(".ack.json", ack("accepted", ""))
+			write(".response.json", response(strings.Repeat("f", 32), "unavailable"))
 			if !pause(400 * time.Millisecond) {
 				return
 			}

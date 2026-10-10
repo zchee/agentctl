@@ -118,6 +118,11 @@ seam_files=(
 	internal/secret/namespace_lock_testing.go
 	internal/testutil/buildtag_testing.go
 )
+# Test-only files the testing tag selects with no release counterpart: the
+# scripted helpers the test binary links, never a seam the product reads.
+testing_only_files=(
+	internal/testutil/rcmod_script.go
+)
 
 for mode in release testing; do
 	args=()
@@ -157,6 +162,10 @@ comm -23 "$work/release-files" "$work/testing-files" >|"$work/release-only"
 for file in "${seam_files[@]}"; do
 	printf '%s/%s\n' "$repo_root" "$file"
 done | sort -u >|"$work/expected-testing"
+for file in "${testing_only_files[@]}"; do
+	printf '%s/%s\n' "$repo_root" "$file"
+done | sort -u -m - "$work/expected-testing" >|"$work/expected-testing.all"
+mv -f "$work/expected-testing.all" "$work/expected-testing"
 for file in "${seam_files[@]}"; do
 	printf '%s/%s\n' "$repo_root" "${file%_testing.go}_release.go"
 done | sort -u >|"$work/expected-release"

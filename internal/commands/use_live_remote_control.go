@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -264,40 +265,120 @@ type useRCAck struct {
 	AnsweredAt *float64 `json:"answeredAt"`
 }
 
-type useRCBridge struct {
+// The response's wire types hold every member through a pointer, so a
+// member the mod left out is told apart from one it wrote as false, zero or
+// empty: an incomplete response is "not yet", never a default.
+type useRCBridgeWire struct {
 	Present    *bool    `json:"present"`
 	Generation *float64 `json:"generation"`
 }
 
-type useRCResponse struct {
-	V          *int                            `json:"v"`
-	ID         *string                         `json:"id"`
-	Action     *string                         `json:"action"`
-	Result     *string                         `json:"result"`
-	AnsweredAt *float64                        `json:"answeredAt"`
-	Bridge     *useRCBridge                    `json:"bridge"`
-	Surfaces   []string                        `json:"surfaces"`
-	Version    *string                         `json:"version"`
-	Listed     *bool                           `json:"remoteControlListed"`
-	Provenance *claude.RemoteControlProvenance `json:"provenance"`
-	Reason     *string                         `json:"reason"`
+type useRCEnvWire struct {
+	Set   *bool   `json:"set"`
+	Value *string `json:"value"`
 }
 
-// matches reports whether the envelope belongs to this request.
+type useRCProvenanceWire struct {
+	Home             *string       `json:"home"`
+	ConfigDir        *useRCEnvWire `json:"configDir"`
+	SecureStorageDir *useRCEnvWire `json:"secureStorageDir"`
+	OAuthTokenSet    *bool         `json:"oauthTokenSet"`
+	APIKeySet        *bool         `json:"apiKeySet"`
+	BaseURLSet       *bool         `json:"baseUrlSet"`
+	Authorized       *bool         `json:"authorized"`
+}
+
+type useRCResponseWire struct {
+	V          *int                 `json:"v"`
+	ID         *string              `json:"id"`
+	Action     *string              `json:"action"`
+	Result     *string              `json:"result"`
+	AnsweredAt *float64             `json:"answeredAt"`
+	Bridge     *useRCBridgeWire     `json:"bridge"`
+	Surfaces   *[]string            `json:"surfaces"`
+	Version    *string              `json:"version"`
+	Listed     *bool                `json:"remoteControlListed"`
+	Provenance *useRCProvenanceWire `json:"provenance"`
+	Reason     *string              `json:"reason"`
+}
+
+// useRCResponse is a complete response, as the rest of the follow-up
+// reads it.
+type useRCResponse struct {
+	result     string
+	listed     bool
+	provenance claude.RemoteControlProvenance
+}
+
+// env converts one reported variable. The value is required only when the
+// variable is set; an unset variable has no spelling to report.
+func (w *useRCEnvWire) env() (claude.RemoteControlEnvValue, bool) {
+	if w == nil || w.Set == nil || *w.Set && w.Value == nil {
+		return claude.RemoteControlEnvValue{}, false
+	}
+	value := claude.RemoteControlEnvValue{Set: *w.Set}
+	if value.Set {
+		value.Value = *w.Value
+	}
+	return value, true
+}
+
+func (w *useRCProvenanceWire) provenance() (claude.RemoteControlProvenance, bool) {
+	if w == nil || w.Home == nil || w.OAuthTokenSet == nil || w.APIKeySet == nil || w.BaseURLSet == nil || w.Authorized == nil {
+		return claude.RemoteControlProvenance{}, false
+	}
+	configDir, ok := w.ConfigDir.env()
+	if !ok {
+		return claude.RemoteControlProvenance{}, false
+	}
+	secureStorageDir, ok := w.SecureStorageDir.env()
+	if !ok {
+		return claude.RemoteControlProvenance{}, false
+	}
+	return claude.RemoteControlProvenance{Home: *w.Home, ConfigDir: configDir, SecureStorageDir: secureStorageDir, OAuthTokenSet: *w.OAuthTokenSet, APIKeySet: *w.APIKeySet, BaseURLSet: *w.BaseURLSet, Authorized: *w.Authorized}, true
+}
+
+// complete converts a response that carries every member the contract
+// requires of both actions; anything less reads as "not yet".
+func (w *useRCResponseWire) complete() (useRCResponse, bool) {
+	if w.Result == nil || w.AnsweredAt == nil || w.Bridge == nil || w.Bridge.Present == nil || w.Bridge.Generation == nil || w.Surfaces == nil || w.Version == nil || w.Listed == nil {
+		return useRCResponse{}, false
+	}
+	provenance, ok := w.Provenance.provenance()
+	if !ok {
+		return useRCResponse{}, false
+	}
+	return useRCResponse{result: *w.Result, listed: *w.Listed, provenance: provenance}, true
+}
+
+// useRCMatches reports whether the envelope belongs to this request.
 func useRCMatches(v *int, id, action *string, wantID, wantAction string) bool {
 	return v != nil && *v == useRCContractVersion && id != nil && *id == wantID && action != nil && *action == wantAction
 }
 
+// readAck accepts an accepted acknowledgement only for this exact request.
+// A rejected one may carry an empty action, because the mod rejects some
+// requests (an unreadable body, a wrong owner or mode) before it knows the
+// action; its version and id must still be this request's.
 func (t useRCTransport) readAck(dir, id, action string) (useRCAck, bool) {
 	body, ok := t.read(filepath.Join(dir, id+".ack.json"))
 	if !ok {
 		return useRCAck{}, false
 	}
 	var ack useRCAck
-	if json.Unmarshal(body, &ack) != nil || !useRCMatches(ack.V, ack.ID, ack.Action, id, action) || ack.State == nil || ack.AnsweredAt == nil {
+	if json.Unmarshal(body, &ack) != nil || ack.State == nil || ack.AnsweredAt == nil {
 		return useRCAck{}, false
 	}
-	if *ack.State != "accepted" && *ack.State != "rejected" {
+	switch *ack.State {
+	case "accepted":
+		if !useRCMatches(ack.V, ack.ID, ack.Action, id, action) {
+			return useRCAck{}, false
+		}
+	case "rejected":
+		if !useRCMatches(ack.V, ack.ID, ack.Action, id, action) && !useRCMatches(ack.V, ack.ID, ack.Action, id, "") {
+			return useRCAck{}, false
+		}
+	default:
 		return useRCAck{}, false
 	}
 	return ack, true
@@ -314,15 +395,12 @@ func (t useRCTransport) readResponse(dir, id, action string) (useRCResponse, boo
 	if !ok {
 		return useRCResponse{}, false
 	}
-	var response useRCResponse
-	if json.Unmarshal(body, &response) != nil || !useRCMatches(response.V, response.ID, response.Action, id, action) || response.Result == nil || response.AnsweredAt == nil || response.Bridge == nil || response.Bridge.Present == nil {
+	var wire useRCResponseWire
+	if json.Unmarshal(body, &wire) != nil || !useRCMatches(wire.V, wire.ID, wire.Action, id, action) {
 		return useRCResponse{}, false
 	}
-	known := false
-	for _, result := range useRCResults[action] {
-		known = known || result == *response.Result
-	}
-	if !known || action == useRCActionStatus && (response.Provenance == nil || response.Version == nil || response.Listed == nil) {
+	response, ok := wire.complete()
+	if !ok || !slices.Contains(useRCResults[action], response.result) {
 		return useRCResponse{}, false
 	}
 	return response, true
@@ -515,7 +593,14 @@ func (rc *useRemoteControl) classify(ctx context.Context, session useBridgedSess
 	if !session.decoded || !ok || version.Less(claude.RemoteControlMinVersion) {
 		return useRCVersionRejected, ""
 	}
-	dir, err := rc.transport.open(session.pid)
+	// The registry names each record after its process, and the transport
+	// directory is named after the pid. A record whose pid is not its own
+	// file name could steer a request at another process, so it is refused,
+	// which refuses the swap.
+	if session.record.PID == 0 || filepath.Base(session.path) != strconv.FormatUint(uint64(session.record.PID), 10)+".json" {
+		return useRCUnreachable, ""
+	}
+	dir, err := rc.transport.open(session.record.PID)
 	if err != nil {
 		slog.DebugContext(ctx, "the Remote Control transport directory was refused", slog.Any("error", err))
 		return useRCUnreachable, ""
@@ -523,11 +608,11 @@ func (rc *useRemoteControl) classify(ctx context.Context, session useBridgedSess
 	answer := rc.transport.exchange(ctx, dir, useRCActionStatus, rc.service, rc.transport.timing.status)
 	switch answer.kind {
 	case useRCAnswered:
-		if !*answer.response.Listed {
+		if !answer.response.listed {
 			// The command is not offered there, so no request could start it.
 			return useRCUnavailable, dir
 		}
-		if answer.response.Provenance.Concerns(rc.service) {
+		if answer.response.provenance.Concerns(rc.service) {
 			return useRCEligible, dir
 		}
 		return useRCProvenanceSkipped, dir
@@ -672,7 +757,7 @@ func (rc *useRemoteControl) reconnect(ctx context.Context, session useRCSession)
 	outcome := useRCOutcome{dropped: true}
 	switch answer.kind {
 	case useRCAnswered:
-		outcome.result, outcome.counted = *answer.response.Result, true
+		outcome.result, outcome.counted = answer.response.result, true
 	case useRCRejected:
 		outcome.class = useRCRejection(answer.reason)
 	default:

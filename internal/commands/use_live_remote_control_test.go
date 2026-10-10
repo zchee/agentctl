@@ -106,12 +106,19 @@ func rcAck(request useRCRequest, state, reason string) string {
 	return fmt.Sprintf(`{"v":1,"id":%q,"action":%q,"state":%q%s,"answeredAt":%d}`, request.ID, request.Action, state, reasonMember, time.Now().UnixMilli())
 }
 
+// rcAckAs writes an acknowledgement whose action member is chosen by the
+// test, as the mod does when it rejects a request before reading it.
+func rcAckAs(request useRCRequest, action, state, reason string) string {
+	request.Action = action
+	return rcAck(request, state, reason)
+}
+
 func rcStatus(request useRCRequest, provenance string) string {
 	return fmt.Sprintf(`{"v":1,"id":%q,"action":"status","result":"ok","answeredAt":%d,"bridge":{"present":true,"generation":1},"surfaces":["terminal"],"version":"2.1.296","remoteControlListed":true,"provenance":%s}`, request.ID, time.Now().UnixMilli(), provenance)
 }
 
 func rcReconnect(request useRCRequest, result string) string {
-	return fmt.Sprintf(`{"v":1,"id":%q,"action":"reconnect","result":%q,"answeredAt":%d,"bridge":{"present":true,"generation":2},"surfaces":["terminal"],"version":"2.1.296","provenance":{"home":"/h","configDir":{"set":false,"value":""},"secureStorageDir":{"set":false,"value":""},"oauthTokenSet":false,"apiKeySet":false,"baseUrlSet":false,"authorized":true}}`, request.ID, result, time.Now().UnixMilli())
+	return fmt.Sprintf(`{"v":1,"id":%q,"action":"reconnect","result":%q,"answeredAt":%d,"bridge":{"present":true,"generation":2},"surfaces":["terminal"],"version":"2.1.296","remoteControlListed":true,"provenance":{"home":"/h","configDir":{"set":false,"value":""},"secureStorageDir":{"set":false,"value":""},"oauthTokenSet":false,"apiKeySet":false,"baseUrlSet":false,"authorized":true}}`, request.ID, result, time.Now().UnixMilli())
 }
 
 const rcLiveProvenance = `{"home":"/h","configDir":{"set":false,"value":""},"secureStorageDir":{"set":false,"value":""},"oauthTokenSet":false,"apiKeySet":false,"baseUrlSet":false,"authorized":true}`
@@ -312,6 +319,43 @@ func TestUseRCWait(t *testing.T) {
 			},
 			wantKind: useRCRejected, wantReason: "metadata",
 		},
+		"error: a status rejection with an empty action carries its reason": {
+			action: useRCActionStatus,
+			handle: func(t *testing.T, dir string, r useRCRequest) {
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAckAs(r, "", "rejected", "metadata"))
+			},
+			wantKind: useRCRejected, wantReason: "metadata",
+		},
+		"error: a reconnect rejection with an empty action carries its reason": {
+			action: useRCActionReconnect,
+			handle: func(t *testing.T, dir string, r useRCRequest) {
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAckAs(r, "", "rejected", "version"))
+			},
+			wantKind: useRCRejected, wantReason: "version",
+		},
+		"error: a rejection naming another action is ignored": {
+			action: useRCActionStatus,
+			handle: func(t *testing.T, dir string, r useRCRequest) {
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAckAs(r, useRCActionReconnect, "rejected", "metadata"))
+			},
+			wantKind: useRCSilent,
+		},
+		"error: a rejection with an empty action for another id is ignored": {
+			action: useRCActionStatus,
+			handle: func(t *testing.T, dir string, r useRCRequest) {
+				other := r
+				other.ID = strings.Repeat("0", 32)
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAckAs(other, "", "rejected", "metadata"))
+			},
+			wantKind: useRCSilent,
+		},
+		"error: an acceptance with an empty action is ignored": {
+			action: useRCActionReconnect,
+			handle: func(t *testing.T, dir string, r useRCRequest) {
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAckAs(r, "", "accepted", ""))
+			},
+			wantKind: useRCSilent,
+		},
 		"error: silence is no ack": {
 			action:   useRCActionStatus,
 			handle:   func(*testing.T, string, useRCRequest) {},
@@ -408,8 +452,8 @@ func TestUseRCWait(t *testing.T) {
 			}
 			answer := transport.exchange(ctx, dir, tt.action, claude.LiveService, lifetime)
 			result := ""
-			if answer.response.Result != nil {
-				result = *answer.response.Result
+			if answer.kind == useRCAnswered {
+				result = answer.response.result
 			}
 			if answer.kind != tt.wantKind || answer.reason != tt.wantReason || result != tt.wantResult {
 				t.Fatalf("answer kind=%d reason=%q result=%q, want kind=%d reason=%q result=%q", answer.kind, answer.reason, result, tt.wantKind, tt.wantReason, tt.wantResult)
@@ -419,6 +463,165 @@ func TestUseRCWait(t *testing.T) {
 				if strings.Contains(entry.Name(), ".request.json") {
 					t.Fatalf("the request was not removed: %s", entry.Name())
 				}
+			}
+		})
+	}
+}
+
+func TestUseRCRejectionClasses(t *testing.T) {
+	tests := map[string]struct {
+		reason string
+		want   useRCClass
+	}{
+		"success: metadata":                  {reason: "metadata", want: useRCMetadataRejected},
+		"success: version":                   {reason: "version", want: useRCVersionRejected},
+		"error: busy is unreachable":         {reason: "busy", want: useRCUnreachable},
+		"error: name is unreachable":         {reason: "name", want: useRCUnreachable},
+		"error: duplicate is unreachable":    {reason: "duplicate", want: useRCUnreachable},
+		"error: no reason is unreachable":    {reason: "", want: useRCUnreachable},
+		"error: an unknown word unreachable": {reason: "later", want: useRCUnreachable},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := useRCRejection(tt.reason); got != tt.want {
+				t.Fatalf("useRCRejection(%q) = %d, want %d", tt.reason, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestUseRCReadsTheModMetadataRejection crosses the two halves: the bytes the
+// mod's own test pins for a request file with the wrong owner or mode (an
+// empty action, because the mod rejects it before reading the body) must
+// class the session as a metadata rejection, not as one that never answered.
+func TestUseRCReadsTheModMetadataRejection(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "plugins", "remote-control", "testdata", "ack-metadata-rejected.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.ID == "" {
+		t.Fatalf("the fixture has no id: %v", err)
+	}
+	transport, _ := testRCTransport(t)
+	dir, err := transport.open(99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRCFile(t, filepath.Join(dir, envelope.ID+".ack.json"), string(body))
+	answer := transport.wait(t.Context(), dir, envelope.ID, useRCActionStatus, time.Now(), transport.timing.status)
+	if answer.kind != useRCRejected {
+		t.Fatalf("answer kind=%d, want the rejection", answer.kind)
+	}
+	if got := useRCRejection(answer.reason); got != useRCMetadataRejected {
+		t.Fatalf("class=%d for reason %q, want metadata_rejected", got, answer.reason)
+	}
+}
+
+// rcCompleteResponse is a response carrying every member the contract
+// requires, with both directory variables set so their values are required.
+func rcCompleteResponse(request useRCRequest, action, result string) map[string]any {
+	set := func(value string) map[string]any { return map[string]any{"set": true, "value": value} }
+	return map[string]any{
+		"v": 1, "id": request.ID, "action": action, "result": result, "answeredAt": time.Now().UnixMilli(),
+		"bridge":   map[string]any{"present": true, "generation": 2},
+		"surfaces": []any{"terminal"}, "version": "2.1.296", "remoteControlListed": true,
+		"provenance": map[string]any{"home": "/h", "configDir": set("/h/.claude"), "secureStorageDir": set("/h/secure"), "oauthTokenSet": false, "apiKeySet": false, "baseUrlSet": false, "authorized": true},
+	}
+}
+
+// rcEdit applies change to the object at the dotted path's parent.
+func rcEdit(document map[string]any, path string, change func(parent map[string]any, key string)) {
+	keys := strings.Split(path, ".")
+	parent := document
+	for _, key := range keys[:len(keys)-1] {
+		parent = parent[key].(map[string]any)
+	}
+	change(parent, keys[len(keys)-1])
+}
+
+func TestUseRCReadResponseRequiresEveryMember(t *testing.T) {
+	type testCase struct {
+		action string
+		edit   func(document map[string]any)
+		want   bool
+		// wantProvenance is the converted provenance of a complete response.
+		wantProvenance claude.RemoteControlProvenance
+	}
+	complete := claude.RemoteControlProvenance{Home: "/h", ConfigDir: claude.RemoteControlEnvValue{Set: true, Value: "/h/.claude"}, SecureStorageDir: claude.RemoteControlEnvValue{Set: true, Value: "/h/secure"}, Authorized: true}
+	tests := map[string]testCase{}
+	required := []string{
+		"v", "id", "action", "result", "answeredAt", "bridge", "bridge.present", "bridge.generation", "surfaces", "version", "remoteControlListed",
+		"provenance", "provenance.home", "provenance.configDir", "provenance.configDir.set", "provenance.configDir.value",
+		"provenance.secureStorageDir", "provenance.secureStorageDir.set", "provenance.secureStorageDir.value",
+		"provenance.oauthTokenSet", "provenance.apiKeySet", "provenance.baseUrlSet", "provenance.authorized",
+	}
+	// One case per required member and action, so a member the reader stops
+	// checking fails by name.
+	for _, action := range []string{useRCActionStatus, useRCActionReconnect} {
+		tests["success: a complete "+action+" response"] = testCase{action: action, edit: func(map[string]any) {}, want: true, wantProvenance: complete}
+		tests["success: an unset variable needs no value in a "+action+" response"] = testCase{
+			action: action,
+			edit: func(document map[string]any) {
+				rcEdit(document, "provenance.configDir", func(parent map[string]any, key string) { parent[key] = map[string]any{"set": false} })
+			},
+			want:           true,
+			wantProvenance: claude.RemoteControlProvenance{Home: "/h", SecureStorageDir: complete.SecureStorageDir, Authorized: true},
+		}
+		for _, path := range required {
+			tests["error: a "+action+" response without "+path] = testCase{action: action, edit: func(document map[string]any) {
+				rcEdit(document, path, func(parent map[string]any, key string) { delete(parent, key) })
+			}}
+			tests["error: a "+action+" response with a null "+path] = testCase{action: action, edit: func(document map[string]any) {
+				rcEdit(document, path, func(parent map[string]any, key string) { parent[key] = nil })
+			}}
+		}
+		tests["error: a "+action+" response whose provenance is only authorized"] = testCase{action: action, edit: func(document map[string]any) {
+			document["provenance"] = map[string]any{"authorized": true}
+		}}
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			transport, _ := testRCTransport(t)
+			dir, err := transport.open(99)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := "ok"
+			lifetime := transport.timing.status
+			if tt.action == useRCActionReconnect {
+				result, lifetime = claude.RemoteControlReconnected, transport.timing.reconnect
+			}
+			testRCResponder(t, dir, func(dir string, r useRCRequest) {
+				document := rcCompleteResponse(r, tt.action, result)
+				tt.edit(document)
+				body, err := json.Marshal(document)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				writeRCFile(t, filepath.Join(dir, r.ID+".ack.json"), rcAck(r, "accepted", ""))
+				writeRCFile(t, filepath.Join(dir, r.ID+".response.json"), string(body))
+			})
+			answer := transport.exchange(t.Context(), dir, tt.action, claude.LiveService, lifetime)
+			if !tt.want {
+				// Without a complete response nothing is counted as an
+				// answer: the status round classes the session unreachable,
+				// and the follow-up counts it not confirmed.
+				if answer.kind != useRCNoResponse || answer.response != (useRCResponse{}) {
+					t.Fatalf("answer kind=%d response=%+v, want no response", answer.kind, answer.response)
+				}
+				return
+			}
+			want := useRCResponse{result: result, listed: true, provenance: tt.wantProvenance}
+			if answer.kind != useRCAnswered {
+				t.Fatalf("answer kind=%d, want an answer", answer.kind)
+			}
+			if diff := gocmp.Diff(want, answer.response, gocmp.AllowUnexported(useRCResponse{})); diff != "" {
+				t.Fatalf("response mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -586,6 +789,53 @@ func TestUseRemoteControlPreflightSendsNothingToAnOldSession(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(transport.root, "77")); !os.IsNotExist(err) {
 		t.Fatalf("a transport directory was made for a session that gets no request: %v", err)
+	}
+}
+
+// TestUseRemoteControlPreflightRefusesARecordNotNamedByItsPid covers the
+// registry record that could steer a request at another process: its pid
+// must be its own file name, or the session is unreachable and the swap is
+// refused before any transport directory exists.
+func TestUseRemoteControlPreflightRefusesARecordNotNamedByItsPid(t *testing.T) {
+	tests := map[string]struct {
+		file string
+		body string
+	}{
+		"error: the record names another pid": {
+			file: "999.json",
+			body: `{"pid":4242,"sessionId":"local","version":"2.1.296","status":"idle","bridgeSessionId":"bridge"}`,
+		},
+		"error: the record names no pid": {
+			file: "999.json",
+			body: `{"sessionId":"local","version":"2.1.296","status":"idle","bridgeSessionId":"bridge"}`,
+		},
+		"error: the file name is not a pid": {
+			file: "session.json",
+			body: `{"pid":4242,"sessionId":"local","version":"2.1.296","status":"idle","bridgeSessionId":"bridge"}`,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			transport, home := testRCTransport(t)
+			env := claude.EnvWithHome(home)
+			path := filepath.Join(home, ".claude", "sessions", tt.file)
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			record, err := claude.DecodeRegistryRecord([]byte(tt.body))
+			hints := useSessionHints{sessions: []useBridgedSession{{path: path, name: "steered", pid: 4242, record: record, decoded: err == nil}}, names: []string{"steered"}}
+			rc, refusal := (useLiveSwap{env: &env}).remoteControlPreflight(t.Context(), &hints, claude.LiveService)
+			if refusal == nil || refusal.outcome.Refusal.Reason() != "remote_control_unreachable" {
+				t.Fatalf("refusal=%+v, want the unreachable refusal", refusal)
+			}
+			if diff := gocmp.Diff(claude.RemoteControlCounts{Unreachable: 1}, rc.counts); diff != "" {
+				t.Fatalf("counts mismatch (-want +got):\n%s", diff)
+			}
+			if _, err := os.Lstat(transport.root); !os.IsNotExist(err) {
+				t.Fatalf("a transport directory was made for a refused record: %v", err)
+			}
+		})
 	}
 }
 

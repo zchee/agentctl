@@ -353,7 +353,7 @@ func TestRemoteControlWarnings(t *testing.T) {
 		"error: unavailable": {
 			counts: RemoteControlCounts{Eligible: 1, Dropped: 1, Unavailable: 1},
 			action: RemoteControlReconnect,
-			want:   []string{"Remote Control cannot start in 1 Claude Code session (the command is missing, or the session answers through a gateway or a third-party provider), so it stays off there"},
+			want:   []string{"agentctl cannot restart Remote Control in 1 Claude Code session automatically (the command is missing there, or the session answers through a gateway or a third-party provider); if Remote Control stops there, run `/remote-control` there"},
 		},
 		"error: version and metadata rejections come first": {
 			counts: RemoteControlCounts{VersionRejected: 2, MetadataRejected: 1, Eligible: 1, Dropped: 1, Reconnected: 1},

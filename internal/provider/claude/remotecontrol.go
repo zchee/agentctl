@@ -324,7 +324,7 @@ func RemoteControlWarnings(counts RemoteControlCounts, results []string, action 
 			add("%s still had the earlier Remote Control bridge %d s after the swap, so agentctl did not ask %s to start it again; Claude Code stops it on its next account check, then run `/remote-control` there", sessionCount(counts.NotDropped), RemoteControlDropWaitSeconds, pronoun(counts.NotDropped))
 		}
 		if counts.Unavailable != 0 {
-			add("Remote Control cannot start in %s (the command is missing, or the session answers through a gateway or a third-party provider), so it stays off there", sessionCount(counts.Unavailable))
+			add("agentctl cannot restart Remote Control in %s automatically (the command is missing there, or the session answers through a gateway or a third-party provider); if Remote Control stops there, run `/remote-control` there", sessionCount(counts.Unavailable))
 		}
 		if counts.NotConfirmed != 0 {
 			expired := 0
