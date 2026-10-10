@@ -21,6 +21,9 @@ mkdir -p "$HOME/.local/bin"
 GOTOOLCHAIN=go1.27.2 go build -o "$HOME/.local/bin/agentctl" .
 ```
 
+The Claude Code mod that `--restart-remote-control` relies on is installed separately, from the prompt
+of a terminal Claude Code session; see [Remote Control](#remote-control).
+
 Never install a binary built with the `agentctl_testing` tag. That tag enables test transports and fault
 injection; it is only for the test suite. The release gate checks that those seams are absent.
 
@@ -58,8 +61,8 @@ All entries below follow `agentctl claude`.
 | `import --from keychain [--dry-run]` | Record other Claude Code stores as read-only accounts. |
 | `doctor [--remove-stale PATH] [--yes]` | Inspect stores and locks; optionally remove one proven-stale lock. |
 | `use <id> [--new-only] [--json]` | Start Claude Code in an isolated session; `--new-only` is a synonym. |
-| `use --live <id> [--yes] [--json]` | Swap the live credential after consent. |
-| `use --undo [--yes] [--json]` | Reverse the most recent live swap. |
+| `use --live <id> [--restart-remote-control] [--yes] [--json]` | Swap the live credential after consent. |
+| `use --undo [--restart-remote-control] [--yes] [--json]` | Reverse the most recent live swap. |
 | `use --forget <id> [--yes]` | Delete the generated session, not the account's credentials. |
 | `exec <id> -- <command>...` | Run a command directly in the isolated environment, without a shell. |
 | `env <id> [--shell zsh\|bash\|fish]` | Print shell setup for the isolated environment; default shell is zsh. |
@@ -71,15 +74,77 @@ The directory override must be absolute and cannot be the live Claude configurat
 `claude doctor` has no `--json` flag. Stale-lock removal requires `--yes`, an eligible directory,
 and an unchanged modification time across two samples 12 seconds apart; it does not break live locks.
 
-`--restart-remote-control` appears in help but is not implemented in this release and exits 1.
-Do not rely on it to preserve Remote Control history during a swap. Disconnect Remote Control manually
-before a live swap when you need to retain the remote conversation, then reconnect afterwards.
+`--restart-remote-control` asks running Claude Code sessions to start Remote Control again after a
+live swap or undo; see [Remote Control](#remote-control) below.
 `--json` does not supply consent: use `--yes` only when you intend to authorize the writes.
 
 A live swap copies the incoming token pair into the live keychain item while retaining the owned copy.
 A refresh on either side can invalidate the other's refresh token. Avoid competing account switchers
 and do not register the same refresh chain in independent stores. Owned credential files are private
 (0600), not encrypted at rest; processes running as your user can read them.
+
+#### Remote Control
+
+A live swap or undo stops Remote Control in every running Claude Code session that reads the swapped
+store: Claude Code drops the bridge itself, now or on its next account check. The local conversation,
+process and session id stay as they were. Without `--restart-remote-control`, agentctl names the
+sessions its registry scan found with Remote Control on, and `/remote-control` typed in each one starts
+it again.
+
+With `--restart-remote-control` (on `use --live <id>` or `use --undo`), agentctl asks each running
+session that has the `agentctl-remote-control` mod loaded and reads this store to start Remote Control
+again after the swap. agentctl never types into a terminal. Before any keychain read it asks every
+session with Remote Control on and Claude Code 2.1.287 or newer which credential it reads; after the
+swap it waits up to 45 seconds for each eligible session's old bridge to disappear, then sends one
+request. The mod runs `/remote-control` only when its session is idle and shows no bridge, so a
+session in the middle of a turn starts Remote Control after that turn, provided the turn ends within
+the request's 75-second lifetime. A bridge
+still present after the 45 seconds gets no request, and a warning names `/remote-control` for that
+session. `--yes` is allowed with the flag; the swap's own consent question still applies.
+
+The flag refuses the swap with exit 30 and writes nothing when a session with Remote Control on does
+not answer within 5 seconds (the mod is not loaded there), when Claude Code's session registry cannot
+be read, or on a platform other than macOS. The JSON reasons are `remote_control_unreachable` and
+`remote_control_unsupported_platform`. Run the swap again without the flag to proceed and restart
+Remote Control by hand. A session that runs a Claude Code release older than 2.1.287, that rejects the
+request file's owner or mode, that reads another credential, or that cannot start Remote Control (for
+example behind a gateway) does not refuse the swap: it is counted, and a warning says what to do there.
+A namespace-target undo, an already-active result, and an undo with nothing to undo send no request;
+the last prints its one-line message and no JSON document.
+
+The mod needs Claude Code 2.1.287 or newer and is installed from the prompt of a terminal Claude Code
+session; each session that should be reconnected needs it loaded. See
+[plugins/remote-control/README.md](plugins/remote-control/README.md) for its requirements, its
+`/agentctl-rc` status command, and the request files it reads.
+
+```text
+/plugin install agentctl-remote-control --marketplace zchee/agentctl
+```
+
+With `--json`, the outcome carries a `remote_control` object only when the flag was given; it is then
+present even when every count is zero. Its twelve integer counts are numbers of sessions, never names,
+ids or URLs:
+
+| Count | Sessions that |
+|---|---|
+| `eligible` | had Remote Control on, answered, and read the swapped credential. |
+| `provenance_skipped` | read another credential, used a credential override, or ran behind a gateway. |
+| `unreachable` | did not answer through the mod. |
+| `unavailable` | answered that Remote Control cannot start there. |
+| `version_rejected` | run a Claude Code release older than 2.1.287, or recorded none. |
+| `metadata_rejected` | refused the request file because of its owner or mode. |
+| `dropped` | lost their old bridge after the swap. |
+| `not_dropped` | still had their old bridge when the 45-second wait ended. |
+| `reconnected` | reported a new bridge. |
+| `not_confirmed` | gave no final answer, or one that is not success. |
+| `already_connected` | had a bridge again before any request ran. |
+| `restored` | still had a bridge after a pass that changed no credential. |
+
+A reconnect result never changes the swap's exit code. Failures appear as warnings derived from the
+counts, in `warnings` and once on stderr; an interrupt during the follow-up prints a counts-only note.
+`reconnected` means the session's registry record shows a new bridge. A connected bridge proves neither
+the intended account nor retained history: whether the conversation from before the swap appears on
+claude.ai under the new account has not been verified.
 
 ### Codex
 
@@ -261,7 +326,7 @@ separate store roots do not coordinate one refresh chain.
 | 24 | Live keychain item absent. |
 | 27 | Undo found a different account in the live item. |
 | 29 | Identity/profile unavailable or expired live token without audit attribution. |
-| 30 | Remote Control preflight refusal; automated restart remains deferred. |
+| 30 | `--restart-remote-control` refused the swap before any write (see Remote Control). |
 | 129, 130, 143 | HUP, INT, or TERM after child teardown and cleanup. |
 
 Codes 25, 26, and 28 are retired. Isolated `use` and `exec` forward the child's exit code, or
@@ -270,7 +335,9 @@ configuration rewrite was skipped; inspect its warnings and JSON `config` result
 
 ## Known limitations
 
-- Automated Remote Control restart is deferred; `--restart-remote-control` exits 1.
+- `--restart-remote-control` reaches only sessions that have the `agentctl-remote-control` mod loaded;
+  sessions without it refuse the swap when the flag is given. Typing `/remote-control` into a terminal
+  for such sessions is not implemented.
 - Linux is not supported beyond build/vet checks; credential operations require macOS.
 - Claude doctor's `--remove-stale` is macOS-only.
 

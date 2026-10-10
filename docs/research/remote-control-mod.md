@@ -104,3 +104,246 @@ OAuthTokenSet}` from it and derives `ServiceName`.
 | `CLAUDE_SECURESTORAGE_CONFIG_DIR=<dir>` | suffixed by `<dir>` | iff `S` equals it |
 | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` set, or `authorized` false | n/a | never (`provenance_skipped`): the session does not read the keychain item, or runs behind a gateway or a third-party provider |
 | response missing or unparsable | n/a | `unreachable`: with `--restart-remote-control` the swap is refused before any keychain read with reason `remote_control_unreachable`, exit 30, nothing written |
+
+## Divergences from the reference
+
+The Rust `agctl` restarted Remote Control by typing into tmux panes after a per-pane human attestation, and
+disconnected each bridge before the swap. This port asks a mod inside each session instead, so every part of
+the reference that existed to make keystrokes safe is gone, and its JSON and refusal contract differ.
+
+- **Count set.** The reference's `remote_control` object had eleven counts: `eligible`, `disconnected`,
+  `reconnected`, `restored`, `not_disconnected`, `not_confirmed`, `skipped`, `gone`, `already_connected`,
+  `not_attested` and `attestation_declined`. This port has twelve: `eligible`, `provenance_skipped`,
+  `unreachable`, `unavailable`, `version_rejected`, `metadata_rejected`, `dropped`, `not_dropped`,
+  `reconnected`, `not_confirmed`, `already_connected` and `restored`. The six reference names that are gone
+  (`disconnected`, `not_disconnected`, `skipped`, `gone`, `not_attested`, `attestation_declined`) describe a
+  pre-swap disconnect, a pane check or a human answer; none of those happens without keystrokes, so none is
+  observable, and permanent zeros would read as measurements. The seven new names report what the mod path
+  can observe: which sessions answered and read the swapped item, why a session was not asked, and whether
+  the old bridge disappeared before a request was sent. The object is still present only when the flag is
+  given. Two shared names changed meaning: `reconnected` is a new bridge in the session's registry record
+  within the mod's 30-second observation window (the reference required 25 seconds of observed connection
+  after typing), and `restored` counts sessions that still show a bridge after a pass that changed no
+  credential, without any input.
+- **No terminal requirement, no `--yes` conflict.** The reference refused with `remote_control_needs_tty`
+  unless stdin and stderr were terminals, and rejected `--yes` with the flag, because each input group needed
+  a fresh `y` typed by the person for that pane. With no per-pane attestation, both rules are lifted: the
+  flag works with `--json` on a pipe and with `--yes`, and the swap's own consent still gates `--yes`.
+- **Refusal reasons.** Exit 30 keeps the reference's meaning that no swap was made and nothing was written,
+  under the exit-table name `remote_control_refused`. Two reasons exist now:
+  `remote_control_unsupported_platform` (a platform other than macOS, decided before anything is read) and
+  `remote_control_unreachable` (a session with Remote Control on did not answer the status request within
+  the 5-second preflight, or the session registry could not be read, so no session's eligibility can be
+  established). The reference's `remote_control_not_disconnected` (a pane failed to disconnect before the
+  swap) has no counterpart because nothing is disconnected.
+- **No disconnect step.** The reference typed `/remote-control` and then `Up Up Enter` in each pane before
+  the swap, on the theory that a bridge disconnected first keeps its conversation on claude.ai. Claude Code
+  offers no programmatic disconnect (only the interactive dialog), and the isolated experiment on 2.1.292
+  measured the bridge disappearing about 2 seconds after the credential changed, with Claude Code's own
+  message naming the account change. agentctl therefore waits up to 45 seconds after the swap for the old
+  bridge to disappear and sends a request only then; a bridge still present gets no request
+  (`not_dropped`). Whether the conversation from before the swap appears on claude.ai under the new account
+  is not verified by either design.
+- **Timing.** The reference ran one stage of at most 30 seconds that included the per-pane questions, then
+  waited an empirical 25 seconds before typing again. This port has a preflight bounded at 5 seconds inside
+  the swap deadline and before the keychain read (each status request lives 3 seconds), and a follow-up that
+  runs after every lock is released, outside the swap deadline, under its own 90-second cap: the drop wait
+  of 45 seconds, then a reconnect request that lives 75 seconds so a session can finish a running turn.
+- **Version floor.** The reference had a provisional floor and last-verified value of 2.1.281 and warned and
+  proceeded on newer releases. This port has a single floor, 2.1.287, the oldest release whose mod API the
+  mod is built against; agentctl checks the registry record's `version` before sending anything and the mod
+  checks its own release, and there is no ceiling warning. The operator run below is repeated on each
+  Claude Code release that agentctl claims to support.
+- **Scope.** The reference acted only on live-store sessions whose registry records named a tmux pane. This
+  port acts on any session with the mod loaded, in any terminal, and decides whether a session reads the
+  swapped item from the environment the mod reports (the provenance truth table above) instead of a human
+  attestation.
+
+Two behaviours have no reference counterpart and were settled during implementation:
+
+- **`/clear` keeps the poll running.** Claude Code fires `session.end` with reason `clear` when `/clear` ends
+  a conversation, but the process, its registry record and its transport directory stay, and no
+  `session.start` follows. The mod therefore keeps its 500 ms poll armed on that reason, so the session stays
+  reachable for its next conversation. Every other end reason cancels the poll and finishes each pending
+  request as `cancelled`, which agentctl counts as `not_confirmed`.
+- **Test timing seam.** A build with the `agentctl_testing` tag reads `AGENTCTL_REMOTE_CONTROL_TIME_SCALE`,
+  the number of milliseconds that stand for one second of the drop wait, the reconnect lifetime and the
+  follow-up cap; values outside 1 to 999 are ignored. The preflight and status waits stay real, because the
+  refusal they decide is what the tests assert. A release build has no such variable and runs at one second
+  per second; the release gate lists the variable and its source file among the seams that must be absent.
+
+## Operator run
+
+This procedure checks the production mod against a real Claude Code release, with the model gateway off, in
+a tmux session that uses an isolated configuration directory and therefore an isolated keychain item. It
+never touches the unsuffixed `Claude Code-credentials` item, the real agentctl store or a running session.
+It needs two owned accounts, A and B, already logged in to the real store. Run every command from the
+repository root.
+
+1. Set the paths and identifiers (`A`/`AO` and `B`/`BO` are the account and organization ids of the two
+   accounts in the real store):
+
+   ```sh
+   BASE=/Users/zchee/go/src/github.com/zchee/agentctl/.omc/artifacts/rc-run
+   RUN="$BASE/run"
+   BIN="$BASE/agentctl"
+   STORE="$BASE/store"
+   MOD=/Users/zchee/go/src/github.com/zchee/agentctl/plugins/remote-control
+   CLAUDE_BIN=/Users/zchee/.local/share/claude/versions/2.1.296
+   CFG="$STORE/claude/$A/$AO"
+   mkdir -p "$RUN" "$BASE/work" "$BASE/cfg"
+   ```
+
+2. Build an untagged binary and check the mod:
+
+   ```sh
+   GOENV=off GOTOOLCHAIN=go1.27.2 go build -o "$BIN" .
+   claude plugin validate --strict "$MOD"
+   claude plugin test "$MOD"
+   ```
+
+3. Build the experimental store: a registry holding only the owned entries of A and B, each pointed at its
+   copied directory (the paths are ASCII, so their NFC spelling is their bytes), then opaque copies of the
+   two owned directories (no credential bytes are printed):
+
+   ```sh
+   DA="$STORE/claude/$A/$AO"; DB="$STORE/claude/$B/$BO"
+   mkdir -p -m 700 "$STORE" "$STORE/claude" "$DA" "$DB"
+   jq --arg A "$A" --arg B "$B" --arg DA "$DA" --arg DB "$DB" \
+     --arg SA "$(printf %s "$DA" | shasum -a 256 | cut -c1-8)" \
+     --arg SB "$(printf %s "$DB" | shasum -a 256 | cut -c1-8)" '
+     {version: 1, accounts: [.accounts[]
+       | select(.kind.kind == "owned" and (.account_uuid == $A or .account_uuid == $B))
+       | if .account_uuid == $A then .kind.export_spelling = $DA | .kind.export_sha8 = $SA
+         else .kind.export_spelling = $DB | .kind.export_sha8 = $SB end],
+      forgotten_services: []}' "$HOME/.config/agctl/config.json" >| "$STORE/config.json"
+   chmod 600 "$STORE/config.json"
+   cp -Rp "$HOME/.config/agctl/claude/$A/$AO/." "$STORE/claude/$A/$AO/" && \
+   cp -Rp "$HOME/.config/agctl/claude/$B/$BO/." "$STORE/claude/$B/$BO/" && \
+   cp -Rp "$CFG/.credentials.json" "$BASE/cfg/.credentials.json"
+   "$BIN" --config-dir "$STORE" claude accounts list
+   ```
+
+   The listing must show only A and B, with owned locations under `$STORE`.
+
+4. Seed A into the isolated keychain item, whose service name is `Claude Code-credentials-` followed by the
+   first eight hex digits of the SHA-256 of the NFC spelling of `$CFG`:
+
+   ```sh
+   env -u CLAUDE_CODE_OAUTH_TOKEN \
+     CLAUDE_SECURESTORAGE_CONFIG_DIR="$CFG" CLAUDE_CONFIG_DIR="$BASE/cfg" \
+     "$BIN" --config-dir "$STORE" claude use --live "$B" --yes
+   cp -Rp "$HOME/.config/agctl/claude/$A/$AO/.credentials.json" "$CFG/.credentials.json"
+   env -u CLAUDE_CODE_OAUTH_TOKEN \
+     CLAUDE_SECURESTORAGE_CONFIG_DIR="$CFG" CLAUDE_CONFIG_DIR="$BASE/cfg" \
+     "$BIN" --config-dir "$STORE" claude use --live "$A" --yes
+   ```
+
+5. Start the probe session with the production mod loaded from the repository. `env -i` keeps the model
+   gateway's `ANTHROPIC_BASE_URL` out of it, so it talks to Anthropic directly:
+
+   ```sh
+   tmux new-session -d -s rcmod -x 160 -y 48 -c "$BASE/work" \
+     "env -i HOME=$HOME USER=$USER LOGNAME=$LOGNAME \
+      PATH=$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin TERM=xterm-256color \
+      CLAUDE_CONFIG_DIR=$CFG DISABLE_OMC=1 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 \
+      $CLAUDE_BIN --plugin-dir $MOD --model sonnet --effort low --strict-mcp-config \
+      --setting-sources user --tools \"\" --no-chrome --name rcmod-run"
+   ```
+
+6. In the session, send `Reply with the single word pong.`, then run `/remote-control` once and accept
+   Claude Code's first-use prompt. `/agentctl-rc` must show a bridge present, generation 1, release
+   2.1.296, and `authorized` true with no token, key or base URL override. Record the process, the session
+   and the transcript inode:
+
+   ```sh
+   REC=$(grep -l '"rcmod-run"' "$CFG"/sessions/*.json)
+   jq -c '{pid, sessionId}' "$REC" >| "$RUN/identity-before.json"
+   SID=$(jq -r .sessionId "$REC")
+   stat -f %i "$CFG"/projects/*/"$SID".jsonl >| "$RUN/inode-before.txt"
+   ```
+
+7. Start a bridge sampler that records presence only, never the bridge id, once a second with `date`:
+
+   ```sh
+   while :; do
+     printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')" \
+       "$(jq -r '(.bridgeSessionId // "") != ""' "$REC")"
+     sleep 1
+   done >> "$RUN/bridge.log" &
+   SAMPLER=$!
+   ```
+
+8. Forward swap to B with the flag, timed by `date`:
+
+   ```sh
+   date '+%Y-%m-%d %H:%M:%S %Z' >> "$RUN/forward.times"
+   env -i HOME=$HOME USER=$USER LOGNAME=$LOGNAME PATH=/opt/homebrew/bin:/usr/bin:/bin \
+     CLAUDE_CONFIG_DIR="$CFG" \
+     "$BIN" --config-dir "$STORE" claude use --live "$B" --restart-remote-control --yes --json \
+     >| "$RUN/forward.json" 2>| "$RUN/forward.stderr"; echo "exit $?" >> "$RUN/forward.times"
+   date '+%Y-%m-%d %H:%M:%S %Z' >> "$RUN/forward.times"
+   jq .remote_control "$RUN/forward.json"
+   ```
+
+   Then send `Reply with the single word pong2.` in the session, run `/agentctl-rc`, and run
+   `"$BIN" --config-dir "$STORE" claude status --account "$B" --no-cache --timeout 10s` with the same
+   environment as the swap.
+
+9. Undo with the flag, recorded the same way:
+
+   ```sh
+   date '+%Y-%m-%d %H:%M:%S %Z' >> "$RUN/undo.times"
+   env -i HOME=$HOME USER=$USER LOGNAME=$LOGNAME PATH=/opt/homebrew/bin:/usr/bin:/bin \
+     CLAUDE_CONFIG_DIR="$CFG" \
+     "$BIN" --config-dir "$STORE" claude use --undo --restart-remote-control --yes --json \
+     >| "$RUN/undo.json" 2>| "$RUN/undo.stderr"; echo "exit $?" >> "$RUN/undo.times"
+   date '+%Y-%m-%d %H:%M:%S %Z' >> "$RUN/undo.times"
+   jq .remote_control "$RUN/undo.json"
+   ```
+
+   Then send `Reply with the single word pong3.`, run `/agentctl-rc`, and repeat the identity and inode
+   commands of step 6 into `identity-after.json` and `inode-after.txt`, then stop the sampler with
+   `kill "$SAMPLER"`.
+
+10. Check that no artifact holds a URL or the current bridge id. Run this while the bridge is present: the
+    id is piped into `grep` and never printed, and both commands must print nothing:
+
+    ```sh
+    grep -rlE 'https?://' "$RUN"
+    jq -r .bridgeSessionId "$REC" | grep -rlF -f - "$RUN"
+    ```
+
+11. Exit the probe session (`/exit`), then check the gateway case: with the model gateway running, start a
+    second session the same way as step 5 with `ANTHROPIC_BASE_URL=http://127.0.0.1:18764` added to its
+    `env -i` list and `--name rcmod-gateway`, run `/agentctl-rc` and `/agentctl-rc reconnect` in it, and
+    exit it.
+
+12. Clean up. The undo in step 9 put A back. Remove the experimental roots; the isolated keychain item stays,
+    because agentctl has no documented operation that deletes a keychain item:
+
+    ```sh
+    tmux kill-session -t rcmod
+    /bin/rm -rf "$STORE" "$BASE/cfg"
+    ```
+
+Assertions to record, each with the `date` output it was observed at:
+
+- The forward swap exits 0 and its `remote_control` object shows `eligible: 1`, `dropped: 1`,
+  `reconnected: 1`, and zero for every other count; its stderr has no Remote Control warning.
+- The undo exits 0 with the same counts.
+- `identity-before.json` equals `identity-after.json` and `inode-before.txt` equals `inode-after.txt`: the
+  same process, session id and transcript across both swaps, and the transcript holds `pong`, `pong2` and
+  `pong3`.
+- `/agentctl-rc` reports generation 1 before the forward swap, 2 after it and 3 after the undo, and
+  `bridge.log` shows present, absent, present, absent, present in that order.
+- The drop latency (the swap's start time in `*.times` to the first absent sample) and the reconnect latency
+  (the first absent sample to the next present one), for both directions, computed from the logged times.
+- `claude status` names B as live after the forward swap.
+- Both commands of step 10 print nothing.
+- In the gateway session, `/agentctl-rc` shows the base URL override and `authorized` false, and
+  `/agentctl-rc reconnect` ends in the toast `unavailable`, with no bridge started.
+- Whether the conversation from before the swap appears on claude.ai under B is checked by hand and recorded
+  as seen, not seen, or not checked.
+
+The record of the run is appended below this section, with its `date` timestamps, once the run has happened.
