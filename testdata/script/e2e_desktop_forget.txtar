@@ -1,0 +1,118 @@
+# Forgetting a stored desktop profile: only an inactive profile nothing
+# else may need is deleted, with a walk that never follows a link. Every arm
+# runs against the testing build's stand-ins.
+[!darwin] skip 'the desktop switch exists only on macOS'
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+env A=11111111-2222-3333-4444-555555555555
+env B=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+env MAIN=/Applications/Claude.app/Contents/MacOS/Claude
+cp registry.json $AGENTCTL_CONFIG_DIR/config.json
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B/claude-code-sessions/one
+cp config-b.json $STORE/profiles/$B/config.json
+cp config-b.json $STORE/profiles/$B/claude-code-sessions/one/session.json
+
+# a name outside the grammar is refused
+exec expectexit 2 agentctl claude desktop forget ../escape --yes
+stderr 'not a stored desktop profile name'
+
+# a name nothing is stored under is refused
+exec expectexit 2 agentctl claude desktop forget cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee --yes
+stderr 'no stored desktop profile'
+
+# the app runs: refused, nothing deleted
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec expectexit 30 agentctl claude desktop forget $B --yes
+stderr 'desktop_app_running'
+exists $STORE/profiles/$B/claude-code-sessions/one/session.json
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
+# an interrupted operation may need it: refused, nothing deleted
+env AGENTCTL_FAULT=desktop_abort_after_intent
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec expectexit 30 agentctl claude desktop forget $B --yes
+stderr 'desktop_intent_open'
+exists $STORE/profiles/$B/claude-code-sessions/one/session.json
+exec agentctl claude desktop repair
+stdout '^aborted'
+
+# the profile the last switch put in place is refused even when a copy is stored
+exec agentctl claude desktop use $B --yes
+cmp $D/config.json config-b.json
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec expectexit 30 agentctl claude desktop forget $B --yes
+stderr 'desktop_profile_in_place'
+exists $STORE/profiles/$B/config.json
+rm $STORE/profiles/$B
+
+# a stored name that is a symbolic link is refused and its target untouched
+mkdir elsewhere
+cp config-b.json elsewhere/config.json
+symlink $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee -> $WORK/elsewhere
+exec expectexit 30 agentctl claude desktop forget cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee --yes
+stderr 'desktop_profile_symlink'
+exists elsewhere/config.json
+rm $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee
+
+# without --yes and without a terminal nothing is deleted
+exec expectexit 2 agentctl claude desktop forget $A
+stderr 'standard input is not a terminal'
+exists $STORE/profiles/$A/config.json
+
+# a walk that cannot finish reports partial with the count left behind
+mkdir $STORE/profiles/$A/locked
+cp config-a.json $STORE/profiles/$A/locked/kept.json
+chmod 0555 $STORE/profiles/$A/locked
+exec expectexit 30 agentctl claude desktop forget $A --yes
+stderr 'refused: partial: 11111111-2222-3333-4444-555555555555: [1-9][0-9]* entries remain'
+exists $STORE/profiles/$A/locked/kept.json
+chmod 0755 $STORE/profiles/$A/locked
+
+# the lock is held by another operation; the holder is then killed (so it
+# exits by signal) and the lock is free again for the next arm
+! exec flockhold $STORE/lock 10m $WORK/lock-held &holder&
+exec waitfor $WORK/lock-held
+exec expectexit 30 agentctl claude desktop forget $A --yes
+stderr 'desktop_lock_busy'
+exists $STORE/profiles/$A/locked/kept.json
+kill holder
+wait holder
+
+# success: the stored profile and everything in it is gone, the others stay
+exec agentctl claude desktop forget $A --yes
+stdout '^forgotten: 11111111-2222-3333-4444-555555555555'
+! exists $STORE/profiles/$A
+cmp $D/config.json config-b.json
+
+-- registry.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "a@example.com",
+    "org_name": "Acme",
+    "label": "a",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }, {
+    "account_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "b@example.com",
+    "org_name": "Acme",
+    "label": "b",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- config-a.json --
+{"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}
+-- config-b.json --
+{"lastKnownAccountUuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}

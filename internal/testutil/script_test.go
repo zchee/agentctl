@@ -73,7 +73,7 @@ func runHelper(run func(args []string, stdout, stderr io.Writer) int, args ...st
 func TestScriptCommandsRegistersEveryHelper(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"drainpipes", "expectexit", "flockhold", "golden", "mtime", "schema", "sigterm", "waitfor"}
+	want := []string{"drainpipes", "expectexit", "flockhold", "golden", "mtime", "proctable", "schema", "sigterm", "treesig", "waitfor"}
 	commands := ScriptCommands()
 	got := make([]string, 0, len(commands))
 	for name := range commands {
@@ -104,6 +104,47 @@ func TestFlockholdMain(t *testing.T) {
 		// descriptor, delaying when the release becomes visible.
 		if !WaitUntil(5*time.Second, func() bool { return !LockIsHeld(path) }) {
 			t.Fatalf("the lock is still held after the bounded hold returned")
+		}
+	})
+
+	t.Run("success: the ready file exists while the lock is still held", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "ns.lock")
+		ready := filepath.Join(dir, "lock-held")
+		done := make(chan int, 1)
+		go func() {
+			code, _, _ := runHelper(flockholdMain, path, "2s", ready)
+			done <- code
+		}()
+		if !WaitUntil(5*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }) {
+			t.Fatalf("the ready file %s never appeared", ready)
+		}
+		if !LockIsHeld(path) {
+			t.Fatalf("the ready file appeared but the lock %s is not held", path)
+		}
+		if code := <-done; code != 0 {
+			t.Fatalf("flockhold with a ready file exited %d, want 0", code)
+		}
+	})
+
+	t.Run("error: a ready file in a missing directory fails after the lock is taken", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		code, _, stderr := runHelper(flockholdMain, filepath.Join(dir, "ns.lock"), "1ms", filepath.Join(dir, "missing", "ready"))
+		if code != 1 || !strings.Contains(stderr, "flockhold:") {
+			t.Fatalf("flockhold with an unwritable ready file = %d %q, want 1 and the error", code, stderr)
+		}
+	})
+
+	t.Run("error: four arguments are a usage error", func(t *testing.T) {
+		t.Parallel()
+
+		code, _, _ := runHelper(flockholdMain, filepath.Join(t.TempDir(), "l"), "1ms", "r", "extra")
+		if code != 2 {
+			t.Fatalf("flockhold with four arguments = %d, want 2", code)
 		}
 	})
 

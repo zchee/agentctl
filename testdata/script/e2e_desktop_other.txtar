@@ -1,0 +1,39 @@
+# Elsewhere than macOS every desktop command refuses before it reads
+# anything of the desktop app.
+[darwin] skip 'covered on macOS by the other desktop scripts'
+env B=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+cp registry.json $AGENTCTL_CONFIG_DIR/config.json
+
+exec expectexit 30 agentctl claude desktop status --json
+stderr 'desktop_unsupported_platform'
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_unsupported_platform"'
+exec expectexit 30 agentctl claude desktop forget $B --yes
+stderr 'desktop_unsupported_platform'
+exec expectexit 30 agentctl claude desktop repair --yes
+stderr 'desktop_unsupported_platform'
+! exists $HOME/Library
+
+-- registry.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "a@example.com",
+    "org_name": "Acme",
+    "label": "a",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }, {
+    "account_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "b@example.com",
+    "org_name": "Acme",
+    "label": "b",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}

@@ -1,0 +1,169 @@
+# Nothing inside a profile is ever created, removed, rewritten or replaced
+# by status, use, repair or a refusal: each profile's signature (relative
+# path, type, size, modification time and inode of every entry) is the same
+# before and after, wherever the profile was moved to. forget removes the
+# one profile it names and leaves every other signature unchanged. Every arm
+# runs against the testing build's stand-ins.
+[!darwin] skip 'the desktop switch exists only on macOS'
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+env A=11111111-2222-3333-4444-555555555555
+env B=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+env C=cccccccc-1111-2222-3333-444444444444
+env MAIN=/Applications/Claude.app/Contents/MacOS/Claude
+cp registry.json $AGENTCTL_CONFIG_DIR/config.json
+mkdir $D/claude-code-sessions/s1 $D/Local' 'Storage
+cp config-a.json $D/config.json
+cp config-a.json $D/claude-code-sessions/s1/state.json
+cp config-a.json $D/Local' 'Storage/leveldb.log
+mkdir $STORE/profiles/$B/claude-code-sessions/s2
+cp config-b.json $STORE/profiles/$B/config.json
+cp config-b.json $STORE/profiles/$B/claude-code-sessions/s2/state.json
+mkdir $STORE/profiles/$C
+cp config-c.json $STORE/profiles/$C/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec treesig $D
+cp stdout a.sig
+exec treesig $STORE/profiles/$B
+cp stdout b.sig
+exec treesig $STORE/profiles/$C
+cp stdout c.sig
+
+# status reads and never changes anything
+exec agentctl claude desktop status --json
+stdout '"word": "foreign"'
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# every refusal before the quit leaves every profile as it was
+cp fake-stat.sh $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
+chmod 0755 $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_cross_device'
+rm $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 600 1 /Users/me/Applications/Claude.app/Contents/MacOS/Claude
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_other_copy_running'
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 600
+env AGENTCTL_FAULT=desktop_intent_append_fail
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_journal_failed'
+env AGENTCTL_FAULT=
+exec expectexit 2 agentctl claude desktop use $C --yes
+stderr 'no account matches'
+env AGCTL_FAKE_OSASCRIPT=refuse
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_quit_refused'
+env AGCTL_FAKE_OSASCRIPT=keep
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_quit_timeout'
+env AGCTL_FAKE_OSASCRIPT=
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# a launch that fails twice is rolled back with every entry intact
+env AGCTL_FAKE_OPEN=fail
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'relaunch_failed'
+env AGCTL_FAKE_OPEN=
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# a switch moves the two profiles and changes nothing inside them
+exec agentctl claude desktop use $B --yes
+stdout '^selected matches'
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# and the switch back
+exec agentctl claude desktop use $A --yes
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# repair after a crash between the renames: --revert and --complete
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec expectexit 30 agentctl claude desktop repair --yes
+exec agentctl claude desktop repair --revert --yes
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec agentctl claude desktop repair --complete --yes
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# forget removes the named profile and nothing else
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+exec agentctl claude desktop forget $C --yes
+! exists $STORE/profiles/$C
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+
+-- registry.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "a@example.com",
+    "org_name": "Acme",
+    "label": "a",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }, {
+    "account_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "b@example.com",
+    "org_name": "Acme",
+    "label": "b",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- config-a.json --
+{"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}
+-- config-b.json --
+{"lastKnownAccountUuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+-- config-c.json --
+{"lastKnownAccountUuid":"cccccccc-1111-2222-3333-444444444444"}
+-- fake-stat.sh --
+#!/bin/sh
+case "$3" in
+*/claude-desktop/profiles) echo 2 ;;
+*) echo 1 ;;
+esac

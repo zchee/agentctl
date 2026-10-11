@@ -1,0 +1,372 @@
+# The Claude desktop app switch. Every arm runs against the testing build's
+# stand-ins: the process table file the fake osascript and open edit, the
+# fake app bundle under the harness root, and a temporary HOME. Nothing here
+# can reach the installed app or a real profile.
+[!darwin] skip 'the desktop switch exists only on macOS'
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+env A=11111111-2222-3333-4444-555555555555
+env B=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+env MAIN=/Applications/Claude.app/Contents/MacOS/Claude
+env HELPER=/Applications/Claude.app/Contents/Frameworks/Claude' 'Helper' '(Renderer).app/Contents/MacOS/Claude' 'Helper' '(Renderer)
+cp registry.json $AGENTCTL_CONFIG_DIR/config.json
+
+# status with nothing: no data path, nothing running, no stored profile
+exec agentctl claude desktop status --json
+stdout '"present": false'
+stdout '"running": 0'
+stdout '"family": 0'
+stdout '"profiles": \[\]'
+cp stdout report.json
+exec schema desktop.v1.json report.json
+
+# use into a fresh target: A's profile leaves, the app creates B's
+mkdir $D
+cp config-a.json $D/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+exec agentctl claude desktop use $B --yes --json
+stdout '"outcome": "selected"'
+stdout '"identity": "fresh"'
+stdout '"journal": "applied"'
+cp stdout report.json
+exec schema desktop.v1.json report.json
+exists $STORE/profiles/$A/config.json
+exists $D
+! exists $D/config.json
+grep 'osascript -e tell application id "com.anthropic.claudefordesktop" to quit' $AGCTL_FAKE_DESKTOP_LOG
+grep '^open -n .*/Applications/Claude.app$' $AGCTL_FAKE_DESKTOP_LOG
+
+
+# use into a matching stored target: B signs in, then A comes back
+cp config-b.json $D/config.json
+exec agentctl claude desktop use $A --yes --json
+stdout '"outcome": "selected"'
+stdout '"identity": "matches"'
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+! exists $STORE/profiles/$A
+exec agentctl claude desktop status --json
+stdout '"name": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"'
+stdout '"word": "account"'
+cp stdout report.json
+exec schema desktop.v1.json report.json
+
+# already selected: nothing is quit or moved, one noop result, no intent
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude desktop use $A --yes --json
+stdout '"outcome": "already_selected"'
+stdout '"journal": "noop"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+grep -count=1 '"outcome":"noop"' $STORE/journal.jsonl
+exec agentctl claude desktop use $A --yes
+stdout '^already_selected matches'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+
+# a stored copy of the selected account is reported as a duplicate and left alone
+mkdir $STORE/profiles/$A
+cp config-a.json $STORE/profiles/$A/config.json
+exec agentctl claude desktop use $A --yes --json
+stdout '"outcome": "already_selected"'
+exec agentctl claude desktop status --json
+stdout '"duplicate": true'
+exists $STORE/profiles/$A/config.json
+
+# destination exists: the profile leaving would collide with that copy
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_destination_exists"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-a.json
+rm $STORE/profiles/$A
+
+# use with an unknown default: the profile leaving is stored as unknown-<op>
+cp config-unknown.json $D/config.json
+exec agentctl claude desktop use $B --yes --json
+stdout '"outcome": "selected"'
+stdout '"name": "unknown-'
+cmp $D/config.json config-b.json
+exec agentctl claude desktop status
+stdout 'unknown-.*  unknown'
+
+# mismatch: the stored profile named for A last observed B
+mkdir $STORE/profiles/$A
+cp config-b.json $STORE/profiles/$A/config.json
+cp $D/config.json d.before
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_profile_mismatch"'
+cmp $D/config.json d.before
+cp config-a.json $STORE/profiles/$A/config.json
+
+# unreadable default: nothing is quit
+cp config-broken.json $D/config.json
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_profile_unreadable"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cp config-b.json $D/config.json
+
+# cross-device: the stat stand-in reports two devices
+cp fake-stat.sh $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
+chmod 0755 $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_cross_device"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+rm $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
+
+# unknown id: the registry's wording, exit 2, before anything else
+exec expectexit 2 agentctl claude desktop use nobody@example.com --yes
+stderr 'no account matches `nobody@example.com`'
+
+# another copy runs: refused before any quit
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 600 1 /Users/me/Applications/Claude.app/Contents/MacOS/Claude
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_other_copy_running"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 600
+
+# a sibling bundle is none of the app's processes
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 610 1 /Applications/Claude' 'Mail.app/Contents/MacOS/Claude' 'Mail
+exec agentctl claude desktop status --json
+! stdout 'Claude Mail'
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 610
+
+# quit refused: the intent is closed as aborted, nothing moved
+env AGCTL_FAKE_OSASCRIPT=refuse
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_quit_refused"'
+stdout '"journal": "aborted"'
+cmp $D/config.json config-b.json
+! grep '^open' $AGCTL_FAKE_DESKTOP_LOG
+rm $AGCTL_FAKE_DESKTOP_LOG
+
+# quit timeout: the main exits, its helpers linger as orphans
+env AGCTL_FAKE_OSASCRIPT=mains
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_quit_timeout"'
+stdout '0 main and 2 other processes'
+cmp $D/config.json config-b.json
+exec agentctl claude desktop status --json
+stdout '"reason": "orphan"'
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+env AGCTL_FAKE_OSASCRIPT=
+
+# quit timeout with only a hosted child under the data path lingering
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 700 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 701 700 $D/claude-code/2.1.0/claude' 'code
+env AGCTL_FAKE_OSASCRIPT=keep-data
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_quit_timeout"'
+stdout '0 main and 1 other processes'
+exec agentctl claude desktop status --json
+stdout '"reason": "data"'
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+env AGCTL_FAKE_OSASCRIPT=
+
+# the native host under a live Chrome is excepted: listed, never waited for
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 800 1 /Applications/Google' 'Chrome.app/Contents/MacOS/Google' 'Chrome
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 801 800 /Applications/Claude.app/Contents/Helpers/chrome-native-host
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 802 1 $MAIN
+exec agentctl claude desktop status --json
+stdout '"parent_path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"'
+stdout '"family": 0'
+exec agentctl claude desktop use $A --yes --json
+stdout '"outcome": "selected"'
+exec agentctl claude desktop status
+stdout 'foreign  pid 801 parent 800 /Applications/Claude.app/Contents/Helpers/chrome-native-host'
+
+# the same host orphaned counts and blocks the quit
+exec proctable reparent $AGENTCTL_TEST_PROCESS_TABLE 801 1
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_quit_timeout"'
+exec agentctl claude desktop status --json
+stdout '"reason": "orphan"'
+
+# under a parent that is no browser it counts as unknown
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 850 1 /usr/local/bin/relay
+exec proctable reparent $AGENTCTL_TEST_PROCESS_TABLE 801 850
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_quit_timeout"'
+exec agentctl claude desktop status --json
+stdout '"reason": "unknown"'
+
+# a helper whose parent is not in the table counts as parent-missing
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 801 850
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 860 4242 $HELPER
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_quit_timeout"'
+exec agentctl claude desktop status --json
+stdout '"reason": "parent-missing"'
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 860
+
+# a helper behind a relay outside both prefixes, after the main is gone and the relay orphaned
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 870 1 /usr/local/bin/relay
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 871 870 $HELPER
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_quit_timeout"'
+exec agentctl claude desktop status --json
+stdout '"reason": "unknown"'
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+cmp $D/config.json config-a.json
+
+# open fails, the exchange is undone, the recovery launch starts the app
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGCTL_FAKE_OPEN=fail-once
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "reverted_relaunched"'
+stdout '"journal": "reverted"'
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+grep -count=2 '^open' $AGCTL_FAKE_DESKTOP_LOG
+rm $AGENTCTL_TEST_PROCESS_TABLE.open-failed
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
+# open fails twice: reverted, the app is not running
+env AGCTL_FAKE_OPEN=fail
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "relaunch_failed"'
+grep '"word":"relaunch_failed".*"app_running":false' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+
+# a rename back that fails leaves the intent open: exchange_not_restored
+env AGENTCTL_FAULT=desktop_rollback_rename_fail
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "exchange_not_restored"'
+stdout '"journal": "open"'
+cmp $D/config.json config-b.json
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_intent_open"'
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=
+exec agentctl claude desktop repair --revert --yes
+stdout '^repaired '
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+
+# late launch: the main appears only after the wait, recorded unverified
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+env AGCTL_FAKE_OPEN=late
+exec agentctl claude desktop use $B --yes --json
+stdout '"outcome": "launched_unverified"'
+grep '"word":"launched_unverified","verified":false' $STORE/journal.jsonl
+cmp $D/config.json config-b.json
+env AGCTL_FAKE_OPEN=
+
+# result append failure: journal_not_recorded, the intent stays open
+env AGENTCTL_FAULT=desktop_result_append_fail
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "journal_not_recorded"'
+stdout '"journal": "open"'
+cmp $D/config.json config-a.json
+env AGENTCTL_FAULT=
+exec agentctl claude desktop repair
+stdout '^repaired '
+grep -count=1 '"command":"use","requested_account":"11111111-2222-3333-4444-555555555555","outcome":"applied","word":"repaired"' $STORE/journal.jsonl
+
+# intent append failure: refused before anything is quit or moved
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGENTCTL_FAULT=desktop_intent_append_fail
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_journal_failed"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-a.json
+env AGENTCTL_FAULT=
+
+# a crash after the intent: status shows it, use refuses, repair closes it
+env AGENTCTL_FAULT=desktop_abort_after_intent
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec agentctl claude desktop status
+stdout '^interrupted use'
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_intent_open"'
+exec agentctl claude desktop repair
+stdout '^aborted'
+cmp $D/config.json config-a.json
+
+# status with an enumeration failure: counts are null, exit 30
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 900 1 $MAIN read_error=EIO
+exec expectexit 30 agentctl claude desktop status --json
+stdout '"running": null'
+stdout '"family": null'
+stdout '"step": "processes"'
+cp stdout report.json
+exec schema desktop.v1.json report.json
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_observe_failed"'
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
+# the bundle: missing main executable, then another bundle identifier
+mv $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/MacOS/Claude claude.saved
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_app_not_found"'
+mv claude.saved $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/MacOS/Claude
+cp $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/Info.plist plist.saved
+cp other-info.plist $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/Info.plist
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_bundle_mismatch"'
+cp plist.saved $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/Info.plist
+
+# a confirmation nobody can answer moves nothing
+exec expectexit 2 agentctl claude desktop use $B
+stderr 'standard input is not a terminal'
+cmp $D/config.json config-a.json
+
+# the lock is held by another operation; the holder is then killed (so it
+# exits by signal) and the lock is free again
+! exec flockhold $STORE/lock 10m $WORK/lock-held &holder&
+exec waitfor $WORK/lock-held
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_lock_busy"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+kill holder
+wait holder
+
+-- registry.json --
+{
+  "version": 1,
+  "accounts": [{
+    "account_uuid": "11111111-2222-3333-4444-555555555555",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "a@example.com",
+    "org_name": "Acme",
+    "label": "a",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }, {
+    "account_uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "organization_uuid": "66666666-7777-8888-9999-000000000000",
+    "email": "b@example.com",
+    "org_name": "Acme",
+    "label": "b",
+    "kind": {"kind": "owned", "export_spelling": "", "export_sha8": ""},
+    "forgotten": false,
+    "created_at": "2026-09-08T00:00:00Z"
+  }]
+}
+-- config-a.json --
+{"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}
+-- config-b.json --
+{"lastKnownAccountUuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+-- config-unknown.json --
+{"darkMode":"dark"}
+-- config-broken.json --
+not json at all
+-- fake-stat.sh --
+#!/bin/sh
+case "$3" in
+*/claude-desktop/profiles) echo 2 ;;
+*) echo 1 ;;
+esac
+-- other-info.plist --
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.example.notclaude</string>
+</dict>
+</plist>

@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zchee/agctl/schemas/desktop.v1.json",
+  "title": "agentctl claude desktop report, version 1",
+  "description": "What `agentctl claude desktop status --json` and `agentctl claude desktop use --json` emit. Every string is a path agentctl derived, an account UUID the app recorded in plain text, a word this build compiled in or a rendered instant; no token, cookie or other content of a profile appears.",
+  "oneOf": [
+    { "$ref": "#/$defs/status" },
+    { "$ref": "#/$defs/operation" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "identity": {
+      "description": "What a profile last observed: nothing yet (fresh), no account (unknown), a file that could not be read (unreadable), an account UUID (uuid), or, for a target the app has not created, none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["fresh", "unknown", "unreadable", "uuid", "none"] },
+        "uuid": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "file": {
+      "description": "A directory's (device, inode) pair, its provenance.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dev", "ino"],
+      "properties": {
+        "dev": { "type": "integer", "minimum": 0 },
+        "ino": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "proc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "ppid", "start", "path"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "ppid": { "type": "integer" },
+        "start": { "type": "string" },
+        "path": { "type": "string" }
+      }
+    },
+    "familyProc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "ppid", "start", "path", "reason"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "ppid": { "type": "integer" },
+        "start": { "type": "string" },
+        "path": { "type": "string" },
+        "reason": { "enum": ["data", "orphan", "parent-missing", "descendant", "unknown"] }
+      }
+    },
+    "foreignProc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "ppid", "start", "path", "parent_path"],
+      "properties": {
+        "pid": { "type": "integer" },
+        "ppid": { "type": "integer" },
+        "start": { "type": "string" },
+        "path": { "type": "string" },
+        "parent_path": { "type": "string" }
+      }
+    },
+    "count": {
+      "description": "A process count, or null when the processes could not be observed. Null is never zero.",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "command", "default", "profiles", "open_intents", "errors"],
+      "properties": {
+        "version": { "const": 1 },
+        "command": { "const": "status" },
+        "default": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "present", "identity", "word", "running", "family", "family_rows", "foreign", "other_copies"],
+          "properties": {
+            "path": { "type": "string" },
+            "present": { "type": "boolean" },
+            "identity": { "$ref": "#/$defs/identity" },
+            "word": { "enum": ["account", "foreign", "fresh", "unknown", "unreadable"] },
+            "reason": { "type": "string" },
+            "running": { "$ref": "#/$defs/count" },
+            "family": { "$ref": "#/$defs/count" },
+            "family_rows": { "type": "array", "items": { "$ref": "#/$defs/familyProc" } },
+            "foreign": { "type": "array", "items": { "$ref": "#/$defs/foreignProc" } },
+            "other_copies": { "type": "array", "items": { "$ref": "#/$defs/proc" } }
+          }
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "identity", "word", "duplicate", "in_place"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "identity": { "$ref": "#/$defs/identity" },
+              "word": { "enum": ["account", "foreign", "fresh", "unknown", "unreadable"] },
+              "duplicate": { "type": "boolean" },
+              "in_place": { "type": "boolean" }
+            }
+          }
+        },
+        "open_intents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op_id", "time", "command", "requested_account"],
+            "properties": {
+              "op_id": { "type": "string" },
+              "time": { "type": "string" },
+              "command": { "type": "string" },
+              "requested_account": { "$ref": "#/$defs/uuid" },
+              "outgoing": { "type": "string" },
+              "target": { "type": "string" }
+            }
+          }
+        },
+        "errors": {
+          "description": "Each observation status could not make. Non-empty means the run exits 30.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step", "message"],
+            "properties": {
+              "step": { "enum": ["registry", "default", "processes", "journal", "profiles"] },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "command", "outcome"],
+      "properties": {
+        "version": { "const": 1 },
+        "command": { "enum": ["use", "repair", "forget"] },
+        "outcome": {
+          "description": "The public word: a success word, an outcome of the launch table, or a refusal word.",
+          "enum": [
+            "selected",
+            "already_selected",
+            "launched_unverified",
+            "reverted_relaunched",
+            "relaunch_failed",
+            "exchange_not_restored",
+            "journal_not_recorded",
+            "repaired",
+            "repaired_not_running",
+            "nothing_to_repair",
+            "aborted",
+            "forgotten",
+            "partial",
+            "error",
+            "desktop_unsupported_platform",
+            "desktop_app_not_found",
+            "desktop_bundle_mismatch",
+            "desktop_lock_busy",
+            "desktop_other_copy_running",
+            "desktop_intent_open",
+            "desktop_cross_device",
+            "desktop_profile_unreadable",
+            "desktop_profile_mismatch",
+            "desktop_journal_failed",
+            "desktop_quit_refused",
+            "desktop_quit_timeout",
+            "desktop_repair_inconsistent",
+            "desktop_observe_failed",
+            "desktop_app_running",
+            "desktop_profile_in_place",
+            "desktop_repair_needs_choice",
+            "desktop_destination_exists",
+            "desktop_profile_symlink"
+          ]
+        },
+        "detail": { "type": "string" },
+        "op_id": { "type": "string" },
+        "account": { "$ref": "#/$defs/uuid" },
+        "identity": { "enum": ["matches", "mismatch", "fresh", "unknown", "unreadable"] },
+        "state": { "enum": ["never-started", "outgoing-moved", "target-installed", "unexpected-default", "no-intent", "inconsistent"] },
+        "journal": { "enum": ["applied", "reverted", "aborted", "noop", "unknown", "open"] },
+        "outgoing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "identity", "destination", "file"],
+          "properties": {
+            "name": { "type": "string" },
+            "identity": { "$ref": "#/$defs/identity" },
+            "destination": { "type": "string" },
+            "file": { "$ref": "#/$defs/file" }
+          }
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identity", "target_existed"],
+          "properties": {
+            "name": { "type": "string" },
+            "identity": { "$ref": "#/$defs/identity" },
+            "source": { "type": "string" },
+            "target_existed": { "type": "boolean" },
+            "file": { "$ref": "#/$defs/file" },
+            "park": { "type": "string" }
+          }
+        },
+        "main": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pid", "start"],
+          "properties": {
+            "pid": { "type": "integer" },
+            "start": { "type": "string" }
+          }
+        },
+        "layout": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "path", "present", "file"],
+            "properties": {
+              "role": { "enum": ["data", "outgoing", "target"] },
+              "path": { "type": "string" },
+              "present": { "type": "boolean" },
+              "file": { "oneOf": [{ "$ref": "#/$defs/file" }, { "type": "null" }] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -151,6 +151,31 @@ type ClaudeEnvOptions struct {
 	Shell           Shell
 }
 
+// ClaudeDesktopStatusOptions carries the parsed arguments of `claude desktop status`.
+type ClaudeDesktopStatusOptions struct {
+	JSON bool
+}
+
+// ClaudeDesktopUseOptions carries the parsed arguments of `claude desktop use`.
+type ClaudeDesktopUseOptions struct {
+	ID   string
+	Yes  bool
+	JSON bool
+}
+
+// ClaudeDesktopForgetOptions carries the parsed arguments of `claude desktop forget`.
+type ClaudeDesktopForgetOptions struct {
+	Name string
+	Yes  bool
+}
+
+// ClaudeDesktopRepairOptions carries the parsed arguments of `claude desktop repair`.
+type ClaudeDesktopRepairOptions struct {
+	Complete bool
+	Revert   bool
+	Yes      bool
+}
+
 // newClaudeCmd builds the `claude` command group.
 func (c *CLI) newClaudeCmd() *cobra.Command {
 	cmd := groupCommand("claude", "Work with Claude subscription accounts.")
@@ -164,6 +189,7 @@ func (c *CLI) newClaudeCmd() *cobra.Command {
 		c.newClaudeUseCmd(),
 		c.newClaudeExecCmd(),
 		c.newClaudeEnvCmd(),
+		c.newClaudeDesktopCmd(),
 	)
 	return cmd
 }
@@ -415,5 +441,68 @@ func (c *CLI) newClaudeEnvCmd() *cobra.Command {
 	f.BoolVar(&opts.FreshContext, "fresh-context", false, "Do not symlink the directories that hold resumable work.")
 	f.BoolVar(&opts.NoMCP, "no-mcp", false, "Omit the MCP symlink, the --mcp-config flag and the shell alias together.")
 	f.Var(newEnumValue(&opts.Shell, string(ShellZsh), string(ShellBash), string(ShellFish)), "shell", "Which shell's syntax to print.")
+	return cmd
+}
+
+// newClaudeDesktopCmd builds the `claude desktop` group, which switches the
+// Claude desktop app between accounts by exchanging whole profile
+// directories while the app is quit.
+func (c *CLI) newClaudeDesktopCmd() *cobra.Command {
+	cmd := groupCommand("desktop", "Switch the Claude desktop app between accounts, one profile directory each.")
+
+	var statusOpts ClaudeDesktopStatusOptions
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show which account each desktop profile last observed, and whether the app runs.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return dispatch(c, cmd, c.handlers.ClaudeDesktopStatus, statusOpts)
+		},
+	}
+	status.Flags().BoolVar(&statusOpts.JSON, "json", false, "Emit the report as JSON.")
+
+	var useOpts ClaudeDesktopUseOptions
+	use := &cobra.Command{
+		Use:   "use <id>",
+		Short: "Quit the desktop app, put the account's profile at its data path, and relaunch it.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			useOpts.ID = args[0]
+			return dispatch(c, cmd, c.handlers.ClaudeDesktopUse, useOpts)
+		},
+	}
+	use.Flags().BoolVar(&useOpts.Yes, "yes", false, "Skip the confirmation that names what will close and move.")
+	use.Flags().BoolVar(&useOpts.JSON, "json", false, "Emit the outcome as JSON.")
+
+	var forgetOpts ClaudeDesktopForgetOptions
+	forget := &cobra.Command{
+		Use:   "forget <name>",
+		Short: "Delete one stored, inactive desktop profile, with its local Code sessions and tasks.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			forgetOpts.Name = args[0]
+			return dispatch(c, cmd, c.handlers.ClaudeDesktopForget, forgetOpts)
+		},
+	}
+	forget.Flags().BoolVar(&forgetOpts.Yes, "yes", false, "Skip the confirmation.")
+
+	var repairOpts ClaudeDesktopRepairOptions
+	repair := &cobra.Command{
+		Use:   "repair",
+		Short: "Finish or undo a desktop switch that was interrupted.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if repairOpts.Complete && repairOpts.Revert {
+				return errors.New("--complete and --revert cannot be combined")
+			}
+			return dispatch(c, cmd, c.handlers.ClaudeDesktopRepair, repairOpts)
+		},
+	}
+	rf := repair.Flags()
+	rf.BoolVar(&repairOpts.Complete, "complete", false, "Finish the interrupted switch: put the target profile at the data path.")
+	rf.BoolVar(&repairOpts.Revert, "revert", false, "Undo the interrupted switch: put the original profile back at the data path.")
+	rf.BoolVar(&repairOpts.Yes, "yes", false, "Skip the confirmation.")
+
+	cmd.AddCommand(status, use, forget, repair)
 	return cmd
 }

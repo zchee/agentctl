@@ -59,6 +59,13 @@ func ScriptSetup(env *testscript.Env) error {
 		return err
 	}
 
+	desktopRoot, processTable, err := installDesktopWorld(root)
+	if err != nil {
+		return err
+	}
+	env.Setenv("AGENTCTL_DESKTOP_TEST_ROOT", desktopRoot)
+	env.Setenv("AGENTCTL_TEST_PROCESS_TABLE", processTable)
+	env.Setenv("AGCTL_FAKE_DESKTOP_LOG", filepath.Join(root, "desktop-argv.log"))
 	env.Setenv("AGENTCTL_CONFIG_DIR", filepath.Join(root, "config"))
 	env.Setenv("HOME", filepath.Join(root, "home"))
 	env.Setenv("USER", KeychainAccount)
@@ -102,6 +109,8 @@ func ScriptCommands() map[string]func() {
 		"schema":     wrap(schemaMain),
 		"golden":     wrap(goldenMain),
 		"expectexit": wrap(expectexitMain),
+		"proctable":  wrap(proctableMain),
+		"treesig":    wrap(treesigMain),
 	}
 }
 
@@ -141,14 +150,17 @@ func expectexitMain(args []string, stdout, stderr io.Writer) int {
 // flockholdMain takes the exclusive lock on args[0] and holds it: for
 // args[1] (a duration) when given, forever otherwise. It prints "held"
 // once the lock is taken, so a script can wait for the line instead of
-// sleeping, and refuses a lock somebody already holds.
+// sleeping, and refuses a lock somebody already holds. A third argument
+// names a file created once the lock is taken: a backgrounded holder's
+// output cannot be read until it exits, so a script waits for that file
+// with waitfor before it runs the command the lock must refuse.
 func flockholdMain(args []string, stdout, stderr io.Writer) int {
-	if len(args) < 1 || len(args) > 2 {
-		say(stderr, "usage: flockhold <path> [duration]\n")
+	if len(args) < 1 || len(args) > 3 {
+		say(stderr, "usage: flockhold <path> [duration [ready-file]]\n")
 		return 2
 	}
 	hold := time.Duration(-1)
-	if len(args) == 2 {
+	if len(args) >= 2 {
 		parsed, err := time.ParseDuration(args[1])
 		if err != nil {
 			say(stderr, "flockhold: %v\n", err)
@@ -171,6 +183,12 @@ func flockholdMain(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	say(stdout, "held\n")
+	if len(args) == 3 {
+		if err := os.WriteFile(args[2], nil, 0o600); err != nil {
+			say(stderr, "flockhold: %v\n", err)
+			return 1
+		}
+	}
 	if hold < 0 {
 		select {}
 	}

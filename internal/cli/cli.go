@@ -71,6 +71,10 @@ type Handlers struct {
 	ClaudeUse              func(ctx context.Context, globals Globals, opts ClaudeUseOptions) error
 	ClaudeExec             func(ctx context.Context, globals Globals, opts ClaudeExecOptions) error
 	ClaudeEnv              func(ctx context.Context, globals Globals, opts ClaudeEnvOptions) error
+	ClaudeDesktopStatus    func(ctx context.Context, globals Globals, opts ClaudeDesktopStatusOptions) error
+	ClaudeDesktopUse       func(ctx context.Context, globals Globals, opts ClaudeDesktopUseOptions) error
+	ClaudeDesktopForget    func(ctx context.Context, globals Globals, opts ClaudeDesktopForgetOptions) error
+	ClaudeDesktopRepair    func(ctx context.Context, globals Globals, opts ClaudeDesktopRepairOptions) error
 
 	CodexStatus           func(ctx context.Context, globals Globals, opts CodexStatusOptions) error
 	CodexWatch            func(ctx context.Context, globals Globals, opts CodexWatchOptions) error

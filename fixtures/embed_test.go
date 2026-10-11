@@ -21,7 +21,7 @@ import (
 	"github.com/zchee/agentctl/fixtures"
 )
 
-// TestFSContents proves the embedded tree is complete: the three fake
+// TestFSContents proves the embedded tree is complete: the five fake
 // executable scripts resolve, the documents under each subdirectory are
 // present, and no file was silently dropped by the embed patterns.
 func TestFSContents(t *testing.T) {
@@ -33,6 +33,8 @@ func TestFSContents(t *testing.T) {
 		"success: fake security script embedded":  {path: "fake-security.sh"},
 		"success: fake codex script embedded":     {path: "fake-codex.sh"},
 		"success: fake tmux script embedded":      {path: "fake-tmux.sh"},
+		"success: fake osascript script embedded": {path: "fake-osascript.sh"},
+		"success: fake open script embedded":      {path: "fake-open.sh"},
 		"success: claude usage document embedded": {path: "claude/usage-2026-09-08.json"},
 		"success: codex config document embedded": {path: "codex/config-auto.toml"},
 		"success: binary capture embedded":        {path: "rc-screens/capture_invalid.bin"},
@@ -58,7 +60,7 @@ func TestFSContents(t *testing.T) {
 func TestFSFileCount(t *testing.T) {
 	t.Parallel()
 
-	const want = 41
+	const want = 43
 
 	got := 0
 	if err := fs.WalkDir(fixtures.FS, ".", func(path string, d fs.DirEntry, err error) error {

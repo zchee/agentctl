@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package fixtures embeds the shared test data tree: three fake executables
+// Package fixtures embeds the shared test data tree: five fake executables
 // written as POSIX shell scripts, and the JSON, TOML and terminal-capture
 // documents that tests use as parser inputs and subprocess payloads.
 //
@@ -22,8 +22,8 @@ package fixtures
 
 import "embed"
 
-// FS holds every file under claude/, codex/ and rc-screens/, plus the three
+// FS holds every file under claude/, codex/ and rc-screens/, plus the five
 // fake executable scripts at the package root.
 //
-//go:embed all:claude all:codex all:rc-screens fake-codex.sh fake-security.sh fake-tmux.sh
+//go:embed all:claude all:codex all:rc-screens fake-codex.sh fake-open.sh fake-osascript.sh fake-security.sh fake-tmux.sh
 var FS embed.FS
