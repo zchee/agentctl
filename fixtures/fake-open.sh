@@ -13,6 +13,11 @@
 #                    process appears.
 #                    fail: open fails.
 #                    fail-once: the first open fails, later ones are ready.
+#                    blind: open starts the app as ready does, and from then
+#                    on every listing of the process table fails with EIO,
+#                    so nothing can be observed after the start.
+#                    fail-once-blind: the first open fails, later ones are
+#                    blind.
 #                    fail-other: open fails while the main of another copy
 #                    of the app appears in the table.
 #                    fail-hide: open fails after moving the directory named
@@ -23,10 +28,12 @@ if [ -n "${AGCTL_FAKE_DESKTOP_LOG:-}" ]; then
     printf 'open %s\n' "$*" >> "$AGCTL_FAKE_DESKTOP_LOG"
 fi
 mode="${AGCTL_FAKE_OPEN:-ready}"
-if [ "$mode" = fail-once ]; then
+if [ "$mode" = fail-once ] || [ "$mode" = fail-once-blind ]; then
     marker="$AGENTCTL_TEST_PROCESS_TABLE.open-failed"
     if [ -e "$marker" ]; then
-        mode=ready
+        mode=${mode#fail-once}
+        mode=${mode#-}
+        mode=${mode:-ready}
     else
         : > "$marker"
         mode=fail
@@ -67,4 +74,9 @@ elif [ "$mode" = later ]; then
 fi
 proctable add "$AGENTCTL_TEST_PROCESS_TABLE" "$pid" 1 "$app/MacOS/Claude" "delay=$delay" &&
     proctable add "$AGENTCTL_TEST_PROCESS_TABLE" $((pid + 1)) "$pid" "$app/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)" "delay=$delay" &&
-    proctable add "$AGENTCTL_TEST_PROCESS_TABLE" $((pid + 2)) "$pid" "$app/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)" "delay=$delay"
+    proctable add "$AGENTCTL_TEST_PROCESS_TABLE" $((pid + 2)) "$pid" "$app/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)" "delay=$delay" || exit 1
+if [ "$mode" = blind ]; then
+    # A process of the same user whose path read fails makes every later
+    # listing fail, the way an unreadable process table would.
+    proctable add "$AGENTCTL_TEST_PROCESS_TABLE" $((pid + 3)) 1 /usr/libexec/unlistable read_error=EIO || exit 1
+fi

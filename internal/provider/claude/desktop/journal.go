@@ -209,8 +209,10 @@ func Append(path string, record any) error {
 	return nil
 }
 
+// syncDir flushes the store directory after an append. It is opened
+// without following a link, like every other directory of the store.
 func syncDir(dir string) error {
-	d, err := os.Open(dir)
+	d, err := os.OpenFile(dir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", dir, err)
 	}

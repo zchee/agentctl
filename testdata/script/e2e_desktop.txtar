@@ -479,6 +479,44 @@ grep '"word":"desktop_observe_failed".*"main":null,"app_running":null' $STORE/jo
 cmp $D/config.json config-a.json
 exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
 
+# the recovery launch starts the app and nothing can be listed after it:
+# reverted, relaunch_failed, the running state unknown rather than stopped
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGCTL_FAKE_OPEN=fail-once-blind
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "relaunch_failed"'
+stdout '"journal": "reverted"'
+stdout 'the processes could not be listed'
+grep -count=2 '^open' $AGCTL_FAKE_DESKTOP_LOG
+grep '"outcome":"reverted","word":"relaunch_failed".*"main":null,"app_running":null' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+env AGCTL_FAKE_OPEN=
+rm $AGENTCTL_TEST_PROCESS_TABLE.open-failed
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
+# the target's launch starts the app and nothing can be listed after it: the
+# rollback cannot prove the app stopped, so nothing moves back, no result is
+# recorded and the intent stays open; once the table reads again, repair
+# records the running main it sees
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGCTL_FAKE_OPEN=blind
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "exchange_not_restored"'
+stdout '"journal": "open"'
+grep -count=1 '^open' $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+env AGCTL_FAKE_OPEN=
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 1003
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+exec agentctl claude desktop repair --yes
+stdout '^state target-installed'
+grep '"outcome":"applied","word":"repaired","verified":true.*"main":\{"pid":1000,.*"app_running":true' $STORE/journal.jsonl
+cmp $D/config.json config-b.json
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
 -- registry.json --
 {
   "version": 1,

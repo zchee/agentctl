@@ -20,6 +20,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/internal/cli"
 	rdesktop "github.com/zchee/agentctl/internal/runtime/desktop"
@@ -125,5 +127,75 @@ func TestRunUseJSONKeepsTheQuestionOffStdout(t *testing.T) {
 	}
 	if _, err := dec.ReadValue(); !errors.Is(err, io.EOF) {
 		t.Fatalf("stdout carries more than one JSON document: %v", err)
+	}
+}
+
+// TestLaunchObservedNeverInfersAStoppedApp pins what a result row records
+// after a launch: a ready launch's main, or what one more listing shows.
+// A launch that was not ready says nothing about whether the app runs, so
+// a listing that fails must leave both the main and the running state
+// unknown instead of recording a stopped app.
+func TestLaunchObservedNeverInfersAStoppedApp(t *testing.T) {
+	start := time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC)
+	uid := uint32(os.Getuid())
+	ready := &rdesktop.Proc{PID: 700, PPID: 1, Start: start, Path: rdesktop.MainPath}
+	listFails := func(context.Context, uint32) ([]rdesktop.Record, error) {
+		return nil, errors.New("EIO")
+	}
+	listNothing := func(context.Context, uint32) ([]rdesktop.Record, error) { return nil, nil }
+	listMain := func(context.Context, uint32) ([]rdesktop.Record, error) {
+		return []rdesktop.Record{{PID: 900, PPID: 1, UID: uid, Start: start, Path: rdesktop.MainPath}}, nil
+	}
+
+	tests := map[string]struct {
+		launch      rdesktop.LaunchReport
+		list        rdesktop.Lister
+		wantPID     int32
+		wantRunning *bool
+	}{
+		"success: a ready launch records its main without another listing": {
+			launch:      rdesktop.LaunchReport{Ready: true, Main: ready},
+			list:        listFails,
+			wantPID:     700,
+			wantRunning: new(true),
+		},
+		"success: a launch that was not ready and a listing without the app record it stopped": {
+			launch:      rdesktop.LaunchReport{},
+			list:        listNothing,
+			wantRunning: new(false),
+		},
+		"success: a main that the last listing finds is recorded running": {
+			launch:      rdesktop.LaunchReport{ObserveErr: errors.New("EIO")},
+			list:        listMain,
+			wantPID:     900,
+			wantRunning: new(true),
+		},
+		"error: a wait that could not list and a failed last listing leave both unknown": {
+			launch: rdesktop.LaunchReport{ObserveErr: errors.New("EIO")},
+			list:   listFails,
+		},
+		"error: a failed start and a failed listing leave both unknown": {
+			launch: rdesktop.LaunchReport{OpenErr: errors.New("open failed")},
+			list:   listFails,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			e := &desktopEnv{
+				sys: &rdesktop.System{Observer: rdesktop.Observer{List: tt.list, UID: uid, DataDir: t.TempDir()}},
+				log: slog.New(slog.DiscardHandler),
+			}
+			main, running := e.launchObserved(t.Context(), tt.launch)
+			var gotPID int32
+			if main != nil {
+				gotPID = main.PID
+			}
+			if gotPID != tt.wantPID {
+				t.Errorf("main pid = %d, want %d", gotPID, tt.wantPID)
+			}
+			if diff := gocmp.Diff(tt.wantRunning, running); diff != "" {
+				t.Errorf("running (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

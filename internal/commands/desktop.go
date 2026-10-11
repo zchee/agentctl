@@ -202,7 +202,15 @@ func (e *desktopEnv) appendRecord(record any, injectedFailure bool) error {
 	if injectedFailure {
 		return errs.NewIO("could not append to the desktop journal", errors.New("no space left on device (injected)"))
 	}
-	return desktop.Append(e.layout.Journal, record)
+	if err := desktop.Append(e.layout.Journal, record); err != nil {
+		return err
+	}
+	// A kill right after a result is durable must leave an operation the
+	// next command finds closed.
+	if _, ok := record.(desktop.Result); ok {
+		crashPoint(e.fault.Is(fault.DesktopAbortAfterResult))
+	}
+	return nil
 }
 
 // crashPoint ends the process when the caller's injected fault point is

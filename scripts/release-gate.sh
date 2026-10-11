@@ -84,9 +84,12 @@ fault_points=(
 	desktop_abort_after_outgoing_rename
 	desktop_abort_after_quit
 	desktop_abort_after_repair_renames
+	desktop_abort_after_result
 	desktop_abort_after_rollback_renames
+	desktop_abort_after_stray_rename
 	desktop_abort_after_target_rename
 	desktop_abort_before_result
+	desktop_abort_mid_repair_revert
 	desktop_abort_mid_rollback
 	desktop_intent_append_fail
 	desktop_result_append_fail

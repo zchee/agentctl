@@ -107,6 +107,12 @@ const (
 	DesktopAbortAfterRollbackRenames = "desktop_abort_after_rollback_renames"
 	// DesktopAbortAfterRepairRenames ends the process after the renames of a desktop repair, before its launch.
 	DesktopAbortAfterRepairRenames = "desktop_abort_after_repair_renames"
+	// DesktopAbortAfterStrayRename ends the process after a desktop repair parked a stray profile, before its next move.
+	DesktopAbortAfterStrayRename = "desktop_abort_after_stray_rename"
+	// DesktopAbortMidRepairRevert ends the process after a desktop repair moved the installed target back, before the outgoing profile returns.
+	DesktopAbortMidRepairRevert = "desktop_abort_mid_repair_revert"
+	// DesktopAbortAfterResult ends the process right after a desktop result was appended.
+	DesktopAbortAfterResult = "desktop_abort_after_result"
 )
 
 // The seam variables a tagged build reads its fault set through. Neither

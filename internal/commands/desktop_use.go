@@ -216,6 +216,32 @@ func (e *desktopEnv) observeMain(ctx context.Context) (*rdesktop.Proc, *bool) {
 	return &snap.Mains[0], new(true)
 }
 
+// launchObserved returns the main and the running state a result row
+// records after a launch. A ready launch saw its main in a successful
+// listing. A launch that was not ready proves nothing either way: its wait
+// may have failed to list the processes at all, or never listed them
+// because the start failed. So one more listing decides, and when it fails
+// both stay unknown rather than turning into a stopped app.
+func (e *desktopEnv) launchObserved(ctx context.Context, launch rdesktop.LaunchReport) (*rdesktop.Proc, *bool) {
+	if launch.Ready {
+		return launch.Main, new(true)
+	}
+	if launch.ObserveErr != nil {
+		e.log.Warn("desktop launch wait could not list the processes", "error", launch.ObserveErr.Error())
+	}
+	return e.observeMain(ctx)
+}
+
+// launchNote is the part of a refusal that says why a launch that was not
+// ready may still have started the app: its wait could not list the
+// processes.
+func launchNote(launch rdesktop.LaunchReport) string {
+	if launch.ObserveErr == nil {
+		return ""
+	}
+	return fmt.Sprintf(" (the processes could not be listed: %v)", launch.ObserveErr)
+}
+
 // errAppStillRunning reports a snapshot taken right before a move that
 // still shows part of the app.
 type errAppStillRunning struct{ mains, family int }
@@ -487,16 +513,17 @@ func (e *desktopEnv) failedFirstMove(ctx context.Context, rep *desktopReport, in
 	if errors.Is(moveErr, desktop.ErrDestinationExists) {
 		word = wordDestinationExists
 	}
-	res := e.observedResult(in, desktop.OutcomeAborted, word, launch.Main, new(launch.Ready))
+	main, running := e.launchObserved(ctx, launch)
+	res := e.observedResult(in, desktop.OutcomeAborted, word, main, running)
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 		rep.Journal = journalOpen
 	} else {
 		rep.Journal = string(desktop.OutcomeAborted)
 	}
 	if errors.Is(moveErr, desktop.ErrDestinationExists) {
-		return refuse(wordDestinationExists, "%v; nothing was moved and the app was started again", moveErr)
+		return refuse(wordDestinationExists, "%v; nothing was moved and the app was started again%s", moveErr, launchNote(launch))
 	}
-	return errs.NewIO("could not move the profile at the data path; nothing was moved", moveErr)
+	return errs.NewIO("could not move the profile at the data path; nothing was moved"+launchNote(launch), moveErr)
 }
 
 // rollback undoes the exchange after the target did not start: the target
@@ -548,14 +575,15 @@ func (e *desktopEnv) rollback(ctx context.Context, rep *desktopReport, in *deskt
 		word = wordRevertedRelaunched
 	}
 	crashPoint(e.fault.Is(fault.DesktopAbortBeforeResult))
-	res := e.observedResult(in, desktop.OutcomeReverted, word, recovery.Main, new(recovery.Ready))
+	main, running := e.launchObserved(ctx, recovery)
+	res := e.observedResult(in, desktop.OutcomeReverted, word, main, running)
 	rep.Main = res.Main
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 		rep.Outcome, rep.Journal = wordJournalNotRecorded, journalOpen
 		return refuse(wordJournalNotRecorded, "the exchange was undone but its result was not recorded (%v); run `agentctl claude desktop repair`", err)
 	}
 	rep.Outcome, rep.Journal = word, string(desktop.OutcomeReverted)
-	return refuse(word, "the app did not start on the requested profile; the previous profile is back at the data path")
+	return refuse(word, "the app did not start on the requested profile; the previous profile is back at the data path%s", launchNote(recovery))
 }
 
 // rollbackLayout proves, before the rollback moves anything, that the

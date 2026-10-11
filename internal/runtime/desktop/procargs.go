@@ -24,12 +24,17 @@ import (
 // ExecutablePath extracts the executable path from a kern.procargs2
 // block: a native-endian argc word, the NUL-terminated path the process
 // was started from, NUL padding, then the arguments. Only the path is
-// read. The kernel writes it and the process cannot change it, so a block
-// too short for the word, without a NUL after the path or with an empty
-// path is a failed read and an error. The arguments after it are not
-// counted against argc: a process may overwrite its own argument area to
-// retitle itself, and failing on that would make every snapshot fail for
-// as long as such a process runs.
+// read. The kernel copies the block from the top of the process's own
+// stack, where the path was placed at exec, so the process can rewrite it
+// like the rest of that area. It is still required: a block too short for
+// the word, without a NUL after the path or with an empty path is
+// unusable, and that is a failed read and an error. Every failure goes the
+// closed way: a failed read fails the snapshot, which blocks every move,
+// and a rewritten path can only hide the process that rewrote it or make
+// it count as one of the app's, which also blocks a move. The arguments
+// after it are not counted against argc: a process may overwrite its own
+// argument area to retitle itself, and failing on that would make every
+// snapshot fail for as long as such a process runs.
 func ExecutablePath(block []byte) (string, error) {
 	const word = 4
 	if len(block) <= word {

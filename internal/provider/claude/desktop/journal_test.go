@@ -201,6 +201,44 @@ func TestJournalRefusesSymlink(t *testing.T) {
 	}
 }
 
+// TestSyncDirRefusesALink pins the directory flush after an append: the
+// store directory is flushed only when it is a real directory, never
+// through a link that replaced it.
+func TestSyncDirRefusesALink(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		link    bool
+		wantErr bool
+	}{
+		"success: a real directory is flushed":             {},
+		"error: a directory replaced by a link is refused": {link: true, wantErr: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			base := t.TempDir()
+			dir := filepath.Join(base, "store")
+			if tt.link {
+				target := filepath.Join(base, "elsewhere")
+				if err := os.Mkdir(target, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, dir); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			err := syncDir(dir)
+			t.Logf("syncDir: %v", err)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("syncDir error = %v, want error %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestAppendFailureLikeAFullDisk drives the append failure path the way a
 // full disk would report it and proves nothing reaches the journal.
 func TestAppendFailureLikeAFullDisk(t *testing.T) {

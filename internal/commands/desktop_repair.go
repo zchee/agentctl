@@ -273,6 +273,7 @@ func (e *desktopEnv) repair(ctx context.Context, p DesktopProcess, rep *desktopR
 		if err := e.moveTargetBack(in); err != nil {
 			return e.moveFailed(rep, err)
 		}
+		crashPoint(e.fault.Is(fault.DesktopAbortMidRepairRevert))
 		if err := e.returnOutgoing(in); err != nil {
 			return e.moveFailed(rep, err)
 		}
@@ -280,6 +281,7 @@ func (e *desktopEnv) repair(ctx context.Context, p DesktopProcess, rep *desktopR
 		if _, err := desktop.Move(e.layout.DefaultData, e.layout.Profile(desktop.StrayName(in.OpID)), &layout.data.id); err != nil {
 			return e.moveFailed(rep, err)
 		}
+		crashPoint(e.fault.Is(fault.DesktopAbortAfterStrayRename))
 		fallthrough
 	default:
 		if err := e.finishOutgoingMoved(in, action); err != nil {
@@ -356,7 +358,8 @@ func (e *desktopEnv) repairLaunch(ctx context.Context, rep *desktopReport, in *d
 	if !launch.Ready {
 		word = wordRepairedNotRunning
 	}
-	res := e.observedResult(in, outcome, word, launch.Main, new(launch.Ready))
+	main, running := e.launchObserved(ctx, launch)
+	res := e.observedResult(in, outcome, word, main, running)
 	res.Verified = launch.Ready
 	rep.Main = res.Main
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
@@ -368,7 +371,7 @@ func (e *desktopEnv) repairLaunch(ctx context.Context, rep *desktopReport, in *d
 		rep.Identity = observedWord(res, in)
 	}
 	if !launch.Ready {
-		return refuse(wordRepairedNotRunning, "the profiles are in place (%s) but the app did not start", outcome)
+		return refuse(wordRepairedNotRunning, "the profiles are in place (%s) but the app did not start%s", outcome, launchNote(launch))
 	}
 	return nil
 }

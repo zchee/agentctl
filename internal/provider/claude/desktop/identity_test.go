@@ -182,6 +182,22 @@ func TestReadDesktopIdentityRefusesEscapes(t *testing.T) {
 			},
 			want: StateUnreadable,
 		},
+		"error: the profile directory replaced by a link to a sibling after the chain check is unreadable": {
+			prepare: func(t *testing.T, dir, outside string) {
+				// The caller's check runs first and passes on the real
+				// directory; the replacement lands between it and the read.
+				if err := ParentChainHasNoSymlink(dir); err != nil {
+					t.Fatalf("the chain check before the replacement: %v", err)
+				}
+				if err := os.Remove(dir); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, dir); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: StateUnreadable,
+		},
 		"error: the profile directory does not exist": {
 			prepare: func(t *testing.T, dir, _ string) {
 				if err := os.Remove(dir); err != nil {
@@ -194,7 +210,12 @@ func TestReadDesktopIdentityRefusesEscapes(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			base := t.TempDir()
+			// The temporary directory may sit under a link (/var on
+			// macOS), which the chain check would rightly refuse.
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			dir, outside := filepath.Join(base, "profile"), filepath.Join(base, "outside")
 			for _, d := range []string{dir, outside} {
 				if err := os.Mkdir(d, 0o700); err != nil {
@@ -219,6 +240,11 @@ func TestReadDesktopIdentityRefusesEscapes(t *testing.T) {
 			t.Logf("state %s reason %q", got.State, got.Reason)
 			if got.State != tt.want {
 				t.Fatalf("ReadDesktopIdentity = %+v, want state %s", got, tt.want)
+			}
+			// No case may hand back the identity stored outside the
+			// profile.
+			if got.UUID != "" {
+				t.Fatalf("ReadDesktopIdentity returned the UUID %s from outside the profile", got.UUID)
 			}
 		})
 	}

@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/provider/claude/desktop"
 	rdesktop "github.com/zchee/agentctl/internal/runtime/desktop"
@@ -229,12 +231,19 @@ func inPlaceName(entries []desktop.Entry) string {
 
 // storedNames lists the stored profile names in profiles/, sorted. An
 // entry whose name is outside the grammar is not a stored profile and is
-// left out.
+// left out. The directory is opened without following a link, so a
+// profiles directory replaced by one is a listing failure rather than a
+// listing of somewhere else.
 func storedNames(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
+	f, err := os.OpenFile(dir, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	entries, err := f.ReadDir(-1)
 	if err != nil {
 		return nil, err
 	}

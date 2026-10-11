@@ -101,6 +101,12 @@ const (
 	DesktopAbortAfterRollbackRenames = ""
 	// DesktopAbortAfterRepairRenames is inert in a release build.
 	DesktopAbortAfterRepairRenames = ""
+	// DesktopAbortAfterStrayRename is inert in a release build.
+	DesktopAbortAfterStrayRename = ""
+	// DesktopAbortMidRepairRevert is inert in a release build.
+	DesktopAbortMidRepairRevert = ""
+	// DesktopAbortAfterResult is inert in a release build.
+	DesktopAbortAfterResult = ""
 )
 
 // Active is the release factory: nothing is ever injected, and no

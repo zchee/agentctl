@@ -68,13 +68,19 @@ type Identity struct {
 }
 
 // ReadDesktopIdentity reads the plaintext lastKnownAccountUuid of the
-// profile at dir. config.json is opened relative to a descriptor of dir,
-// never following a link, and it is the only name opened under it. The
-// open does not block: a named pipe or a device there would otherwise hold
-// the caller (and the desktop lock it may own) until something wrote to
-// it, so the opened descriptor's type is checked before anything is read.
+// profile at dir. dir itself is opened without following a link: a caller
+// checks the path for links first, and a directory replaced by a link
+// after that check would otherwise hand back another profile's account.
+// config.json is opened relative to that descriptor, never following a
+// link either, and it is the only name opened under it. The open does not
+// block: a named pipe or a device there would otherwise hold the caller
+// (and the desktop lock it may own) until something wrote to it, so the
+// opened descriptor's type is checked before anything is read.
 func ReadDesktopIdentity(dir string) Identity {
-	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.ELOOP) {
+		return Identity{State: StateUnreadable, Reason: "the profile directory is a symbolic link"}
+	}
 	if err != nil {
 		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("opening the profile: %v", &fs.PathError{Op: "open", Path: dir, Err: err})}
 	}

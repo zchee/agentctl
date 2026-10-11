@@ -893,6 +893,215 @@ stdout '^state never-started'
 cmp $D/config.json config-a.json
 cmp $STORE/profiles/$B/config.json config-b.json
 
+# outgoing-moved, --complete: the repair's launch starts the app and nothing
+# can be listed after it: recorded applied, the running state unknown, exit 30
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=blind
+exec expectexit 30 agentctl claude desktop repair --complete --yes
+stderr 'repaired_not_running'
+stderr 'the processes could not be listed'
+grep -count=1 '^open' $AGCTL_FAKE_DESKTOP_LOG
+grep '"outcome":"applied","word":"repaired_not_running","verified":false' $STORE/journal.jsonl
+grep '"word":"repaired_not_running".*"main":null,"app_running":null' $STORE/journal.jsonl
+! grep '"app_running":false' $STORE/journal.jsonl
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+! exists $STORE/profiles/$B
+env AGCTL_FAKE_OPEN=
+
+# outgoing-moved, --revert: the repair's launch starts the app and nothing
+# can be listed after it: recorded reverted, the running state unknown, exit 30
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=blind
+exec expectexit 30 agentctl claude desktop repair --revert --yes
+stderr 'repaired_not_running'
+stderr 'the processes could not be listed'
+grep -count=1 '^open' $AGCTL_FAKE_DESKTOP_LOG
+grep '"outcome":"reverted","word":"repaired_not_running","verified":false' $STORE/journal.jsonl
+grep '"word":"repaired_not_running".*"main":null,"app_running":null' $STORE/journal.jsonl
+! grep '"app_running":false' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+! exists $STORE/profiles/$A
+env AGCTL_FAKE_OPEN=
+
+# unexpected-default, --complete, killed right after the stray profile is
+# parked: the data path is empty again, so the next repair finds
+# outgoing-moved, asks for a choice, and --complete finishes; the stray stays
+# stored
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+mkdir $D
+cp config-unknown.json $D/config.json
+env AGENTCTL_FAULT=desktop_abort_after_stray_rename
+exec expectexit 134 agentctl claude desktop repair --complete --yes
+env AGENTCTL_FAULT=
+! exists $D
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+exec expectexit 30 agentctl claude desktop repair --yes
+stdout '^state outgoing-moved'
+stderr 'desktop_repair_needs_choice'
+exec agentctl claude desktop repair --complete --yes
+stdout '^state outgoing-moved'
+stdout '^repaired matches'
+grep '"outcome":"applied","word":"repaired"' $STORE/journal.jsonl
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+exec agentctl claude desktop status
+stdout 'stray-[0-9a-z-]+  unknown'
+
+# unexpected-default, --revert, killed right after the stray profile is
+# parked: the next repair finds outgoing-moved and --revert restores
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+mkdir $D
+cp config-unknown.json $D/config.json
+env AGENTCTL_FAULT=desktop_abort_after_stray_rename
+exec expectexit 134 agentctl claude desktop repair --revert --yes
+env AGENTCTL_FAULT=
+! exists $D
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+exec expectexit 30 agentctl claude desktop repair --yes
+stdout '^state outgoing-moved'
+stderr 'desktop_repair_needs_choice'
+exec agentctl claude desktop repair --revert --yes
+stdout '^state outgoing-moved'
+grep '"outcome":"reverted","word":"repaired"' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+exec agentctl claude desktop status
+stdout 'stray-[0-9a-z-]+  unknown'
+
+# target-installed, --revert, killed between its two moves: the target is
+# back at its source and the data path empty, so the next repair finds
+# outgoing-moved, asks for a choice, and --revert restores
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_target_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=desktop_abort_mid_repair_revert
+exec expectexit 134 agentctl claude desktop repair --revert --yes
+env AGENTCTL_FAULT=
+! exists $D
+cmp $STORE/profiles/$B/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+exec expectexit 30 agentctl claude desktop repair --yes
+stdout '^state outgoing-moved'
+stderr 'desktop_repair_needs_choice'
+exec agentctl claude desktop repair --revert --yes
+stdout '^state outgoing-moved'
+grep '"outcome":"reverted","word":"repaired"' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+! exists $STORE/profiles/$A
+
+# a switch killed right after its result is recorded: the operation is
+# closed, status shows no open intent and repair has nothing to do
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_result
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+grep '"outcome":"applied","word":"selected"' $STORE/journal.jsonl
+exec agentctl claude desktop status --json
+stdout '"open_intents": \[\]'
+exec agentctl claude desktop repair --yes
+stdout '^nothing_to_repair'
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+
+# a repair killed right after its result is recorded: the operation is
+# closed and the next repair has nothing to do
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+env AGENTCTL_FAULT=desktop_abort_after_result
+exec expectexit 134 agentctl claude desktop repair --complete --yes
+env AGENTCTL_FAULT=
+grep '"outcome":"applied","word":"repaired"' $STORE/journal.jsonl
+exec agentctl claude desktop status --json
+stdout '"open_intents": \[\]'
+exec agentctl claude desktop repair --yes
+stdout '^nothing_to_repair'
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+
 -- registry.json --
 {
   "version": 1,

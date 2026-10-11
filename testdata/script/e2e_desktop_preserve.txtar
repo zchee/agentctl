@@ -250,6 +250,153 @@ cmp stdout a.sig
 exec treesig $STORE/profiles/$B
 cmp stdout b.sig
 
+# status with a partial error changes nothing: the journal unreadable,
+# then the profiles directory replaced by a regular file
+mv $STORE/journal.jsonl $WORK/journal.aside
+mkdir $STORE/journal.jsonl
+exec expectexit 30 agentctl claude desktop status --json
+stdout '"step": "journal"'
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+rm $STORE/journal.jsonl
+mv $WORK/journal.aside $STORE/journal.jsonl
+mv $STORE/profiles $WORK/profiles.aside
+cp config-b.json $STORE/profiles
+exec expectexit 30 agentctl claude desktop status --json
+stdout '"step": "profiles"'
+exec treesig $D
+cmp stdout a.sig
+exec treesig $WORK/profiles.aside/$B
+cmp stdout b.sig
+rm $STORE/profiles
+mv $WORK/profiles.aside $STORE/profiles
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+
+# the processes cannot be listed: use and forget refuse and nothing changes
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 920 1 $MAIN read_error=EIO
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_observe_failed'
+exec expectexit 30 agentctl claude desktop forget $B --yes
+stderr 'desktop_observe_failed'
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 920
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+
+# repair refuses without a choice and when its quit times out: the two
+# profiles keep their signatures where the crash left them, and the chosen
+# repair then restores them intact
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+! exists $D
+exec expectexit 30 agentctl claude desktop repair --yes
+stderr 'desktop_repair_needs_choice'
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 930 1 $MAIN
+env AGCTL_FAKE_OSASCRIPT=keep
+exec expectexit 30 agentctl claude desktop repair --revert --yes
+stderr 'desktop_quit_timeout'
+env AGCTL_FAKE_OSASCRIPT=
+! exists $D
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec proctable rm $AGENTCTL_TEST_PROCESS_TABLE 930
+exec agentctl claude desktop repair --revert --yes
+stdout '^repaired '
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+
+# repair refuses a layout it cannot reconcile: the stored target replaced
+# since the intent keeps its own signature, and so do the original and the
+# profile at the data path
+env AGENTCTL_FAULT=desktop_abort_after_quit
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+mv $STORE/profiles/$B $WORK/b.aside
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec treesig $STORE/profiles/$B
+cp stdout r.sig
+exec expectexit 30 agentctl claude desktop repair --yes
+stderr 'desktop_repair_inconsistent'
+exec treesig $STORE/profiles/$B
+cmp stdout r.sig
+exec treesig $WORK/b.aside
+cmp stdout b.sig
+exec treesig $D
+cmp stdout a.sig
+rm $STORE/profiles/$B
+mv $WORK/b.aside $STORE/profiles/$B
+exec agentctl claude desktop repair --yes
+stdout '^aborted'
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+
+# forget's refusals delete nothing: the app running, the profile in place
+# (a stored copy of it), the lock held and an open intent; the profile named
+# keeps its signature each time, and so does every other one
+exec agentctl claude desktop use $B --yes
+stdout '^selected matches'
+exec expectexit 30 agentctl claude desktop forget $A --yes
+stderr 'desktop_app_running'
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec treesig $STORE/profiles/$B
+cp stdout s.sig
+exec expectexit 30 agentctl claude desktop forget $B --yes
+stderr 'desktop_profile_in_place'
+exec treesig $STORE/profiles/$B
+cmp stdout s.sig
+exec treesig $D
+cmp stdout b.sig
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+rm $STORE/profiles/$B
+! exec flockhold $STORE/lock 10m $WORK/forget-lock-held &forgetholder&
+exec waitfor $WORK/forget-lock-held
+exec expectexit 30 agentctl claude desktop forget $A --yes
+stderr 'desktop_lock_busy'
+kill forgetholder
+wait forgetholder
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+env AGENTCTL_FAULT=desktop_abort_after_intent
+exec expectexit 134 agentctl claude desktop use $A --yes
+env AGENTCTL_FAULT=
+exec expectexit 30 agentctl claude desktop forget $A --yes
+stderr 'desktop_intent_open'
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+exec agentctl claude desktop repair --yes
+stdout '^aborted'
+exec treesig $STORE/profiles/$A
+cmp stdout a.sig
+exec treesig $D
+cmp stdout b.sig
+
 -- registry.json --
 {
   "version": 1,
