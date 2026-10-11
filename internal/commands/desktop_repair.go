@@ -371,7 +371,7 @@ func (e *desktopEnv) repairLaunch(ctx context.Context, rep *desktopReport, in *d
 		rep.Identity = observedWord(res, in)
 	}
 	if !launch.Ready {
-		return refuse(wordRepairedNotRunning, "the profiles are in place (%s) but the app did not start%s", outcome, launchNote(launch))
+		return refuse(wordRepairedNotRunning, "the profiles are in place (%s) but %s", outcome, launchShortfall(launch, main))
 	}
 	return nil
 }

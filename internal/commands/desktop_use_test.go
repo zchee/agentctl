@@ -31,6 +31,7 @@ import (
 	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/internal/cli"
+	"github.com/zchee/agentctl/internal/provider/claude/desktop"
 	rdesktop "github.com/zchee/agentctl/internal/runtime/desktop"
 )
 
@@ -195,6 +196,171 @@ func TestLaunchObservedNeverInfersAStoppedApp(t *testing.T) {
 			}
 			if diff := gocmp.Diff(tt.wantRunning, running); diff != "" {
 				t.Errorf("running (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// desktopLaunchFixture builds an environment whose data path holds an
+// empty profile, whose opener is missing and whose listing is replaced by
+// list, together with an intent whose outgoing profile is that data path.
+// A test that needs a launch to go through points the opener at
+// syntheticOpener; nothing here can reach the real app.
+func desktopLaunchFixture(t *testing.T, list rdesktop.Lister) (*desktopEnv, *desktop.Intent) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := desktop.Paths(filepath.Join(root, "home"))
+	for _, dir := range []string{layout.DefaultData, layout.ProfilesDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sys, err := desktopTestSystem(t, root)(layout.DefaultData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sys.Observer.List = list
+	id, err := desktop.StatID(layout.DefaultData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := &desktop.Intent{Type: desktop.TypeIntent, OpID: "0123456789abcdef", Command: "use", Outgoing: &desktop.Outgoing{File: id}}
+	return &desktopEnv{layout: layout, sys: sys, log: slog.New(slog.DiscardHandler)}, in
+}
+
+// syntheticOpener replaces the system's opener with a script that exits
+// successfully without starting anything, so the launch goes on to wait.
+func syntheticOpener(t *testing.T, sys *rdesktop.System) {
+	t.Helper()
+	sys.Open = filepath.Join(filepath.Dir(sys.Bundle), "synthetic-open")
+	if err := os.WriteFile(sys.Open, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// scriptedListing answers the n-th process listing with the n-th entry of
+// steps and repeats the last entry after that. A nil entry lists no
+// process, a positive pid lists one main with that pid, and a negative one
+// fails the listing.
+func scriptedListing(steps ...int32) rdesktop.Lister {
+	calls := 0
+	return func(context.Context, uint32) ([]rdesktop.Record, error) {
+		step := steps[min(calls, len(steps)-1)]
+		calls++
+		switch {
+		case step < 0:
+			return nil, errors.New("EIO")
+		case step == 0:
+			return nil, nil
+		}
+		start := time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC)
+		return []rdesktop.Record{{PID: step, PPID: 1, UID: uint32(os.Getuid()), Start: start, Path: rdesktop.MainPath}}, nil
+	}
+}
+
+// lastResult reads the journal back and returns its last result row.
+func lastResult(t *testing.T, e *desktopEnv) *desktop.Result {
+	t.Helper()
+	entries, err := desktop.ReadJournal(e.layout.Journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Result != nil {
+			return entries[i].Result
+		}
+	}
+	t.Fatal("the journal holds no result row")
+	return nil
+}
+
+// TestFailedFirstMoveNamesOnlyAnObservedRestart pins the refusal after the
+// first move failed: it may say the app was started again only when the
+// launch saw its main, and otherwise says a restart was attempted, carries
+// the opener's failure and names any main the last listing found. The row
+// keeps the aborted direction and records what that listing showed.
+func TestFailedFirstMoveNamesOnlyAnObservedRestart(t *testing.T) {
+	tests := map[string]struct {
+		opener      bool
+		listing     []int32
+		wantIn      []string
+		wantOut     []string
+		wantPID     int32
+		wantRunning *bool
+	}{
+		"success: a launch that saw its main says the app was started again": {
+			opener:      true,
+			listing:     []int32{700},
+			wantIn:      []string{"nothing was moved and the app was started again"},
+			wantOut:     []string{"attempted"},
+			wantPID:     700,
+			wantRunning: new(true),
+		},
+		"error: a missing opener and a listing without the app say a restart was attempted": {
+			listing:     []int32{0},
+			wantIn:      []string{"a restart was attempted, but the app could not be started (", "no-open"},
+			wantOut:     []string{"started again", "observed afterwards"},
+			wantRunning: new(false),
+		},
+		"error: a missing opener and a main found afterwards name that main": {
+			listing:     []int32{900},
+			wantIn:      []string{"a restart was attempted, but the app could not be started (", "a main was observed afterwards (pid 900)"},
+			wantOut:     []string{"started again"},
+			wantPID:     900,
+			wantRunning: new(true),
+		},
+		"error: an unconfirmed wait and a failed listing keep the listing error": {
+			opener:  true,
+			listing: []int32{-1},
+			wantIn:  []string{"a restart was attempted, but the app's start was not confirmed within the launch wait", "the processes could not be listed: listing processes: EIO"},
+			wantOut: []string{"started again", "observed afterwards"},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			e, in := desktopLaunchFixture(t, scriptedListing(tt.listing...))
+			if tt.opener {
+				syntheticOpener(t, e.sys)
+			}
+			rep := &desktopReport{}
+			err := e.failedFirstMove(t.Context(), rep, in, nil, desktop.ErrDestinationExists)
+			t.Logf("refusal: %v", err)
+			refusal, ok := errors.AsType[*desktopRefusal](err)
+			if !ok {
+				t.Fatalf("want a refusal, got %v", err)
+			}
+			if refusal.Word != wordDestinationExists {
+				t.Errorf("word = %q, want %q", refusal.Word, wordDestinationExists)
+			}
+			for _, want := range tt.wantIn {
+				if !strings.Contains(refusal.Detail, want) {
+					t.Errorf("refusal %q does not contain %q", refusal.Detail, want)
+				}
+			}
+			for _, unwanted := range tt.wantOut {
+				if strings.Contains(refusal.Detail, unwanted) {
+					t.Errorf("refusal %q must not contain %q", refusal.Detail, unwanted)
+				}
+			}
+			if rep.Journal != string(desktop.OutcomeAborted) {
+				t.Errorf("journal = %q, want %q", rep.Journal, desktop.OutcomeAborted)
+			}
+			res := lastResult(t, e)
+			if res.Outcome != desktop.OutcomeAborted || res.Word != wordDestinationExists {
+				t.Errorf("row outcome/word = %s/%s, want %s/%s", res.Outcome, res.Word, desktop.OutcomeAborted, wordDestinationExists)
+			}
+			var gotPID int32
+			if res.Main != nil {
+				gotPID = res.Main.PID
+			}
+			if gotPID != tt.wantPID {
+				t.Errorf("row main pid = %d, want %d", gotPID, tt.wantPID)
+			}
+			if diff := gocmp.Diff(tt.wantRunning, res.AppRunning); diff != "" {
+				t.Errorf("row app_running (-want +got):\n%s", diff)
 			}
 		})
 	}

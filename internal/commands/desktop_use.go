@@ -242,6 +242,22 @@ func launchNote(launch rdesktop.LaunchReport) string {
 	return fmt.Sprintf(" (the processes could not be listed: %v)", launch.ObserveErr)
 }
 
+// launchShortfall says what is known after a launch that was not ready.
+// Missing readiness does not prove the app stayed down, so the clause names
+// the opener's failure or the unconfirmed wait, and the main the last
+// listing found, instead of claiming the app did or did not start.
+func launchShortfall(launch rdesktop.LaunchReport, main *rdesktop.Proc) string {
+	clause := "the app's start was not confirmed within the launch wait"
+	if launch.OpenErr != nil {
+		clause = fmt.Sprintf("the app could not be started (%v)", launch.OpenErr)
+	}
+	clause += launchNote(launch)
+	if main != nil {
+		clause += fmt.Sprintf("; a main was observed afterwards (pid %d)", main.PID)
+	}
+	return clause
+}
+
 // errAppStillRunning reports a snapshot taken right before a move that
 // still shows part of the app.
 type errAppStillRunning struct{ mains, family int }
@@ -500,8 +516,8 @@ func (e *desktopEnv) alreadySelected(rep *desktopReport, snap rdesktop.Snapshot,
 }
 
 // failedFirstMove handles a failed move of the outgoing profile: nothing
-// was exchanged, so the app is started again on the same profile and the
-// intent is closed as aborted.
+// was exchanged, so a restart on the same profile is tried and the intent
+// is closed as aborted.
 func (e *desktopEnv) failedFirstMove(ctx context.Context, rep *desktopReport, in *desktop.Intent, before []rdesktop.Proc, moveErr error) error {
 	id, err := desktop.StatID(e.layout.DefaultData)
 	if err != nil || id != in.Outgoing.File {
@@ -520,10 +536,14 @@ func (e *desktopEnv) failedFirstMove(ctx context.Context, rep *desktopReport, in
 	} else {
 		rep.Journal = string(desktop.OutcomeAborted)
 	}
-	if errors.Is(moveErr, desktop.ErrDestinationExists) {
-		return refuse(wordDestinationExists, "%v; nothing was moved and the app was started again%s", moveErr, launchNote(launch))
+	restart := "the app was started again"
+	if !launch.Ready {
+		restart = "a restart was attempted, but " + launchShortfall(launch, main)
 	}
-	return errs.NewIO("could not move the profile at the data path; nothing was moved"+launchNote(launch), moveErr)
+	if errors.Is(moveErr, desktop.ErrDestinationExists) {
+		return refuse(wordDestinationExists, "%v; nothing was moved and %s", moveErr, restart)
+	}
+	return errs.NewIO("could not move the profile at the data path; nothing was moved and "+restart, moveErr)
 }
 
 // rollback undoes the exchange after the target did not start: the target
