@@ -85,6 +85,22 @@ const (
 	CodexInstallRenameFail = "codex_install_rename_fail"
 	// CodexRenameFail forces a Codex refreshed credential rename to fail.
 	CodexRenameFail = "codex_rename_fail"
+	// DesktopAbortAfterIntent ends the process after the desktop intent is recorded, before the quit.
+	DesktopAbortAfterIntent = "desktop_abort_after_intent"
+	// DesktopAbortAfterQuit ends the process after the app quit, before the first desktop rename.
+	DesktopAbortAfterQuit = "desktop_abort_after_quit"
+	// DesktopAbortAfterOutgoingRename ends the process after the profile leaving the data path was moved.
+	DesktopAbortAfterOutgoingRename = "desktop_abort_after_outgoing_rename"
+	// DesktopAbortAfterTargetRename ends the process after the target profile was moved to the data path.
+	DesktopAbortAfterTargetRename = "desktop_abort_after_target_rename"
+	// DesktopAbortBeforeResult ends the process after the launch step, before the desktop result is recorded.
+	DesktopAbortBeforeResult = "desktop_abort_before_result"
+	// DesktopIntentAppendFail fails the desktop intent append the way a full disk would.
+	DesktopIntentAppendFail = "desktop_intent_append_fail"
+	// DesktopResultAppendFail fails the desktop result append the way a full disk would.
+	DesktopResultAppendFail = "desktop_result_append_fail"
+	// DesktopRollbackRenameFail fails the first rename of a desktop rollback.
+	DesktopRollbackRenameFail = "desktop_rollback_rename_fail"
 )
 
 // The seam variables a tagged build reads its fault set through. Neither

@@ -45,6 +45,7 @@ testing_env=(
 	AGENTCTL_CODEX_BIN
 	AGENTCTL_CODEX_TOKEN_URL
 	AGENTCTL_CODEX_USAGE_URL
+	AGENTCTL_DESKTOP_TEST_ROOT
 	AGENTCTL_FAKE_CODEX_
 	AGENTCTL_FAULT
 	AGENTCTL_FAULT_RESUME
@@ -54,6 +55,7 @@ testing_env=(
 	AGENTCTL_SECURITY_BIN
 	AGENTCTL_SWAP_DEADLINE_MS
 	AGENTCTL_TEST_EXIT_DEFERRAL
+	AGENTCTL_TEST_PROCESS_TABLE
 )
 # Pause stems, rather than the runtime-concatenated pause_ prefix, are artifact strings.
 fault_points=(
@@ -78,6 +80,14 @@ fault_points=(
 	codex_refresh_state_rename
 	codex_refresh_state_write
 	codex_rename_fail
+	desktop_abort_after_intent
+	desktop_abort_after_outgoing_rename
+	desktop_abort_after_quit
+	desktop_abort_after_target_rename
+	desktop_abort_before_result
+	desktop_intent_append_fail
+	desktop_result_append_fail
+	desktop_rollback_rename_fail
 	flock_enotsup
 	lock_contended
 	lock_resume_after_sample_b
@@ -121,6 +131,7 @@ seam_files=(
 # Test-only files the testing tag selects with no release counterpart: the
 # scripted helpers the test binary links, never a seam the product reads.
 testing_only_files=(
+	internal/runtime/desktop/snapshot_testing.go
 	internal/testutil/rcmod_script.go
 )
 

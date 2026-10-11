@@ -79,6 +79,22 @@ const (
 	CodexInstallRenameFail = ""
 	// CodexRenameFail is inert in a release build.
 	CodexRenameFail = ""
+	// DesktopAbortAfterIntent is inert in a release build.
+	DesktopAbortAfterIntent = ""
+	// DesktopAbortAfterQuit is inert in a release build.
+	DesktopAbortAfterQuit = ""
+	// DesktopAbortAfterOutgoingRename is inert in a release build.
+	DesktopAbortAfterOutgoingRename = ""
+	// DesktopAbortAfterTargetRename is inert in a release build.
+	DesktopAbortAfterTargetRename = ""
+	// DesktopAbortBeforeResult is inert in a release build.
+	DesktopAbortBeforeResult = ""
+	// DesktopIntentAppendFail is inert in a release build.
+	DesktopIntentAppendFail = ""
+	// DesktopResultAppendFail is inert in a release build.
+	DesktopResultAppendFail = ""
+	// DesktopRollbackRenameFail is inert in a release build.
+	DesktopRollbackRenameFail = ""
 )
 
 // Active is the release factory: nothing is ever injected, and no
