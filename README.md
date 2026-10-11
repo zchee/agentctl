@@ -66,6 +66,10 @@ All entries below follow `agentctl claude`.
 | `use --forget <id> [--yes]` | Delete the generated session, not the account's credentials. |
 | `exec <id> -- <command>...` | Run a command directly in the isolated environment, without a shell. |
 | `env <id> [--shell zsh\|bash\|fish]` | Print shell setup for the isolated environment; default shell is zsh. |
+| `desktop status [--json]` | Report desktop profiles' last-observed accounts, running processes, and interrupted switches. |
+| `desktop use <id> [--yes] [--json]` | Quit the desktop app, exchange its profile for the chosen account's, and relaunch. |
+| `desktop forget <name> [--yes]` | Delete one stored, inactive desktop profile, including its local Code sessions and tasks. |
+| `desktop repair [--complete \| --revert] [--yes]` | Finish or reverse an interrupted desktop profile exchange. |
 
 `status` also accepts repeatable `--account ID`, `--refresh`, `--no-cache`, and `--timeout DUR`
 (default `10s`). `import` accepts repeatable `--claude-config-dir DIR` to select vendor stores.
@@ -145,6 +149,49 @@ counts, in `warnings` and once on stderr; an interrupt during the follow-up prin
 `reconnected` means the session's registry record shows a new bridge. A connected bridge proves neither
 the intended account nor retained history: whether the conversation from before the swap appears on
 claude.ai under the new account has not been verified.
+
+#### Desktop app
+
+The desktop commands are macOS (darwin) only and use `/Applications/Claude.app`. A desktop switch is
+separate from a Claude Code credential swap: the app uses its own web session, so a CLI swap does not
+switch the desktop account.
+
+`desktop use <id>` resolves a registered account, asks the app to quit, waits for its main and counted
+family processes to stop, exchanges the whole directory at `~/Library/Application Support/Claude/`
+with that account's stored profile, then relaunches the app. Finish or save work in the app first; the
+confirmation names what will close and move. agentctl never kills the app. If the account has no stored
+profile, the app creates a fresh one at launch. You sign in by hand once per profile; later selections
+reuse it. Each profile also holds its own Code tab binary download. If the data directory already names
+the requested account, `already_selected` neither quits nor moves anything.
+
+Stored profiles live at `~/Library/Application Support/agentctl/claude-desktop/profiles/<name>/`.
+The active profile lives at the app's data path, not in `profiles/`. The append-only `journal.jsonl`
+and persistent `lock` sit beside `profiles/` in the desktop store, independent of `--config-dir` and
+`AGENTCTL_CONFIG_DIR`; those select only the account registry used to resolve ids. Exchanges use
+same-filesystem directory renames, never a copy fallback. `use` and `repair` do not edit files inside
+profiles. `forget` is the exception: it deletes a stored, inactive profile and **all of that profile's
+local Code sessions and tasks**, after confirmation. Use a name listed by `desktop status`; deletion
+cannot be undone and is refused while the app runs or a switch is unresolved.
+
+agentctl does not extract, decrypt, change or copy cookies or token caches, and never reads or changes
+the safeStorage keychain password (`Claude Safe Storage`). It reads a bounded `config.json` only for
+the plaintext `lastKnownAccountUuid`. That is the last account the profile observed, not proof of a
+current sign-in. `desktop status` reports this identity, stored profiles, process counts and interrupted
+switches. A failed observation exits 30, retains the rows it could read, and reports unknown counts as
+`null` in JSON rather than zero. A stored profile with an unregistered identity is `foreign`; one with
+the active profile's identity is marked `duplicate`.
+
+A journal intent without a result blocks another switch or deletion. `desktop repair` inspects the
+recorded directory identities and the actual layout. If no move began, it closes the intent as
+`aborted`; if the target is already installed, it launches the app if needed and records the result.
+Otherwise it reports the layout and requires `--complete` to install the target or `--revert` to restore
+the original. An inconsistent layout is left untouched. A launch failure can leave the previous
+profile restored, or an open intent needing repair; see the [desktop outcome words](#desktop-outcome-words).
+A reported launch means a main process was observed, never that authentication or the Code tab works.
+
+agentctl automates only the local lifecycle of your own app: quit, exchange its data directory,
+relaunch. It never automates access to the service and never copies or injects a session. You decide
+whether to use it under the applicable [Consumer Terms](https://www.anthropic.com/legal/consumer-terms).
 
 ### Codex
 
@@ -326,12 +373,54 @@ separate store roots do not coordinate one refresh chain.
 | 24 | Live keychain item absent. |
 | 27 | Undo found a different account in the live item. |
 | 29 | Identity/profile unavailable or expired live token without audit attribution. |
-| 30 | `--restart-remote-control` refused the swap before any write (see Remote Control). |
+| 30 | Remote Control pre-write refusal, desktop refusal, or incomplete desktop result (see below). |
 | 129, 130, 143 | HUP, INT, or TERM after child teardown and cleanup. |
 
 Codes 25, 26, and 28 are retired. Isolated `use` and `exec` forward the child's exit code, or
 `128 + signal` for signal death (fallback 1). An applied swap still exits 0 if its subsequent Claude
 configuration rewrite was skipped; inspect its warnings and JSON `config` result.
+
+### Desktop outcome words
+
+Desktop operations report these words; `desktop use --json` puts the word in `outcome`. Exit 30 does
+not always mean nothing changed: inspect the word and the reported layout before retrying. Unknown
+account ids or profile names, conflicting repair flags, and declined or unavailable consent exit 2;
+fatal configuration or I/O failures exit 1. Such errors use `error` in a JSON operation report.
+
+| Word | Code | Meaning |
+|---|---|---|
+| `selected` | 0 | The target profile is in place and a new main process was observed within the launch wait; identity is `matches`, `fresh`, or `unknown`. |
+| `already_selected` | 0 | The data directory already names the requested account; nothing was quit or moved. |
+| `launched_unverified` | 0 | A new main appeared after the launch wait while rollback was being decided; the target stays in place. |
+| `repaired` | 0 | Repair recorded the completed or reverted exchange and observed a running main. |
+| `nothing_to_repair` | 0 | No journal intent is unresolved. |
+| `aborted` | 0 | Repair found that no exchange began, closed the intent, and asks you to run `desktop use` again. |
+| `forgotten` | 0 | The named stored profile and its contents were deleted. |
+| `desktop_unsupported_platform` | 30 | Desktop commands require macOS. |
+| `desktop_app_not_found` | 30 | The supported app executable is missing from `/Applications/Claude.app`. |
+| `desktop_bundle_mismatch` | 30 | The installed bundle does not have Claude's expected bundle identifier. |
+| `desktop_lock_busy` | 30 | Another operation holds the per-user desktop lock. |
+| `desktop_other_copy_running` | 30 | Another installed copy of the app runs; agentctl does not quit it. |
+| `desktop_intent_open` | 30 | A switch has an intent without a result; run `desktop repair` first. |
+| `desktop_cross_device` | 30 | The data path and profile store are on different filesystems; nothing is copied. |
+| `desktop_profile_unreadable` | 30 | The default or target profile's identity could not be read safely. |
+| `desktop_profile_mismatch` | 30 | The stored target last observed a different account. |
+| `desktop_journal_failed` | 30 | The journal could not be read or the operation could not be recorded before an exchange. |
+| `desktop_quit_refused` | 30 | The quit request failed; no profile was moved. |
+| `desktop_quit_timeout` | 30 | Counted app processes remain after quitting; no profile was moved. |
+| `desktop_repair_inconsistent` | 30 | The layout contradicts the intent, changed during recovery, or a repair move failed; the intent stays open. |
+| `desktop_observe_failed` | 30 | Process observation failed, or status could not read part of its report; absence is not assumed. |
+| `desktop_app_running` | 30 | Deletion was refused because an app process still runs. |
+| `desktop_profile_in_place` | 30 | Deletion was refused for the profile recorded as in place by the last applied switch. |
+| `desktop_repair_needs_choice` | 30 | The interrupted layout needs an explicit `--complete` or `--revert`. |
+| `desktop_destination_exists` | 30 | A rename destination already exists; agentctl does not overwrite it. |
+| `desktop_profile_symlink` | 30 | Deletion encountered a symlink and stopped; the message says whether anything was deleted and what remains. |
+| `reverted_relaunched` | 30 | The target did not start; the original profile was restored and its recovery launch was observed. |
+| `relaunch_failed` | 30 | The original profile was restored, but its recovery launch was not confirmed. |
+| `exchange_not_restored` | 30 | The exchange could not be restored safely; the intent stays open for repair. |
+| `journal_not_recorded` | 30 | Moves or a launch may have completed, but the result was not recorded; run `desktop repair`. |
+| `repaired_not_running` | 30 | Repair placed the profiles and recorded its direction, but the app's start was not confirmed. |
+| `partial` | 30 | Profile deletion stopped partway; the message reports what remains. |
 
 ## Known limitations
 
