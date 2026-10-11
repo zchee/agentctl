@@ -24,7 +24,7 @@ import (
 func init() { register(desktopHandlers) }
 
 func desktopHandlers(deps Dependencies, handlers *cli.Handlers) {
-	process := commands.NewDesktopProcess(os.Stdin, deps.Stdout)
+	process := commands.NewDesktopProcess(os.Stdin, deps.Stdout, os.Stderr)
 	handlers.ClaudeDesktopStatus = process.RunStatus
 	handlers.ClaudeDesktopUse = process.RunUse
 	handlers.ClaudeDesktopForget = process.RunForget

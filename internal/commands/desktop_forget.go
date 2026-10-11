@@ -91,14 +91,13 @@ func (e *desktopEnv) forget(ctx context.Context, p DesktopProcess, rep *desktopR
 		rep.Detail = name
 		return nil
 	case errors.Is(err, desktop.ErrSymlinkInProfile):
-		remaining := 0
 		if errors.As(err, &partial) {
-			remaining = partial.Remaining
+			return refuse(wordProfileSymlink, "%s: %v; the walk stopped with %s remaining", name, partial.Err, partial.RemainingText())
 		}
-		return refuse(wordProfileSymlink, "%s: %v; the walk stopped with %d entries remaining", name, err, remaining)
+		return refuse(wordProfileSymlink, "%s: %v; nothing was deleted", name, err)
 	case errors.As(err, &partial) && partial.Remaining > 0:
 		rep.Outcome = wordPartial
-		return refuse(wordPartial, "%s: %d entries remain (%v)", name, partial.Remaining, partial.Err)
+		return refuse(wordPartial, "%s: %s remain (%v)", name, partial.RemainingText(), partial.Err)
 	default:
 		return errs.NewIO("could not delete "+name, err)
 	}

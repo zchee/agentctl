@@ -177,6 +177,16 @@ func (p DesktopProcess) RunStatus(ctx context.Context, globals cli.Globals, opts
 		})
 	}
 
+	// A count is a claim about the whole picture: with the journal or the
+	// stored profiles unread, a number would read as complete when it is
+	// not, so both counts become null (the rows that were read stay).
+	for _, e := range report.Errors {
+		if e.Step == "journal" || e.Step == "profiles" {
+			report.Default.Running, report.Default.Family = nil, nil
+			break
+		}
+	}
+
 	if opts.JSON {
 		if err := writeJSON(env.out, report); err != nil {
 			return err
@@ -279,7 +289,8 @@ func renderStatus(r statusReport) string {
 		if p.InPlace {
 			line += "  in place"
 		}
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
 	for _, in := range r.Open {
 		fmt.Fprintf(&b, "interrupted %s %s (account %s): run `agentctl claude desktop repair`\n", in.Command, in.OpID, in.RequestedAccount)

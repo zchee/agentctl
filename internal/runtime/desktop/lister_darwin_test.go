@@ -63,7 +63,7 @@ func TestRecordsFrom(t *testing.T) {
 			listing: listing, lookup: alive, failures: map[int32][]error{101: {syscall.ESRCH, syscall.ESRCH, syscall.ESRCH, syscall.ESRCH}},
 			want: []int32{1, 100, 102}, wantReads: 4,
 		},
-		"success: EINVAL that persists is the plan's gone case": {
+		"success: an EINVAL that persists means the process is gone": {
 			listing: listing, lookup: alive, failures: map[int32][]error{101: {syscall.EINVAL, syscall.EINVAL, syscall.EINVAL, syscall.EINVAL}},
 			want: []int32{1, 100, 102}, wantReads: 4,
 		},

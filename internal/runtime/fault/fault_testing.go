@@ -101,6 +101,12 @@ const (
 	DesktopResultAppendFail = "desktop_result_append_fail"
 	// DesktopRollbackRenameFail fails the first rename of a desktop rollback.
 	DesktopRollbackRenameFail = "desktop_rollback_rename_fail"
+	// DesktopAbortMidRollback ends the process after a desktop rollback moved the target back, before the outgoing profile returns.
+	DesktopAbortMidRollback = "desktop_abort_mid_rollback"
+	// DesktopAbortAfterRollbackRenames ends the process after both rollback renames, before the recovery launch.
+	DesktopAbortAfterRollbackRenames = "desktop_abort_after_rollback_renames"
+	// DesktopAbortAfterRepairRenames ends the process after the renames of a desktop repair, before its launch.
+	DesktopAbortAfterRepairRenames = "desktop_abort_after_repair_renames"
 )
 
 // The seam variables a tagged build reads its fault set through. Neither

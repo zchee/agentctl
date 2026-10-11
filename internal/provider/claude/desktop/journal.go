@@ -140,7 +140,10 @@ type Result struct {
 	Observed         *IdentityRecord `json:"observed"`
 	Installed        *FileID         `json:"installed"`
 	Main             *Main           `json:"main"`
-	AppRunning       bool            `json:"app_running"`
+	// AppRunning is whether a main of the app was seen when the row was
+	// written; null when that observation failed, which proves nothing
+	// either way.
+	AppRunning *bool `json:"app_running"`
 }
 
 // envelope reads only what tells one record from another.

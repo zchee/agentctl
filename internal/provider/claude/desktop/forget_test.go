@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -37,7 +38,12 @@ func TestRemoveProfile(t *testing.T) {
 		// wantRemoved is whether the profile must be gone afterwards.
 		wantRemoved bool
 		wantPartial bool
-		wantErr     error
+		// wantExact is whether a partial count must be exact (every
+		// remaining directory listed) rather than a lower bound.
+		wantExact bool
+		wantErr   error
+		// check runs last, for what must still be on disk.
+		check func(t *testing.T, profile string)
 	}{
 		"success: nested tree with files and empty directories": {
 			prepare: func(t *testing.T, profiles, _ string) {
@@ -57,7 +63,7 @@ func TestRemoveProfile(t *testing.T) {
 			},
 			wantErr: ErrSymlinkInProfile,
 		},
-		"error: a link inside the profile pointing outside is never followed": {
+		"error: a link inside the profile stops the walk and is left in place": {
 			prepare: func(t *testing.T, profiles, outside string) {
 				p := filepath.Join(profiles, name)
 				mkdir(t, p)
@@ -66,9 +72,14 @@ func TestRemoveProfile(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			// A link is an entry like a file: unlinking it never touches
-			// its target.
-			wantRemoved: true,
+			wantPartial: true,
+			wantExact:   true,
+			wantErr:     ErrSymlinkInProfile,
+			check: func(t *testing.T, profile string) {
+				if _, err := os.Lstat(filepath.Join(profile, "link")); err != nil {
+					t.Errorf("the link was removed: %v", err)
+				}
+			},
 		},
 		"error: a directory replaced by a link mid-walk": {
 			prepare: func(t *testing.T, profiles, _ string) {
@@ -92,6 +103,7 @@ func TestRemoveProfile(t *testing.T) {
 				}
 			},
 			wantPartial: true,
+			wantExact:   true,
 			wantErr:     ErrSymlinkInProfile,
 		},
 		"error: a file replaced by a link mid-walk": {
@@ -114,6 +126,7 @@ func TestRemoveProfile(t *testing.T) {
 				}
 			},
 			wantPartial: true,
+			wantExact:   true,
 			wantErr:     ErrSymlinkInProfile,
 		},
 		"error: an unremovable directory stops the walk with a partial count": {
@@ -127,6 +140,20 @@ func TestRemoveProfile(t *testing.T) {
 				t.Cleanup(func() { _ = os.Chmod(filepath.Join(p, "locked"), 0o700) })
 			},
 			wantPartial: true,
+			wantExact:   true,
+		},
+		"error: an unlistable directory makes the count a lower bound": {
+			prepare: func(t *testing.T, profiles, _ string) {
+				p := filepath.Join(profiles, name)
+				mkdir(t, filepath.Join(p, "sealed", "inner"))
+				writeFile(t, filepath.Join(p, "sealed", "inner", "f"), "x")
+				if err := os.Chmod(filepath.Join(p, "sealed"), 0o000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(filepath.Join(p, "sealed"), 0o700) })
+			},
+			wantPartial: true,
+			wantExact:   false,
 		},
 	}
 	for testName, tt := range tests {
@@ -158,7 +185,16 @@ func TestRemoveProfile(t *testing.T) {
 				if !errors.As(err, &partial) || partial.Remaining == 0 {
 					t.Fatalf("error %v, want a partial removal with a count", err)
 				}
-				t.Logf("remaining %d", partial.Remaining)
+				t.Logf("remaining %d, complete %v: %s", partial.Remaining, partial.Complete, partial.RemainingText())
+				if partial.Complete != tt.wantExact {
+					t.Fatalf("count complete = %v, want %v", partial.Complete, tt.wantExact)
+				}
+				if !tt.wantExact && !strings.HasPrefix(partial.RemainingText(), "at least ") {
+					t.Fatalf("a lower bound reads %q, want it to say at least", partial.RemainingText())
+				}
+			}
+			if tt.check != nil {
+				tt.check(t, filepath.Join(profiles, name))
 			}
 			exists, _ := Exists(filepath.Join(profiles, name))
 			if tt.wantRemoved {

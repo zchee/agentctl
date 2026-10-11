@@ -217,14 +217,31 @@ func TestExecutablePath(t *testing.T) {
 			want:  helper,
 		},
 		"success: arguments are never part of the answer": {
-			block: block(3, MainPath+"\x00"+MainPath+"\x00--token=secret\x00"),
+			block: block(3, MainPath+"\x00"+MainPath+"\x00--token=secret\x00--x\x00"),
 			want:  MainPath,
 		},
-		"error: empty block":                {block: nil, wantErr: true},
-		"error: only the count":             {block: block(1, ""), wantErr: true},
-		"error: truncated path without NUL": {block: block(1, "/Applications/Claude.app/Cont"), wantErr: true},
-		"error: empty path":                 {block: block(1, "\x00rest\x00"), wantErr: true},
-		"error: implausible count":          {block: block(1<<30, MainPath+"\x00"), wantErr: true},
+		"success: no arguments after the path": {
+			block: block(0, MainPath+"\x00\x00\x00"),
+			want:  MainPath,
+		},
+		"success: environment strings after the arguments are not counted": {
+			block: block(1, MainPath+"\x00"+MainPath+"\x00HOME=/x\x00"),
+			want:  MainPath,
+		},
+		"success: an argument area rewritten to fewer strings than argc keeps the path": {
+			block: block(3, MainPath+"\x00"+"retitled daemon\x00"),
+			want:  MainPath,
+		},
+		"success: an argument without a terminating NUL keeps the path": {
+			block: block(2, MainPath+"\x00"+MainPath+"\x00--cut"),
+			want:  MainPath,
+		},
+		"error: only padding after the count": {block: block(2, "\x00\x00\x00"), wantErr: true},
+		"error: empty block":                  {block: nil, wantErr: true},
+		"error: only the count":               {block: block(1, ""), wantErr: true},
+		"error: truncated path without NUL":   {block: block(1, "/Applications/Claude.app/Cont"), wantErr: true},
+		"error: empty path":                   {block: block(1, "\x00rest\x00"), wantErr: true},
+		"error: implausible count":            {block: block(1<<30, MainPath+"\x00"), wantErr: true},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -89,7 +89,9 @@ func (l Layout) Profile(name string) string {
 
 // EnsureStore creates Root and ProfilesDir at 0700 when missing, after
 // proving that no component of either path is a symbolic link: a link in
-// the chain would let a rename land somewhere the layout does not name.
+// the chain would let a rename land somewhere the layout does not name. An
+// existing directory with any other mode is set to 0700, and the store is
+// refused when that does not hold.
 func (l Layout) EnsureStore() error {
 	for _, dir := range []string{l.Root, l.ProfilesDir} {
 		if err := ParentChainHasNoSymlink(dir); err != nil {
@@ -104,6 +106,21 @@ func (l Layout) EnsureStore() error {
 		}
 		if !info.IsDir() {
 			return fmt.Errorf("%s is not a directory", dir)
+		}
+		// MkdirAll leaves an existing directory's mode alone, and the
+		// stored profiles carry another account's session data: only this
+		// user may list or enter the store.
+		if info.Mode().Perm() != 0o700 {
+			if err := os.Chmod(dir, 0o700); err != nil {
+				return fmt.Errorf("restricting %s to its owner: %w", dir, err)
+			}
+			info, err = os.Lstat(dir)
+			if err != nil {
+				return fmt.Errorf("checking %s: %w", dir, err)
+			}
+			if !info.IsDir() || info.Mode().Perm() != 0o700 {
+				return fmt.Errorf("%s is mode %v after restricting it to its owner, want 0700", dir, info.Mode().Perm())
+			}
 		}
 	}
 	return ParentChainHasNoSymlink(l.ProfilesDir)

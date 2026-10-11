@@ -105,6 +105,16 @@ stdout '"outcome": "desktop_profile_unreadable"'
 ! exists $AGCTL_FAKE_DESKTOP_LOG
 cp config-b.json $D/config.json
 
+# a named pipe in place of config.json: refused at once without waiting for
+# a writer, nothing is quit
+rm $D/config.json
+exec mkfifo $D/config.json
+exec expectexit 30 agentctl claude desktop use $A --yes --json
+stdout '"outcome": "desktop_profile_unreadable"'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+rm $D/config.json
+cp config-b.json $D/config.json
+
 # cross-device: the stat stand-in reports two devices
 cp fake-stat.sh $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
 chmod 0755 $AGENTCTL_DESKTOP_TEST_ROOT/usr/bin/stat
@@ -297,6 +307,36 @@ exec expectexit 30 agentctl claude desktop use $B --yes --json
 stdout '"outcome": "desktop_observe_failed"'
 exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
 
+# status with the journal unreadable: the processes were seen, yet the
+# counts are null and the journal failure is named, exit 30
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 910 1 $MAIN
+mv $STORE/journal.jsonl journal.saved
+mkdir $STORE/journal.jsonl
+exec expectexit 30 agentctl claude desktop status --json
+stdout '"running": null'
+stdout '"family": null'
+stdout '"step": "journal"'
+! stdout '"running": [0-9]'
+cp stdout report.json
+exec schema desktop.v1.json report.json
+rm $STORE/journal.jsonl
+mv journal.saved $STORE/journal.jsonl
+
+# status with the profiles directory replaced by a regular file: counts are
+# null and the listing failure is named, exit 30
+mv $STORE/profiles profiles.saved
+cp config-a.json $STORE/profiles
+exec expectexit 30 agentctl claude desktop status --json
+stdout '"running": null'
+stdout '"family": null'
+stdout '"step": "profiles"'
+! stdout '"running": [0-9]'
+cp stdout report.json
+exec schema desktop.v1.json report.json
+rm $STORE/profiles
+mv profiles.saved $STORE/profiles
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
 # the bundle: missing main executable, then another bundle identifier
 mv $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/MacOS/Claude claude.saved
 exec expectexit 30 agentctl claude desktop use $B --yes --json
@@ -307,6 +347,18 @@ cp other-info.plist $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents
 exec expectexit 30 agentctl claude desktop use $B --yes --json
 stdout '"outcome": "desktop_bundle_mismatch"'
 cp plist.saved $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/Info.plist
+
+# the bundle path a link to a complete bundle elsewhere: refused before
+# anything is quit or launched
+mv $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app $WORK/real.app
+symlink $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app -> $WORK/real.app
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_bundle_mismatch"'
+stdout 'symbolic link'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+rm $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app
+mv $WORK/real.app $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app
 
 # a confirmation nobody can answer moves nothing
 exec expectexit 2 agentctl claude desktop use $B
@@ -323,6 +375,109 @@ stdout '"outcome": "desktop_lock_busy"'
 ! exists $AGCTL_FAKE_DESKTOP_LOG
 kill holder
 wait holder
+
+# a main first seen by the rollback's own listing: recorded unverified, nothing moved back
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+cmp $D/config.json config-a.json
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGCTL_FAKE_OPEN=later
+exec agentctl claude desktop use $B --yes --json
+stdout '"outcome": "launched_unverified"'
+stdout '"journal": "applied"'
+stdout '"pid": [0-9]+'
+grep -count=1 '^open' $AGCTL_FAKE_DESKTOP_LOG
+grep -count=2 '"word":"launched_unverified","verified":false' $STORE/journal.jsonl
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+env AGCTL_FAKE_OPEN=
+exec agentctl claude desktop use $A --yes
+stdout '^selected matches'
+
+# another copy's main appears while the launch fails: nothing is moved back, the copy is named
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGCTL_FAKE_OPEN=fail-other
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "exchange_not_restored"'
+stdout '"journal": "open"'
+stdout 'another copy of the app is running \(pid [0-9]+, /Users/Shared/Applications/Claude.app/Contents/MacOS/Claude\)'
+grep -count=1 '^open' $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+env AGCTL_FAKE_OPEN=
+exec expectexit 30 agentctl claude desktop repair --revert --yes
+stderr 'desktop_other_copy_running'
+cmp $D/config.json config-b.json
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+exec agentctl claude desktop repair --revert --yes
+stdout '^repaired '
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+
+# the profile moved aside is gone before the rollback: nothing is moved back
+rm $AGCTL_FAKE_DESKTOP_LOG
+env AGCTL_FAKE_OPEN=fail-hide
+env AGCTL_FAKE_OPEN_HIDE=$STORE/profiles/$A
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "exchange_not_restored"'
+stdout '"journal": "open"'
+stdout 'no longer at .*profiles/11111111-2222-3333-4444-555555555555 with its recorded'
+grep -count=1 '^open' $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-b.json
+! exists $STORE/profiles/$A
+cmp $STORE/profiles/$A.moved/config.json config-a.json
+env AGCTL_FAKE_OPEN=
+env AGCTL_FAKE_OPEN_HIDE=
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_intent_open"'
+mv $STORE/profiles/$A.moved $STORE/profiles/$A
+exec agentctl claude desktop repair --revert --yes
+stdout '^repaired '
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+
+# rolled back, the recovery launch fails and the result is not recorded: the next repair aborts it
+env AGCTL_FAKE_OPEN=fail
+env AGENTCTL_FAULT=desktop_result_append_fail
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "journal_not_recorded"'
+stdout '"journal": "open"'
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_intent_open"'
+exec agentctl claude desktop repair
+stdout '^state never-started'
+stdout '^aborted'
+grep '"word":"aborted".*"main":null,"app_running":false' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+
+# rolled back, the recovery launch starts the app and the result is not recorded: the next repair aborts it and records the main
+env AGCTL_FAKE_OPEN=fail-once
+env AGENTCTL_FAULT=desktop_result_append_fail
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "journal_not_recorded"'
+stdout '"journal": "open"'
+cmp $D/config.json config-a.json
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=
+rm $AGENTCTL_TEST_PROCESS_TABLE.open-failed
+exec agentctl claude desktop repair
+stdout '^state never-started'
+stdout '^aborted .*pid [0-9]+'
+grep '"word":"aborted".*"main":\{"pid":[0-9]+,.*"app_running":true' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+
+# the quit fails to observe the processes: the closed intent records the state as unknown
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 910 1 $MAIN read_error=EIO delay=2
+exec expectexit 30 agentctl claude desktop use $B --yes --json
+stdout '"outcome": "desktop_observe_failed"'
+stdout '"journal": "aborted"'
+grep '"word":"desktop_observe_failed".*"main":null,"app_running":null' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
 
 -- registry.json --
 {

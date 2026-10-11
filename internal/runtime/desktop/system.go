@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"howett.net/plist"
 )
 
@@ -78,6 +79,35 @@ type System struct {
 	DeviceOf func(path string) (uint64, error)
 	// Log receives one line per lifecycle step.
 	Log *slog.Logger
+
+	// checked is the bundle directory's (device, inode) as CheckBundle
+	// saw it; Launch refuses a bundle that is no longer that directory.
+	checked *bundleID
+}
+
+// bundleID is a directory's identity on disk.
+type bundleID struct{ dev, ino uint64 }
+
+// bundleDir confirms the bundle path is a real directory, never a link,
+// and returns its identity.
+func (s *System) bundleDir() (bundleID, error) {
+	var st unix.Stat_t
+	if err := unix.Lstat(s.Bundle, &st); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return bundleID{}, ErrAppNotFound
+		}
+		return bundleID{}, fmt.Errorf("checking the app: %w", &fs.PathError{Op: "lstat", Path: s.Bundle, Err: err})
+	}
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFDIR:
+		return bundleID{dev: uint64(st.Dev), ino: st.Ino}, nil
+	case unix.S_IFLNK:
+		// A link could point the launch at any program; only the
+		// directory installed at the fixed path is the app.
+		return bundleID{}, fmt.Errorf("%w (%s is a symbolic link)", ErrBundleMismatch, s.Bundle)
+	default:
+		return bundleID{}, ErrAppNotFound
+	}
 }
 
 // testWorld replaces the system boundary in the testing build; the
@@ -106,6 +136,10 @@ func (s *System) logger() *slog.Logger {
 // CheckBundle proves the fixed install is the app: its main executable is
 // a regular file and its Info.plist names the expected bundle identifier.
 func (s *System) CheckBundle() error {
+	id, err := s.bundleDir()
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(s.Bundle + "/Contents/MacOS/Claude")
 	if errors.Is(err, fs.ErrNotExist) {
 		return ErrAppNotFound
@@ -134,6 +168,7 @@ func (s *System) CheckBundle() error {
 	if meta.BundleID != BundleID {
 		return fmt.Errorf("%w (its identifier is %q)", ErrBundleMismatch, meta.BundleID)
 	}
+	s.checked = &id
 	return nil
 }
 
@@ -240,11 +275,31 @@ type LaunchReport struct {
 }
 
 // Launch starts the fixed bundle and waits for a main executable that is
-// not in before. Readiness is a process, never a file the app wrote.
+// not in before. Readiness is a process, never a file the app wrote. A
+// bundle that fails CheckBundle, or is no longer the directory it saw, is
+// not started.
 func (s *System) Launch(ctx context.Context, before []Proc) LaunchReport {
 	start := time.Now()
 	log := s.logger()
 	var report LaunchReport
+	// The bundle is checked again right before it is started: a caller
+	// that never checked it (repair) gets the full check here, and one that
+	// did must still find the same real directory, so a bundle swapped
+	// since the check is never launched.
+	var err error
+	if s.checked == nil {
+		err = s.CheckBundle()
+	} else if id, idErr := s.bundleDir(); idErr != nil {
+		err = idErr
+	} else if id != *s.checked {
+		err = fmt.Errorf("%w (%s was replaced after it was checked)", ErrBundleMismatch, s.Bundle)
+	}
+	if err != nil {
+		report.OpenErr = err
+		report.Elapsed = time.Since(start)
+		log.Warn("desktop launch refused", "error", err.Error())
+		return report
+	}
 	if err := s.run(ctx, s.Open, "-n", s.Bundle); err != nil {
 		report.OpenErr = err
 		report.Elapsed = time.Since(start)

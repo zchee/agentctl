@@ -95,6 +95,12 @@ const (
 	DesktopResultAppendFail = ""
 	// DesktopRollbackRenameFail is inert in a release build.
 	DesktopRollbackRenameFail = ""
+	// DesktopAbortMidRollback is inert in a release build.
+	DesktopAbortMidRollback = ""
+	// DesktopAbortAfterRollbackRenames is inert in a release build.
+	DesktopAbortAfterRollbackRenames = ""
+	// DesktopAbortAfterRepairRenames is inert in a release build.
+	DesktopAbortAfterRepairRenames = ""
 )
 
 // Active is the release factory: nothing is ever injected, and no

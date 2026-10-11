@@ -46,7 +46,7 @@ func sampleResult(op string, outcome Outcome) Result {
 	return Result{
 		Type: TypeResult, OpID: op, Time: "2026-10-11T10:00:05Z", Command: "use", Outcome: outcome, Word: "selected",
 		Verified: true, Observed: &IdentityRecord{State: StateFresh}, Installed: &FileID{Dev: 16777230, Ino: 9},
-		Main: &Main{PID: 43157, Start: "2026-10-11T10:00:04.5Z"}, AppRunning: true,
+		Main: &Main{PID: 43157, Start: "2026-10-11T10:00:04.5Z"}, AppRunning: new(true),
 	}
 }
 
@@ -75,16 +75,17 @@ func TestJournalRoundTrip(t *testing.T) {
 	if lines := strings.Count(string(data), "\n"); lines != 3 {
 		t.Fatalf("journal has %d lines, want 3", lines)
 	}
-	// A null installed pair and a null main are written as null, so a
-	// reader can tell "observed absent" from "not recorded".
+	// A null installed pair, a null main and an unobserved app state are
+	// written as null, so a reader can tell "observed absent" from "not
+	// recorded" and "not running" from "could not tell".
 	nullResult := sampleResult(testOp2, OutcomeApplied)
-	nullResult.Installed, nullResult.Main, nullResult.AppRunning = nil, nil, false
+	nullResult.Installed, nullResult.Main, nullResult.AppRunning = nil, nil, nil
 	if err := Append(path, nullResult); err != nil {
 		t.Fatal(err)
 	}
 	data, _ = os.ReadFile(path)
 	last := strings.Split(strings.TrimSpace(string(data)), "\n")[3]
-	for _, member := range []string{`"installed":null`, `"main":null`, `"app_running":false`} {
+	for _, member := range []string{`"installed":null`, `"main":null`, `"app_running":null`} {
 		if !strings.Contains(last, member) {
 			t.Fatalf("result line %s lacks %s", last, member)
 		}

@@ -585,6 +585,314 @@ stdout '^state never-started'
 grep -count=1 '"outcome":"aborted"' $STORE/journal.jsonl
 cmp $D/config.json config-a.json
 
+# outgoing-moved, --complete, a main started again since the crash: it is quit before any move
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 520 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 521 520 $HELPER
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude desktop repair --complete --yes
+stdout '^state outgoing-moved'
+stdout '^repaired matches'
+grep -count=1 '^osascript -e tell application id "com.anthropic.claudefordesktop" to quit' $AGCTL_FAKE_DESKTOP_LOG
+exec proctable list $AGENTCTL_TEST_PROCESS_TABLE
+! stdout '^52[01] '
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+! exists $STORE/profiles/$B
+
+# outgoing-moved, --complete, a hosted child under the data path survived the crash: it is ended before any move
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 530 1 $D/claude-code/2.1.0/claude' 'code
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude desktop repair --complete --yes
+stdout '^state outgoing-moved'
+stdout '^repaired matches'
+grep -count=1 '^osascript -e tell application id "com.anthropic.claudefordesktop" to quit' $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-b.json
+cmp $STORE/profiles/$A/config.json config-a.json
+! exists $STORE/profiles/$B
+
+# outgoing-moved, --complete, a hosted child that outlives the quit: nothing moves, the intent stays open
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 530 1 $D/claude-code/2.1.0/claude' 'code
+env AGCTL_FAKE_OSASCRIPT=keep-data
+exec expectexit 30 agentctl claude desktop repair --complete --yes
+stderr 'desktop_quit_timeout'
+env AGCTL_FAKE_OSASCRIPT=
+! exists $D
+cmp $STORE/profiles/$A/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+
+# outgoing-moved, --revert, a main started again since the crash: it is quit before any move
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 520 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 521 520 $HELPER
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude desktop repair --revert --yes
+stdout '^state outgoing-moved'
+stdout '^repaired account '
+grep -count=1 '^osascript -e tell application id "com.anthropic.claudefordesktop" to quit' $AGCTL_FAKE_DESKTOP_LOG
+exec proctable list $AGENTCTL_TEST_PROCESS_TABLE
+! stdout '^52[01] '
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+! exists $STORE/profiles/$A
+
+# outgoing-moved, --revert, a hosted child under the data path survived the crash: it is ended before any move
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 530 1 $D/claude-code/2.1.0/claude' 'code
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude desktop repair --revert --yes
+stdout '^state outgoing-moved'
+stdout '^repaired account '
+grep -count=1 '^osascript -e tell application id "com.anthropic.claudefordesktop" to quit' $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+! exists $STORE/profiles/$A
+
+# outgoing-moved, --revert, a hosted child that outlives the quit: nothing moves, the intent stays open
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 530 1 $D/claude-code/2.1.0/claude' 'code
+env AGCTL_FAKE_OSASCRIPT=keep-data
+exec expectexit 30 agentctl claude desktop repair --revert --yes
+stderr 'desktop_quit_timeout'
+env AGCTL_FAKE_OSASCRIPT=
+! exists $D
+cmp $STORE/profiles/$A/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+
+# never-started with the target source replaced since the intent: inconsistent, the intent stays open
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_quit
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+rm $STORE/profiles/$B
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec expectexit 30 agentctl claude desktop repair --yes
+stdout '^state inconsistent'
+stderr 'desktop_repair_inconsistent'
+! grep '"type":"desktop_result"' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+exec agentctl claude desktop status --json
+stdout '"op_id"'
+
+# never-started with the app still running: the result records the main it saw
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_intent
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec agentctl claude desktop repair --yes
+stdout '^state never-started'
+stdout '^aborted .*pid 500'
+grep '"word":"aborted".*"main":\{"pid":500,.*"app_running":true' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+
+# never-started when the processes cannot be observed: the result records the state as unknown
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_intent
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 540 1 $MAIN read_error=EIO
+exec agentctl claude desktop repair --yes
+stdout '^state never-started'
+grep '"word":"aborted".*"main":null,"app_running":null' $STORE/journal.jsonl
+cmp $D/config.json config-a.json
+
+# rollback killed between its renames: the next repair finds outgoing-moved and --revert restores
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGCTL_FAKE_OPEN=fail
+env AGENTCTL_FAULT=desktop_abort_mid_rollback
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=
+! exists $D
+cmp $STORE/profiles/$B/config.json config-b.json
+exec agentctl claude desktop repair --revert --yes
+stdout '^state outgoing-moved'
+stdout '^repaired account '
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+
+# rollback killed after its renames, before the recovery launch: the next repair finds never-started
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGCTL_FAKE_OPEN=fail
+env AGENTCTL_FAULT=desktop_abort_after_rollback_renames
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+env AGCTL_FAKE_OPEN=
+exec agentctl claude desktop repair --yes
+stdout '^aborted'
+stdout '^state never-started'
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+
+# repair killed between its moves and its launch, --complete: the next repair finds target-installed and starts the app
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=desktop_abort_after_repair_renames
+exec expectexit 134 agentctl claude desktop repair --complete --yes
+env AGENTCTL_FAULT=
+! grep '^open ' $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude desktop repair --yes
+stdout '^state target-installed'
+stdout '^repaired matches'
+grep '^open ' $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-b.json
+
+# repair killed between its moves and its launch, --revert: the next repair finds never-started
+rm $D
+rm $STORE
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-a.json $D/config.json
+mkdir $STORE/profiles/$B
+cp config-b.json $STORE/profiles/$B/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 501 500 $HELPER
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=desktop_abort_after_repair_renames
+exec expectexit 134 agentctl claude desktop repair --revert --yes
+env AGENTCTL_FAULT=
+exec agentctl claude desktop repair --yes
+stdout '^aborted'
+stdout '^state never-started'
+cmp $D/config.json config-a.json
+cmp $STORE/profiles/$B/config.json config-b.json
+
 -- registry.json --
 {
   "version": 1,

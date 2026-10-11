@@ -25,6 +25,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"howett.net/plist"
 )
 
 // fakeWorld is a process table driven by marker files that two small
@@ -104,12 +106,24 @@ func newFakeSystem(t *testing.T, markers ...string) (*System, *fakeWorld) {
 			t.Fatal(err)
 		}
 	}
+	// Launch checks the bundle before it starts it, so the stand-in is a
+	// complete one.
+	bundle := filepath.Join(dir, "Claude.app")
+	if err := os.MkdirAll(filepath.Join(bundle, "Contents", "MacOS"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "Contents", "Info.plist"), encodePlist(t, BundleID, plist.XMLFormat), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "Contents", "MacOS", "Claude"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	w := &fakeWorld{dir: dir}
 	return &System{
 		Observer:     Observer{List: w.list, UID: me, DataDir: dataDir},
 		Osascript:    filepath.Join(dir, "osascript"),
 		Open:         filepath.Join(dir, "open"),
-		Bundle:       "/fixture/Claude.app",
+		Bundle:       bundle,
 		PollInterval: time.Millisecond,
 		QuitPolls:    5,
 		LaunchPolls:  4,
@@ -267,7 +281,7 @@ func TestLaunch(t *testing.T) {
 			if tt.wantReady && (report.Main == nil || report.Main.PID != 200) {
 				t.Fatalf("Main = %+v, want pid 200", report.Main)
 			}
-			if got := logLines(t, w, "open.log"); len(got) != 1 || got[0] != "-n /fixture/Claude.app" {
+			if got := logLines(t, w, "open.log"); len(got) != 1 || got[0] != "-n "+sys.Bundle {
 				t.Fatalf("open argv %q", got)
 			}
 			if !tt.wantReady && !tt.wantOpen {

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/zchee/agentctl/internal/cli"
@@ -167,9 +168,10 @@ func quitRefusal(err error) error {
 }
 
 // observedResult fills a result with what can be seen now: the identity at
-// the data path, its (device, inode) and the main the caller observed.
-// Nothing in it is predicted.
-func (e *desktopEnv) observedResult(in *desktop.Intent, outcome desktop.Outcome, word string, main *rdesktop.Proc, running bool) desktop.Result {
+// the data path, its (device, inode) and the main the caller observed. A
+// nil running means the caller could not observe the processes. Nothing
+// in it is predicted.
+func (e *desktopEnv) observedResult(in *desktop.Intent, outcome desktop.Outcome, word string, main *rdesktop.Proc, running *bool) desktop.Result {
 	res := desktop.Result{
 		Type: desktop.TypeResult, OpID: in.OpID, Time: desktop.Now(), Command: in.Command,
 		RequestedAccount: in.RequestedAccount, SwapAuditID: in.SwapAuditID,
@@ -189,14 +191,7 @@ func (e *desktopEnv) observedResult(in *desktop.Intent, outcome desktop.Outcome,
 // exchange changed anything. When the append fails the intent stays open
 // and the report says so; the caller's refusal still decides the exit.
 func (e *desktopEnv) closeIntent(ctx context.Context, rep *desktopReport, in *desktop.Intent, word string) {
-	running := false
-	var main *rdesktop.Proc
-	if snap, err := e.sys.Observer.Snapshot(ctx); err == nil {
-		running = len(snap.Mains) > 0
-		if running {
-			main = &snap.Mains[0]
-		}
-	}
+	main, running := e.observeMain(ctx)
 	res := e.observedResult(in, desktop.OutcomeAborted, word, main, running)
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 		rep.Journal = journalOpen
@@ -204,6 +199,44 @@ func (e *desktopEnv) closeIntent(ctx context.Context, rep *desktopReport, in *de
 		return
 	}
 	rep.Journal = string(desktop.OutcomeAborted)
+}
+
+// observeMain takes one snapshot for a result row: the first main seen and
+// whether any ran. When the snapshot fails both are nil, so the row says
+// the state is unknown rather than that the app was stopped.
+func (e *desktopEnv) observeMain(ctx context.Context) (*rdesktop.Proc, *bool) {
+	snap, err := e.sys.Observer.Snapshot(ctx)
+	if err != nil {
+		e.log.Warn("desktop processes not observed for the result", "error", err.Error())
+		return nil, nil
+	}
+	if len(snap.Mains) == 0 {
+		return nil, new(false)
+	}
+	return &snap.Mains[0], new(true)
+}
+
+// errAppStillRunning reports a snapshot taken right before a move that
+// still shows part of the app.
+type errAppStillRunning struct{ mains, family int }
+
+func (e *errAppStillRunning) Error() string {
+	return fmt.Sprintf("part of the app is still running (%d main, %d other processes)", e.mains, e.family)
+}
+
+// moveGuard decides from the last snapshot before a move whether the move
+// may happen: no process of the app may run, and no other copy may run
+// either, because its quit or launch would reach the wrong installation.
+// Both the rollback of `use` and every renaming branch of `repair` pass
+// through it.
+func moveGuard(snap rdesktop.Snapshot) error {
+	if len(snap.OtherCopies) > 0 {
+		return &rdesktop.OtherCopyError{Procs: snap.OtherCopies}
+	}
+	if !snap.Quiet() {
+		return &errAppStillRunning{mains: len(snap.Mains), family: len(snap.Family)}
+	}
+	return nil
 }
 
 // outgoingName is the stored name the profile leaving the data path gets.
@@ -232,6 +265,15 @@ func (p DesktopProcess) RunUse(ctx context.Context, globals cli.Globals, opts cl
 	env, err := p.newEnv()
 	if err != nil {
 		return finish(p.Out, opts.JSON, rep, err)
+	}
+	if opts.JSON {
+		// The question goes beside the report, never into the stream a
+		// program parses as one JSON document.
+		errOut := p.Err
+		if errOut == nil {
+			errOut = os.Stderr
+		}
+		env.prompt = TerminalPrompt{In: p.In, Out: errOut}
 	}
 	err = env.use(ctx, p, rep, account, opts.Yes)
 	return finish(p.Out, opts.JSON, rep, err)
@@ -364,28 +406,33 @@ func (e *desktopEnv) use(ctx context.Context, p DesktopProcess, rep *desktopRepo
 	if tExists {
 		if _, err := desktop.Move(targetPath, e.layout.DefaultData, in.Target.File); err != nil {
 			e.log.Warn("desktop target rename failed", "op_id", opID, "error", err.Error())
-			return e.rollback(ctx, rep, in, before)
+			return e.rollback(ctx, rep, in, before, false)
 		}
 		crashPoint(e.fault.Is(fault.DesktopAbortAfterTargetRename))
 	}
 
 	launch := e.sys.Launch(ctx, before)
-	main, late := launch.Main, false
-	if !launch.Ready {
-		if snap, err := e.sys.Observer.Snapshot(ctx); err == nil {
-			main = rdesktop.NewMain(snap, before)
-			late = main != nil
+	if launch.Ready {
+		return e.recordApplied(rep, in, launch.Main, false)
+	}
+	if snap, err := e.sys.Observer.Snapshot(ctx); err == nil {
+		if main := rdesktop.NewMain(snap, before); main != nil {
+			return e.recordApplied(rep, in, main, true)
 		}
 	}
-	if !launch.Ready && !late {
-		return e.rollback(ctx, rep, in, before)
-	}
+	return e.rollback(ctx, rep, in, before, true)
+}
+
+// recordApplied records a switch whose target is in place and whose app
+// was seen starting: within the wait (verified) or only after it, while the
+// rollback was being decided (unverified). Nothing is moved back.
+func (e *desktopEnv) recordApplied(rep *desktopReport, in *desktop.Intent, main *rdesktop.Proc, late bool) error {
 	word := wordSelected
 	if late {
 		word = wordLaunchedUnverified
 	}
 	crashPoint(e.fault.Is(fault.DesktopAbortBeforeResult))
-	res := e.observedResult(in, desktop.OutcomeApplied, word, main, true)
+	res := e.observedResult(in, desktop.OutcomeApplied, word, main, new(true))
 	res.Verified = !late
 	rep.Main = res.Main
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
@@ -416,7 +463,7 @@ func (e *desktopEnv) alreadySelected(rep *desktopReport, snap rdesktop.Snapshot,
 	if len(snap.Mains) > 0 {
 		main = &snap.Mains[0]
 	}
-	res := e.observedResult(in, desktop.OutcomeNoop, wordAlreadySelected, main, main != nil)
+	res := e.observedResult(in, desktop.OutcomeNoop, wordAlreadySelected, main, new(main != nil))
 	res.Verified = true
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 		return refuse(desktopJournalFailed, "could not record the result: %v", err)
@@ -440,7 +487,7 @@ func (e *desktopEnv) failedFirstMove(ctx context.Context, rep *desktopReport, in
 	if errors.Is(moveErr, desktop.ErrDestinationExists) {
 		word = wordDestinationExists
 	}
-	res := e.observedResult(in, desktop.OutcomeAborted, word, launch.Main, launch.Ready)
+	res := e.observedResult(in, desktop.OutcomeAborted, word, launch.Main, new(launch.Ready))
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 		rep.Journal = journalOpen
 	} else {
@@ -456,15 +503,30 @@ func (e *desktopEnv) failedFirstMove(ctx context.Context, rep *desktopReport, in
 // goes back where it came from (a tree the app created for a new account is
 // parked under its own name) and the outgoing profile returns to the data
 // path. Then one recovery launch is tried and its observation recorded.
-func (e *desktopEnv) rollback(ctx context.Context, rep *desktopReport, in *desktop.Intent, before []rdesktop.Proc) error {
+// launched says the target's launch ran, so a main that appears now is that
+// launch arriving late rather than a stranger.
+//
+// Nothing is moved unless the last snapshot shows no process of the app and
+// no other copy, and every directory still carries the pair the intent
+// recorded for it. A layout that does not hold up leaves the intent open
+// for repair.
+func (e *desktopEnv) rollback(ctx context.Context, rep *desktopReport, in *desktop.Intent, before []rdesktop.Proc, launched bool) error {
 	notRestored := func(err error) error {
 		rep.Outcome, rep.Journal = wordExchangeNotRestore, journalOpen
 		return refuse(wordExchangeNotRestore, "the app did not start and the exchange could not be undone (%v); run `agentctl claude desktop repair`", err)
 	}
-	if snap, err := e.sys.Observer.Snapshot(ctx); err != nil {
+	snap, err := e.sys.Observer.Snapshot(ctx)
+	if err != nil {
 		return notRestored(err)
-	} else if !snap.Quiet() {
-		return notRestored(fmt.Errorf("part of the app is still running (%d main, %d family)", len(snap.Mains), len(snap.Family)))
+	}
+	if main := rdesktop.NewMain(snap, before); launched && main != nil {
+		return e.recordApplied(rep, in, main, true)
+	}
+	if err := moveGuard(snap); err != nil {
+		return notRestored(err)
+	}
+	if err := e.rollbackLayout(in); err != nil {
+		return notRestored(err)
 	}
 	if e.fault.Is(fault.DesktopRollbackRenameFail) {
 		return notRestored(errors.New("rename failed (injected)"))
@@ -472,24 +534,21 @@ func (e *desktopEnv) rollback(ctx context.Context, rep *desktopReport, in *deskt
 	if err := e.moveTargetBack(in); err != nil {
 		return notRestored(err)
 	}
-	if in.Outgoing != nil {
-		present, err := desktop.Exists(in.Outgoing.Destination)
-		if err != nil {
-			return notRestored(err)
-		}
-		if present {
-			if _, err := desktop.Move(in.Outgoing.Destination, e.layout.DefaultData, &in.Outgoing.File); err != nil {
-				return notRestored(err)
-			}
-		}
+	crashPoint(e.fault.Is(fault.DesktopAbortMidRollback))
+	if err := e.returnOutgoing(in); err != nil {
+		return notRestored(err)
 	}
+	if err := e.outgoingRestored(in); err != nil {
+		return notRestored(err)
+	}
+	crashPoint(e.fault.Is(fault.DesktopAbortAfterRollbackRenames))
 	recovery := e.sys.Launch(ctx, before)
 	word := wordRelaunchFailed
 	if recovery.Ready {
 		word = wordRevertedRelaunched
 	}
 	crashPoint(e.fault.Is(fault.DesktopAbortBeforeResult))
-	res := e.observedResult(in, desktop.OutcomeReverted, word, recovery.Main, recovery.Ready)
+	res := e.observedResult(in, desktop.OutcomeReverted, word, recovery.Main, new(recovery.Ready))
 	rep.Main = res.Main
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 		rep.Outcome, rep.Journal = wordJournalNotRecorded, journalOpen
@@ -497,6 +556,59 @@ func (e *desktopEnv) rollback(ctx context.Context, rep *desktopReport, in *deskt
 	}
 	rep.Outcome, rep.Journal = word, string(desktop.OutcomeReverted)
 	return refuse(word, "the app did not start on the requested profile; the previous profile is back at the data path")
+}
+
+// rollbackLayout proves, before the rollback moves anything, that the
+// directories are where the exchange left them: the outgoing profile at its
+// destination with its recorded pair, and a stored target either at the
+// data path (it was moved in) or still at its source (its move failed). A
+// target the app was to create has no pair, so whatever is at the data path
+// is parked. Anything else was changed by someone else and is left alone.
+func (e *desktopEnv) rollbackLayout(in *desktop.Intent) error {
+	if in.Outgoing != nil {
+		dest, err := observeDir(in.Outgoing.Destination)
+		if err != nil {
+			return err
+		}
+		if !dest.carries(&in.Outgoing.File) {
+			return fmt.Errorf("the profile moved aside is no longer at %s with its recorded (device, inode) %s", in.Outgoing.Destination, in.Outgoing.File)
+		}
+	}
+	if !in.Target.Existed {
+		return nil
+	}
+	data, err := observeDir(e.layout.DefaultData)
+	if err != nil {
+		return err
+	}
+	src, err := observeDir(in.Target.Source)
+	if err != nil {
+		return err
+	}
+	if (data.carries(in.Target.File) && !src.present) || (!data.present && src.carries(in.Target.File)) {
+		return nil
+	}
+	return fmt.Errorf("the stored profile %s is neither at the data path nor at %s with its recorded (device, inode)", in.Target.Name, in.Target.Source)
+}
+
+// outgoingRestored proves the rollback's end state before it is recorded:
+// the data path carries the outgoing profile's recorded pair again, or is
+// absent when nothing was at the data path when the switch began.
+func (e *desktopEnv) outgoingRestored(in *desktop.Intent) error {
+	data, err := observeDir(e.layout.DefaultData)
+	if err != nil {
+		return err
+	}
+	if in.Outgoing == nil {
+		if data.present {
+			return fmt.Errorf("%s is present after the rollback, but nothing was there when the switch began", e.layout.DefaultData)
+		}
+		return nil
+	}
+	if !data.carries(&in.Outgoing.File) {
+		return fmt.Errorf("%s does not carry the previous profile's recorded (device, inode) %s after the rollback", e.layout.DefaultData, in.Outgoing.File)
+	}
+	return nil
 }
 
 // moveTargetBack returns whatever is at the data path to the target's

@@ -227,6 +227,30 @@ func TestEnsureStore(t *testing.T) {
 				}
 			},
 		},
+		"success: an existing group- and world-readable store is narrowed to 0700": {
+			prepare: func(t *testing.T, home string) {
+				l := Paths(home)
+				if err := os.MkdirAll(l.ProfilesDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				for _, dir := range []string{l.Root, l.ProfilesDir} {
+					if err := os.Chmod(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			},
+		},
+		"success: an existing world-writable profiles directory is narrowed to 0700": {
+			prepare: func(t *testing.T, home string) {
+				l := Paths(home)
+				if err := os.MkdirAll(l.ProfilesDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(l.ProfilesDir, 0o777); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 		"error: root is a symbolic link": {
 			prepare: func(t *testing.T, home string) {
 				l := Paths(home)

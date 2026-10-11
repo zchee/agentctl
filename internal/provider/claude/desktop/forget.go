@@ -32,16 +32,27 @@ var ErrSymlinkInProfile = errors.New("a symbolic link or a changed entry was fou
 
 // PartialRemoveError reports a deletion that stopped midway. Remaining
 // counts the entries, the profile directory itself included, still on
-// disk.
+// disk. Complete says every remaining directory could be listed; when it
+// is false, Remaining is only a lower bound.
 type PartialRemoveError struct {
 	Name      string
 	Remaining int
+	Complete  bool
 	Err       error
 }
 
 // Error states how much is left.
 func (e *PartialRemoveError) Error() string {
-	return fmt.Sprintf("removing profile %s stopped with %d entries left: %v", e.Name, e.Remaining, e.Err)
+	return fmt.Sprintf("removing profile %s stopped with %s left: %v", e.Name, e.RemainingText(), e.Err)
+}
+
+// RemainingText words the count of what is left: exact when the whole
+// remaining tree was listed, a lower bound otherwise.
+func (e *PartialRemoveError) RemainingText() string {
+	if e.Complete {
+		return fmt.Sprintf("%d entries", e.Remaining)
+	}
+	return fmt.Sprintf("at least %d entries (part of the rest could not be listed)", e.Remaining)
 }
 
 // Unwrap returns the cause.
@@ -79,8 +90,8 @@ func RemoveProfile(profilesDir, name string) error {
 		return fmt.Errorf("profile %s: %w", name, ErrSymlinkInProfile)
 	}
 	if err := removeTree(parent, name); err != nil {
-		remaining := countTree(parent, name)
-		return &PartialRemoveError{Name: name, Remaining: remaining, Err: err}
+		remaining, complete := countTree(parent, name)
+		return &PartialRemoveError{Name: name, Remaining: remaining, Complete: complete, Err: err}
 	}
 	return nil
 }
@@ -108,6 +119,12 @@ func removeTree(dirFD int, name string) error {
 		if !config.IsSingleComponent(child) {
 			_ = dir.Close()
 			return fmt.Errorf("%s: unexpected entry name %q", name, child)
+		}
+		// A link stands for something outside what was inspected; the
+		// walk stops rather than decide what removing it means.
+		if entry.Type()&fs.ModeSymlink != 0 {
+			_ = dir.Close()
+			return fmt.Errorf("%s/%s: %w", name, child, ErrSymlinkInProfile)
 		}
 		if entry.IsDir() {
 			if err := removeTree(fd, child); err != nil {
@@ -161,28 +178,34 @@ func fileModeOf[M uint16 | uint32](mode M) fs.FileMode {
 }
 
 // countTree counts what is left of name inside dirFD, itself included,
-// without following a link; an unreadable directory counts as one entry.
-func countTree(dirFD int, name string) int {
+// without following a link. complete is false when some directory in it
+// could not be listed, so the count is only a lower bound.
+func countTree(dirFD int, name string) (n int, complete bool) {
 	var st unix.Stat_t
 	if err := unix.Fstatat(dirFD, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return 0
+		if errors.Is(err, unix.ENOENT) {
+			return 0, true
+		}
+		return 0, false
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
-		return 1
+		return 1, true
 	}
 	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return 1
+		return 1, false
 	}
 	dir := os.NewFile(uintptr(fd), name)
 	defer func() { _ = dir.Close() }()
 	entries, err := dir.ReadDir(-1)
 	if err != nil {
-		return 1
+		return 1, false
 	}
-	total := 1
+	n, complete = 1, true
 	for _, entry := range entries {
-		total += countTree(fd, entry.Name())
+		c, ok := countTree(fd, entry.Name())
+		n += c
+		complete = complete && ok
 	}
-	return total
+	return n, complete
 }

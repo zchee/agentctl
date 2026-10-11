@@ -21,9 +21,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"golang.org/x/sys/unix"
 )
 
 // recordingFS remembers every name opened through it, so a test can prove
@@ -172,6 +174,14 @@ func TestReadDesktopIdentityRefusesEscapes(t *testing.T) {
 			},
 			want: StateUnreadable,
 		},
+		"error: config.json is a named pipe with no writer": {
+			prepare: func(t *testing.T, dir, _ string) {
+				if err := unix.Mkfifo(filepath.Join(dir, ConfigFile), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: StateUnreadable,
+		},
 		"error: the profile directory does not exist": {
 			prepare: func(t *testing.T, dir, _ string) {
 				if err := os.Remove(dir); err != nil {
@@ -195,7 +205,17 @@ func TestReadDesktopIdentityRefusesEscapes(t *testing.T) {
 				t.Fatal(err)
 			}
 			tt.prepare(t, dir, outside)
-			got := ReadDesktopIdentity(dir)
+			// A read that waits on a writer would hold the desktop lock
+			// for as long as nobody writes, so every case must finish
+			// promptly on its own.
+			done := make(chan Identity, 1)
+			go func() { done <- ReadDesktopIdentity(dir) }()
+			var got Identity
+			select {
+			case got = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatal("ReadDesktopIdentity did not return within 10s")
+			}
 			t.Logf("state %s reason %q", got.State, got.Reason)
 			if got.State != tt.want {
 				t.Fatalf("ReadDesktopIdentity = %+v, want state %s", got, tt.want)

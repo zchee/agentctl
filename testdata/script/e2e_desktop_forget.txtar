@@ -59,6 +59,27 @@ stderr 'desktop_profile_symlink'
 exists elsewhere/config.json
 rm $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee
 
+# a link inside a stored profile stops the walk: the link and its target
+# stay, the refusal says how much is left
+mkdir $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee
+symlink $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/link -> $WORK/elsewhere
+exec expectexit 30 agentctl claude desktop forget cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee --yes
+stderr 'desktop_profile_symlink'
+stderr 'the walk stopped with [1-9][0-9]* entries remaining'
+exists $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/link
+exists elsewhere/config.json
+rm $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee
+
+# a directory that cannot be listed leaves the count a lower bound
+mkdir $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/sealed/inner
+cp config-b.json $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/sealed/inner/f.json
+chmod 0000 $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/sealed
+exec expectexit 30 agentctl claude desktop forget cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee --yes
+stderr 'refused: partial: cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee: at least [1-9][0-9]* entries \(part of the rest could not be listed\) remain'
+chmod 0755 $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/sealed
+exists $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee/sealed/inner/f.json
+rm $STORE/profiles/cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee
+
 # without --yes and without a terminal nothing is deleted
 exec expectexit 2 agentctl claude desktop forget $A
 stderr 'standard input is not a terminal'

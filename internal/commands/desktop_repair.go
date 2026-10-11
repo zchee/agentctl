@@ -16,6 +16,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/zchee/agentctl/internal/cli"
@@ -132,7 +133,7 @@ func (e *desktopEnv) classify(in *desktop.Intent, l repairLayout) string {
 	}
 	destOK := in.Outgoing == nil || oAtDest
 	switch {
-	case in.Outgoing != nil && oAtData && destAbsent:
+	case in.Outgoing != nil && oAtData && destAbsent && tAtSrc:
 		return stateNeverStarted
 	case in.Outgoing == nil && !l.data.present && tAtSrc:
 		return stateNeverStarted
@@ -205,7 +206,9 @@ func (e *desktopEnv) repair(ctx context.Context, p DesktopProcess, rep *desktopR
 	case stateInconsistent:
 		return refuse(desktopRepairInconsistent, "the directories fit no state of operation %s; nothing was moved", in.OpID)
 	case stateNeverStarted:
-		res := e.observedResult(in, desktop.OutcomeAborted, wordRunUseAgain, nil, false)
+		main, running := e.observeMain(ctx)
+		res := e.observedResult(in, desktop.OutcomeAborted, wordRunUseAgain, main, running)
+		rep.Main = res.Main
 		if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
 			rep.Journal = journalOpen
 			return refuse(wordJournalNotRecorded, "could not record the result: %v", err)
@@ -240,26 +243,40 @@ func (e *desktopEnv) repair(ctx context.Context, p DesktopProcess, rep *desktopR
 		outcome = desktop.OutcomeReverted
 	}
 
-	switch {
-	case rep.State == stateTargetInstalled && action != actionRevert:
+	if rep.State == stateTargetInstalled && action != actionRevert {
 		if len(snap.Mains) > 0 {
 			return e.recordRepair(rep, in, outcome, &snap.Mains[0])
 		}
 		return e.repairLaunch(ctx, rep, in, outcome, before)
-	case rep.State == stateTargetInstalled:
-		if before, err = e.quitForRepair(ctx); err != nil {
-			return err
-		}
+	}
+
+	// Every remaining cell renames, so the app is quit first, the last
+	// snapshot before the move must show none of it and no other copy, and
+	// the layout is read again: a running app may have changed it.
+	if before, err = e.quitForRepair(ctx); err != nil {
+		return err
+	}
+	if err := e.repairMoveGuard(ctx); err != nil {
+		return err
+	}
+	decided := rep.State
+	if layout, err = e.observeLayout(in); err != nil {
+		return errs.NewIO("could not read the interrupted operation's directories", err)
+	}
+	rep.Layout, rep.State = layout.rows, e.classify(in, layout)
+	if rep.State != decided {
+		return refuse(desktopRepairInconsistent, "the layout of operation %s changed from %s to %s while the app quit; nothing was moved, run `agentctl claude desktop repair` again", in.OpID, decided, rep.State)
+	}
+
+	switch rep.State {
+	case stateTargetInstalled:
 		if err := e.moveTargetBack(in); err != nil {
 			return e.moveFailed(rep, err)
 		}
 		if err := e.returnOutgoing(in); err != nil {
 			return e.moveFailed(rep, err)
 		}
-	case rep.State == stateUnexpectedDefault:
-		if before, err = e.quitForRepair(ctx); err != nil {
-			return err
-		}
+	case stateUnexpectedDefault:
 		if _, err := desktop.Move(e.layout.DefaultData, e.layout.Profile(desktop.StrayName(in.OpID)), &layout.data.id); err != nil {
 			return e.moveFailed(rep, err)
 		}
@@ -269,6 +286,7 @@ func (e *desktopEnv) repair(ctx context.Context, p DesktopProcess, rep *desktopR
 			return e.moveFailed(rep, err)
 		}
 	}
+	crashPoint(e.fault.Is(fault.DesktopAbortAfterRepairRenames))
 	return e.repairLaunch(ctx, rep, in, outcome, before)
 }
 
@@ -305,6 +323,23 @@ func (e *desktopEnv) quitForRepair(ctx context.Context) ([]rdesktop.Proc, error)
 	return quit.Before.Mains, nil
 }
 
+// repairMoveGuard takes the last snapshot before a repair moves anything
+// and refuses unless it shows none of the app and no other copy.
+func (e *desktopEnv) repairMoveGuard(ctx context.Context) error {
+	snap, err := e.observe(ctx)
+	if err != nil {
+		return err
+	}
+	err = moveGuard(snap)
+	if other, ok := errors.AsType[*rdesktop.OtherCopyError](err); ok {
+		return quitRefusal(other)
+	}
+	if err != nil {
+		return refuse(desktopQuitTimeout, "%v after the quit; nothing was moved", err)
+	}
+	return nil
+}
+
 // moveFailed reports a move inside repair that did not land: the intent
 // stays open and the layout is reported again.
 func (e *desktopEnv) moveFailed(rep *desktopReport, err error) error {
@@ -321,7 +356,7 @@ func (e *desktopEnv) repairLaunch(ctx context.Context, rep *desktopReport, in *d
 	if !launch.Ready {
 		word = wordRepairedNotRunning
 	}
-	res := e.observedResult(in, outcome, word, launch.Main, launch.Ready)
+	res := e.observedResult(in, outcome, word, launch.Main, new(launch.Ready))
 	res.Verified = launch.Ready
 	rep.Main = res.Main
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {
@@ -341,7 +376,7 @@ func (e *desktopEnv) repairLaunch(ctx context.Context, rep *desktopReport, in *d
 // recordRepair records the cell's outcome when an instance already runs
 // on the installed target.
 func (e *desktopEnv) recordRepair(rep *desktopReport, in *desktop.Intent, outcome desktop.Outcome, main *rdesktop.Proc) error {
-	res := e.observedResult(in, outcome, wordRepaired, main, true)
+	res := e.observedResult(in, outcome, wordRepaired, main, new(true))
 	res.Verified = true
 	rep.Main = res.Main
 	if err := e.appendRecord(res, e.fault.Is(fault.DesktopResultAppendFail)); err != nil {

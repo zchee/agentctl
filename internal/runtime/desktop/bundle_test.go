@@ -123,3 +123,85 @@ func TestCheckBundle(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckBundleRefusesALinkedBundle(t *testing.T) {
+	t.Parallel()
+
+	real := writeBundle(t, encodePlist(t, BundleID, plist.XMLFormat), false)
+	link := filepath.Join(t.TempDir(), "Claude.app")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	s := &System{Bundle: link}
+	err := s.CheckBundle()
+	t.Logf("CheckBundle: %v", err)
+	if !errors.Is(err, ErrBundleMismatch) || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("CheckBundle() = %v, want a mismatch naming the link", err)
+	}
+}
+
+func TestLaunchChecksAnUncheckedBundle(t *testing.T) {
+	t.Parallel()
+
+	sys, w := newFakeSystem(t)
+	if err := os.Remove(filepath.Join(sys.Bundle, "Contents", "Info.plist")); err != nil {
+		t.Fatal(err)
+	}
+	report := sys.Launch(t.Context(), nil)
+	t.Logf("report %+v", report)
+	if !errors.Is(report.OpenErr, ErrBundleMismatch) || report.Ready {
+		t.Fatalf("Launch = %+v, want a refused launch", report)
+	}
+	if got := logLines(t, w, "open.log"); len(got) != 0 {
+		t.Fatalf("the launcher ran: %q", got)
+	}
+}
+
+func TestLaunchRefusesABundleChangedSinceTheCheck(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		// change runs between CheckBundle and Launch.
+		change func(t *testing.T, bundle string)
+	}{
+		"error: the bundle directory replaced by another one": {
+			change: func(t *testing.T, bundle string) {
+				if err := os.Rename(bundle, bundle+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.CopyFS(bundle, os.DirFS(bundle+".old")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		"error: the bundle path turned into a link to another directory": {
+			change: func(t *testing.T, bundle string) {
+				if err := os.Rename(bundle, bundle+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(bundle+".old", bundle); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			sys, w := newFakeSystem(t)
+			if err := sys.CheckBundle(); err != nil {
+				t.Fatalf("CheckBundle: %v", err)
+			}
+			tt.change(t, sys.Bundle)
+			report := sys.Launch(t.Context(), nil)
+			t.Logf("report %+v", report)
+			if !errors.Is(report.OpenErr, ErrBundleMismatch) || report.Ready {
+				t.Fatalf("Launch = %+v, want a refused launch", report)
+			}
+			if got := logLines(t, w, "open.log"); len(got) != 0 {
+				t.Fatalf("the launcher ran: %q", got)
+			}
+		})
+	}
+}

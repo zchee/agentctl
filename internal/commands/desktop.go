@@ -87,6 +87,9 @@ type DesktopProcess struct {
 	In *os.File
 	// Out receives the report.
 	Out io.Writer
+	// Err receives the confirmation question when the report on Out is
+	// JSON, so Out carries nothing but the one document.
+	Err io.Writer
 	// System returns the process observer and the app's programs.
 	System func(dataDir string) (*rdesktop.System, error)
 	// LockWait bounds the wait for the per-user desktop lock.
@@ -94,8 +97,8 @@ type DesktopProcess struct {
 }
 
 // NewDesktopProcess returns the process wired to the real system.
-func NewDesktopProcess(in *os.File, out io.Writer) DesktopProcess {
-	return DesktopProcess{In: in, Out: out, System: rdesktop.Default, LockWait: time.Second}
+func NewDesktopProcess(in *os.File, out, errOut io.Writer) DesktopProcess {
+	return DesktopProcess{In: in, Out: out, Err: errOut, System: rdesktop.Default, LockWait: time.Second}
 }
 
 // desktopEnv is one command's view of the desktop store and the system.

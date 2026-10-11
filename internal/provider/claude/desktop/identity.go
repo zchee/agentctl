@@ -23,6 +23,8 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // ConfigFile is the one file inside a profile agentctl ever opens.
@@ -66,15 +68,39 @@ type Identity struct {
 }
 
 // ReadDesktopIdentity reads the plaintext lastKnownAccountUuid of the
-// profile at dir. The directory is opened as a root, so config.json cannot
-// resolve outside it, and config.json is the only name opened under it.
+// profile at dir. config.json is opened relative to a descriptor of dir,
+// never following a link, and it is the only name opened under it. The
+// open does not block: a named pipe or a device there would otherwise hold
+// the caller (and the desktop lock it may own) until something wrote to
+// it, so the opened descriptor's type is checked before anything is read.
 func ReadDesktopIdentity(dir string) Identity {
-	root, err := os.OpenRoot(dir)
+	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("opening the profile: %v", err)}
+		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("opening the profile: %v", &fs.PathError{Op: "open", Path: dir, Err: err})}
 	}
-	defer func() { _ = root.Close() }()
-	return ReadIdentityFS(root.FS())
+	defer func() { _ = unix.Close(dirFD) }()
+	fd, err := unix.Openat(dirFD, ConfigFile, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return Identity{State: StateFresh}
+	}
+	if err != nil {
+		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("opening %s: %v", ConfigFile, err)}
+	}
+	file := os.NewFile(uintptr(fd), ConfigFile)
+	defer func() { _ = file.Close() }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("checking %s: %v", ConfigFile, err)}
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return Identity{State: StateUnreadable, Reason: ConfigFile + " is not a regular file"}
+	}
+	// A regular file never blocks, so the flag is cleared only to read it
+	// the ordinary way.
+	if err := unix.SetNonblock(fd, false); err != nil {
+		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("reading %s: %v", ConfigFile, err)}
+	}
+	return readBounded(file, st.Size)
 }
 
 // ReadIdentityFS is ReadDesktopIdentity over any file system whose root is
@@ -95,7 +121,13 @@ func ReadIdentityFS(fsys fs.FS) Identity {
 	if !info.Mode().IsRegular() {
 		return Identity{State: StateUnreadable, Reason: ConfigFile + " is not a regular file"}
 	}
-	if info.Size() > MaxConfigBytes {
+	return readBounded(file, info.Size())
+}
+
+// readBounded reads an opened regular config.json of the given size, at
+// most one byte past the bound, and parses it.
+func readBounded(file io.Reader, size int64) Identity {
+	if size > MaxConfigBytes {
 		return Identity{State: StateUnreadable, Reason: fmt.Sprintf("%s is larger than %d bytes", ConfigFile, MaxConfigBytes)}
 	}
 	// One byte past the bound tells a file that grew after the check from

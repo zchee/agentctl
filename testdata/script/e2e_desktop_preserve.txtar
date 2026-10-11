@@ -69,6 +69,108 @@ cmp stdout b.sig
 exec treesig $STORE/profiles/$C
 cmp stdout c.sig
 
+# a stored profile that names another account, then one that cannot be
+# read, stands in for B: both are refused and nothing changes, neither in
+# them nor in the profiles around them
+mv $STORE/profiles/$B $WORK/b.aside
+mkdir $STORE/profiles/$B
+cp config-a.json $STORE/profiles/$B/config.json
+exec treesig $STORE/profiles/$B
+cp stdout m.sig
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_profile_mismatch'
+exec treesig $STORE/profiles/$B
+cmp stdout m.sig
+rm $STORE/profiles/$B
+mkdir $STORE/profiles/$B
+cp config-broken.json $STORE/profiles/$B/config.json
+exec treesig $STORE/profiles/$B
+cp stdout u.sig
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_profile_unreadable'
+exec treesig $STORE/profiles/$B
+cmp stdout u.sig
+rm $STORE/profiles/$B
+mv $WORK/b.aside $STORE/profiles/$B
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# the outgoing profile's stored name already taken: refused, the profile
+# holding that name is untouched too
+mkdir $STORE/profiles/$A
+cp config-a.json $STORE/profiles/$A/config.json
+exec treesig $STORE/profiles/$A
+cp stdout x.sig
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_destination_exists'
+exec treesig $STORE/profiles/$A
+cmp stdout x.sig
+rm $STORE/profiles/$A
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# the desktop lock held by another operation
+! exec flockhold $STORE/lock 10m $WORK/lock-held &holder&
+exec waitfor $WORK/lock-held
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_lock_busy'
+kill holder
+wait holder
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# no main executable, then a bundle path that is a link
+mv $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/MacOS/Claude $WORK/claude.saved
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_app_not_found'
+mv $WORK/claude.saved $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app/Contents/MacOS/Claude
+mv $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app $WORK/real.app
+symlink $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app -> $WORK/real.app
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_bundle_mismatch'
+rm $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app
+mv $WORK/real.app $AGENTCTL_DESKTOP_TEST_ROOT/Applications/Claude.app
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
+# an interrupted operation left open refuses the next switch; repair then
+# closes it as never started, moving nothing
+env AGENTCTL_FAULT=desktop_abort_after_intent
+exec expectexit 134 agentctl claude desktop use $B --yes
+env AGENTCTL_FAULT=
+exec expectexit 30 agentctl claude desktop use $B --yes
+stderr 'desktop_intent_open'
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+exec agentctl claude desktop repair --yes
+stdout '^aborted'
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec treesig $STORE/profiles/$C
+cmp stdout c.sig
+
 # a launch that fails twice is rolled back with every entry intact
 env AGCTL_FAKE_OPEN=fail
 exec expectexit 30 agentctl claude desktop use $B --yes
@@ -132,6 +234,22 @@ cmp stdout a.sig
 exec treesig $D
 cmp stdout b.sig
 
+# a switch whose result cannot be recorded: both profiles moved intact, the
+# intent stays open, and repair records what it finds without moving them
+env AGENTCTL_FAULT=desktop_result_append_fail
+exec expectexit 30 agentctl claude desktop use $A --yes
+stderr 'journal_not_recorded'
+env AGENTCTL_FAULT=
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+exec agentctl claude desktop repair --yes
+exec treesig $D
+cmp stdout a.sig
+exec treesig $STORE/profiles/$B
+cmp stdout b.sig
+
 -- registry.json --
 {
   "version": 1,
@@ -159,6 +277,8 @@ cmp stdout b.sig
 {"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}
 -- config-b.json --
 {"lastKnownAccountUuid":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+-- config-broken.json --
+{"lastKnownAccountUuid":
 -- config-c.json --
 {"lastKnownAccountUuid":"cccccccc-1111-2222-3333-444444444444"}
 -- fake-stat.sh --
