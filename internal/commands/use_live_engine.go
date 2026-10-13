@@ -49,6 +49,9 @@ type useLiveSwap struct {
 	inherited string
 	process   SessionProcess
 	deadline  time.Time
+	// desktopClause is the desktop switch's part of the question, empty
+	// unless `--desktop` was given without `--yes`.
+	desktopClause string
 }
 
 type useSource struct {
@@ -72,22 +75,24 @@ func (swap useLiveSwap) swapIn(ctx context.Context, incoming useIncoming, store 
 	swap.deadline = time.Now().Add(duration)
 	ctx, cancel := context.WithTimeout(ctx, max(useSwapDeadline, duration))
 	defer cancel()
-	var target *string
+	var target, storeDir *string
 	var warnings []string
 	var rc *useRemoteControl
-	report := swap.swapPhases(ctx, incoming, store, opts, &target, &warnings, &rc)
+	report := swap.swapPhases(ctx, incoming, store, opts, &target, &storeDir, &warnings, &rc)
 	report.target = target
+	report.store = storeDir
 	report.warnings = append(warnings, report.warnings...)
 	report.rc = rc
 	return report
 }
 
-func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, store *config.AccountRecord, opts cli.ClaudeUseOptions, target **string, warnings *[]string, rc **useRemoteControl) *useReport {
+func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, store *config.AccountRecord, opts cli.ClaudeUseOptions, target, storeDir **string, warnings *[]string, rc **useRemoteControl) *useReport {
 	subject, refused := useBuildSubject(swap.paths, swap.env, swap.live, store, swap.inherited)
 	if refused != nil {
 		return refused
 	}
 	*target = new(string(subject.audit))
+	*storeDir = new(subject.storeDir)
 	service := subject.service
 	if swap.env.OAuthTokenSet {
 		return useRefused(claude.SwapRefusal{Kind: claude.SwapEnvToken}, service, "`CLAUDE_CODE_OAUTH_TOKEN` is set in agentctl's own environment, which short-circuits every credential store; unset it and run this again")
@@ -287,6 +292,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		if tty.IsTerminal(in) {
 			question += hints.consent()
 		}
+		question += swap.desktopClause
 		confirmed, err := (TerminalPrompt{In: in, Out: swap.process.Out}).Confirm(ctx, question)
 		if !confirmed || err != nil {
 			note := "cancelled at the confirmation prompt"

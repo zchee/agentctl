@@ -82,18 +82,7 @@ type layoutRow struct {
 // finish prints the report and returns err. A refusal fills the outcome
 // with its word, so a JSON consumer always gets one document.
 func finish(out io.Writer, asJSON bool, rep *desktopReport, err error) error {
-	var refusal *desktopRefusal
-	switch {
-	case errors.As(err, &refusal):
-		if rep.Outcome == "" {
-			rep.Outcome = refusal.Word
-		}
-		if rep.Detail == "" {
-			rep.Detail = refusal.Detail
-		}
-	case err != nil && rep.Outcome == "":
-		rep.Outcome, rep.Detail = "error", err.Error()
-	}
+	settleOutcome(rep, err)
 	if asJSON {
 		if werr := writeJSON(out, rep); werr != nil && err == nil {
 			return werr
@@ -120,6 +109,23 @@ func finish(out io.Writer, asJSON bool, rep *desktopReport, err error) error {
 		}
 	}
 	return err
+}
+
+// settleOutcome fills an unset outcome from the error that ended the
+// command: a refusal's word and detail, or `error` with the message.
+func settleOutcome(rep *desktopReport, err error) {
+	var refusal *desktopRefusal
+	switch {
+	case errors.As(err, &refusal):
+		if rep.Outcome == "" {
+			rep.Outcome = refusal.Word
+		}
+		if rep.Detail == "" {
+			rep.Detail = refusal.Detail
+		}
+	case err != nil && rep.Outcome == "":
+		rep.Outcome, rep.Detail = "error", err.Error()
+	}
 }
 
 // renderDesktop is the one-line summary of a finished `use` or `repair`.
@@ -328,6 +334,11 @@ func (e *desktopEnv) use(ctx context.Context, p DesktopProcess, rep *desktopRepo
 	if err := e.checkLayout(); err != nil {
 		return err
 	}
+	// A switch that follows a swap may be interrupted while the swap
+	// finishes; then it must not start at all.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	guard, err := e.lock(ctx, p.LockWait)
 	if err != nil {
 		return err
@@ -348,6 +359,11 @@ func (e *desktopEnv) use(ctx context.Context, p DesktopProcess, rep *desktopRepo
 	if open := desktop.OpenIntents(entries); len(open) > 0 {
 		return refuse(desktopIntentOpen, "operation %s recorded its intent and no result; run `agentctl claude desktop repair`", open[0].OpID)
 	}
+	if e.guard != nil {
+		if err := e.guard(entries); err != nil {
+			return err
+		}
+	}
 	if err := e.sameDevice(); err != nil {
 		return err
 	}
@@ -357,6 +373,9 @@ func (e *desktopEnv) use(ctx context.Context, p DesktopProcess, rep *desktopRepo
 		return errs.NewIO("could not check the desktop data path", err)
 	}
 	defaultID := desktop.ReadDesktopIdentity(e.layout.DefaultData)
+	if dPresent {
+		e.before = new(desktop.RecordOf(defaultID))
+	}
 	if dPresent && defaultID.State == desktop.StateUnreadable {
 		return refuse(desktopProfileUnreadable, "the profile at %s: %s", e.layout.DefaultData, defaultID.Reason)
 	}
@@ -390,7 +409,7 @@ func (e *desktopEnv) use(ctx context.Context, p DesktopProcess, rep *desktopRepo
 		return errs.NewIO("could not draw an operation id", err)
 	}
 	rep.OpID = opID
-	in := &desktop.Intent{Type: desktop.TypeIntent, OpID: opID, Time: desktop.Now(), Command: "use", RequestedAccount: account, Target: target}
+	in := &desktop.Intent{Type: desktop.TypeIntent, OpID: opID, Time: desktop.Now(), Command: e.command, RequestedAccount: account, Store: e.store, SwapAuditID: e.swapAuditID, Target: target}
 	if tExists {
 		id, err := desktop.StatID(targetPath)
 		if err != nil {
@@ -426,6 +445,9 @@ func (e *desktopEnv) use(ctx context.Context, p DesktopProcess, rep *desktopRepo
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := e.appendRecord(in, e.fault.Is(fault.DesktopIntentAppendFail)); err != nil {
 		return refuse(desktopJournalFailed, "could not record the intent: %v", err)
 	}
@@ -500,7 +522,7 @@ func (e *desktopEnv) alreadySelected(rep *desktopReport, snap rdesktop.Snapshot,
 	if err != nil {
 		return errs.NewIO("could not draw an operation id", err)
 	}
-	in := &desktop.Intent{OpID: opID, Command: "use", RequestedAccount: account}
+	in := &desktop.Intent{OpID: opID, Command: e.command, RequestedAccount: account, SwapAuditID: e.swapAuditID}
 	var main *rdesktop.Proc
 	if len(snap.Mains) > 0 {
 		main = &snap.Mains[0]
@@ -677,6 +699,13 @@ func (e *desktopEnv) moveTargetBack(in *desktop.Intent) error {
 
 // consentQuestion names what will close and what will move.
 func consentQuestion(snap rdesktop.Snapshot, in *desktop.Intent) string {
+	plan := switchPlan(snap, in)
+	return strings.ToUpper(plan[:1]) + plan[1:] + "?"
+}
+
+// switchPlan says what a switch will close and move, in the words both
+// `desktop use` and the swap's question ask about.
+func switchPlan(snap rdesktop.Snapshot, in *desktop.Intent) string {
 	closing := len(snap.Mains) + len(snap.Family)
 	outgoing := "no profile is at the data path"
 	if in.Outgoing != nil {
@@ -690,5 +719,5 @@ func consentQuestion(snap rdesktop.Snapshot, in *desktop.Intent) string {
 	if in.Target.Existed {
 		incoming = "the stored profile " + in.Target.Name + " moves in"
 	}
-	return fmt.Sprintf("Quit the Claude desktop app (%d running process(es) close), %s, %s, and start the app for account %s?", closing, outgoing, incoming, in.RequestedAccount)
+	return fmt.Sprintf("quit the Claude desktop app (%d running process(es) close), %s, %s, and start the app for account %s", closing, outgoing, incoming, in.RequestedAccount)
 }

@@ -60,9 +60,13 @@ func (p SessionProcess) RunUndo(ctx context.Context, globals cli.Globals, opts c
 	}
 	env := claude.EnvFromProcess()
 	swap := useLiveSwap{paths: paths, config: registry, env: &env, live: reversal.live, inherited: reversal.inherited, process: p}
+	if opts.Desktop && !opts.Yes {
+		swap.desktopClause = p.desktopConsentClause(ctx, reversal.owner.AccountUUID, true)
+	}
 	incoming := useIncoming{record: &reversal.owner, direction: secret.DirectionUndo, source: reversal.source, undone: reversal.undone}
 	report := swap.swapIn(ctx, incoming, reversal.store, opts)
 	p.followUpRemoteControl(ctx, opts, report)
+	p.followUpDesktop(ctx, opts, report, useDesktopFollow{account: reversal.owner.AccountUUID, command: useDesktopUndo, undone: entry.ID.String()})
 	if err := p.emitUse(report, opts.JSON); err != nil {
 		return err
 	}

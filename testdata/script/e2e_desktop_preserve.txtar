@@ -397,6 +397,111 @@ cmp stdout a.sig
 exec treesig $D
 cmp stdout b.sig
 
+# The same holds for the desktop switch that follows a live swap, on every
+# path of --desktop: forward, undo, the undo refused, a refusal before the
+# quit, a switch rolled back, and a swap that never applied.
+swapfixture live preserve-desktop
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+env O=11111111-2222-3333-4444-555555555555
+env I=44444444-4444-4444-8444-444444444444
+env T=55555555-5555-4555-8555-555555555555
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D/claude-code-sessions/s1 $D/Local' 'Storage
+cp config-o.json $D/config.json
+cp config-o.json $D/claude-code-sessions/s1/state.json
+cp config-o.json $D/Local' 'Storage/leveldb.log
+mkdir $STORE/profiles/$I/claude-code-sessions/s2
+cp config-i.json $STORE/profiles/$I/config.json
+cp config-i.json $STORE/profiles/$I/claude-code-sessions/s2/state.json
+mkdir $STORE/profiles/$T
+cp config-t.json $STORE/profiles/$T/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec treesig $D
+cp stdout o.sig
+exec treesig $STORE/profiles/$I
+cp stdout i.sig
+exec treesig $STORE/profiles/$T
+cp stdout t.sig
+
+# a swap that never applied: the switch does not run
+exec expectexit 20 agentctl claude use $I --live --json --desktop
+stdout '"detail": "the swap did not apply, so the desktop app was left alone"'
+exec treesig $D
+cmp stdout o.sig
+exec treesig $STORE/profiles/$I
+cmp stdout i.sig
+exec treesig $STORE/profiles/$T
+cmp stdout t.sig
+
+# a refusal before the quit: an open intent
+mkdir $STORE
+cp open-intent.jsonl $STORE/journal.jsonl
+exec agentctl claude use $I --live --yes --json --desktop
+stdout '^    "outcome": "desktop_intent_open",$'
+exec treesig $D
+cmp stdout o.sig
+exec treesig $STORE/profiles/$I
+cmp stdout i.sig
+exec treesig $STORE/profiles/$T
+cmp stdout t.sig
+rm $STORE/journal.jsonl
+exec agentctl claude use --undo --yes --json
+stdout '^  "outcome": "applied",$'
+
+# a switch whose target does not start is rolled back intact
+env AGCTL_FAKE_OPEN=fail-once
+exec agentctl claude use $I --live --yes --json --desktop
+stdout '^    "outcome": "reverted_relaunched",$'
+rm $AGENTCTL_TEST_PROCESS_TABLE.open-failed
+env AGCTL_FAKE_OPEN=
+exec treesig $D
+cmp stdout o.sig
+exec treesig $STORE/profiles/$I
+cmp stdout i.sig
+exec treesig $STORE/profiles/$T
+cmp stdout t.sig
+exec agentctl claude use --undo --yes --json
+stdout '^  "outcome": "applied",$'
+
+# forward: the two profiles change places and nothing inside them changes
+exec agentctl claude use $I --live --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+stdout '^    "identity": "matches",$'
+exec treesig $STORE/profiles/$O
+cmp stdout o.sig
+exec treesig $D
+cmp stdout i.sig
+exec treesig $STORE/profiles/$T
+cmp stdout t.sig
+
+# undo: they change places back, intact
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+exec treesig $D
+cmp stdout o.sig
+exec treesig $STORE/profiles/$I
+cmp stdout i.sig
+exec treesig $STORE/profiles/$T
+cmp stdout t.sig
+
+# the undo refused: a third account signed in on the profile the forward
+# switch installed; nothing anywhere changes
+exec agentctl claude use $I --live --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+cp config-t.json $D/config.json
+exec treesig $D
+cp stdout d-third.sig
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^    "outcome": "desktop_profile_mismatch",$'
+exec treesig $D
+cmp stdout d-third.sig
+exec treesig $STORE/profiles/$O
+cmp stdout o.sig
+exec treesig $STORE/profiles/$T
+cmp stdout t.sig
+
 -- registry.json --
 {
   "version": 1,
@@ -434,3 +539,11 @@ case "$3" in
 */claude-desktop/profiles) echo 2 ;;
 *) echo 1 ;;
 esac
+-- config-o.json --
+{"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}
+-- config-i.json --
+{"lastKnownAccountUuid":"44444444-4444-4444-8444-444444444444","darkMode":"system"}
+-- config-t.json --
+{"lastKnownAccountUuid":"55555555-5555-4555-8555-555555555555","darkMode":"system"}
+-- open-intent.jsonl --
+{"type":"desktop_intent","op_id":"0123456789abcdef","time":"2026-10-13T00:00:00Z","command":"use","requested_account":"55555555-5555-4555-8555-555555555555","outgoing":null,"target":{"name":"55555555-5555-4555-8555-555555555555","identity":{"state":"none"},"source":"/nonexistent","target_existed":false,"park":"fresh-0123456789abcdef-target"}}

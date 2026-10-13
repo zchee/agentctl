@@ -61,6 +61,7 @@ func (p SessionProcess) RunLive(ctx context.Context, globals cli.Globals, opts c
 		if store == nil {
 			report := useRefused(claude.SwapRefusal{Kind: claude.SwapNotOwned}, "", fmt.Sprintf("`%s` is not a store agentctl owns, so there is no record saying whose credentials are in it or where the displaced one should go", inherited))
 			p.followUpRemoteControl(ctx, opts, report)
+			p.followUpDesktop(ctx, opts, report, useDesktopFollow{account: incoming.AccountUUID, command: useDesktopForward})
 			if err := p.emitUse(report, opts.JSON); err != nil {
 				return err
 			}
@@ -68,8 +69,12 @@ func (p SessionProcess) RunLive(ctx context.Context, globals cli.Globals, opts c
 		}
 	}
 	swap := useLiveSwap{paths: paths, config: registry, env: &env, live: !namespaced, inherited: inherited, process: p}
+	if opts.Desktop && !opts.Yes {
+		swap.desktopClause = p.desktopConsentClause(ctx, incoming.AccountUUID, false)
+	}
 	report := swap.swapIn(ctx, useIncoming{record: incoming, direction: secret.DirectionForward, source: useSource{kind: useSourceOwn}}, store, opts)
 	p.followUpRemoteControl(ctx, opts, report)
+	p.followUpDesktop(ctx, opts, report, useDesktopFollow{account: incoming.AccountUUID, command: useDesktopForward})
 	if err := p.emitUse(report, opts.JSON); err != nil {
 		return err
 	}

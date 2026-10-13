@@ -22,6 +22,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/provider/claude/desktop"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -139,6 +140,119 @@ func TestUseOutcomeJSONReferenceOrder(t *testing.T) {
     "backup": ".claude.json.backup.1791235855951",
     "hold_ms": 22,
     "budget_ms": 1200
+  }
+}
+`,
+		},
+		"success: the desktop switch follows remote control and is the last member": {
+			report: &useReport{
+				outcome:       claude.SwapOutcome{Kind: claude.SwapApplied},
+				target:        new("live"),
+				service:       claude.LiveService,
+				warnings:      []string{"the desktop app switch ended desktop_intent_open: operation 0123456789abcdef recorded its intent and no result; run `agentctl claude desktop repair`"},
+				remoteControl: &claude.RemoteControlCounts{},
+				desktop: &useDesktop{
+					Outcome:  new(wordSelected),
+					Before:   &desktop.IdentityRecord{State: desktop.StateUUID, UUID: "11111111-2222-3333-4444-555555555555"},
+					After:    &desktop.IdentityRecord{State: desktop.StateFresh},
+					Identity: new("fresh"),
+					Journal:  "applied",
+					OpID:     "363647d2faf33811",
+				},
+			},
+			want: `{
+  "kind": "outcome",
+  "outcome": "applied",
+  "target": "live",
+  "service": "Claude Code-credentials",
+  "from": {
+    "digest8": null
+  },
+  "to": {
+    "digest8": null
+  },
+  "audit": {
+    "id": null
+  },
+  "adopted_to": null,
+  "lock": {
+    "hold_ms": null,
+    "budget_ms": null,
+    "break": null
+  },
+  "warnings": [
+    "the desktop app switch ended desktop_intent_open: operation 0123456789abcdef recorded its intent and no result; run ` + "`agentctl claude desktop repair`" + `"
+  ],
+  "note": null,
+  "refusal": null,
+  "config": null,
+  "remote_control": {
+    "eligible": 0,
+    "provenance_skipped": 0,
+    "unreachable": 0,
+    "unavailable": 0,
+    "version_rejected": 0,
+    "metadata_rejected": 0,
+    "dropped": 0,
+    "not_dropped": 0,
+    "reconnected": 0,
+    "not_confirmed": 0,
+    "already_connected": 0,
+    "restored": 0
+  },
+  "desktop": {
+    "outcome": "selected",
+    "before": {
+      "state": "uuid",
+      "uuid": "11111111-2222-3333-4444-555555555555"
+    },
+    "after": {
+      "state": "fresh"
+    },
+    "identity": "fresh",
+    "journal": "applied",
+    "op_id": "363647d2faf33811"
+  }
+}
+`,
+		},
+		"success: a switch that did not run keeps every member, null where nothing was seen": {
+			report: &useReport{
+				outcome:  claude.SwapOutcome{Kind: claude.SwapCancelled},
+				service:  claude.LiveService,
+				warnings: []string{},
+				desktop:  &useDesktop{Detail: "the swap did not apply, so the desktop app was left alone"},
+			},
+			want: `{
+  "kind": "outcome",
+  "outcome": "cancelled",
+  "target": null,
+  "service": "Claude Code-credentials",
+  "from": {
+    "digest8": null
+  },
+  "to": {
+    "digest8": null
+  },
+  "audit": {
+    "id": null
+  },
+  "adopted_to": null,
+  "lock": {
+    "hold_ms": null,
+    "budget_ms": null,
+    "break": null
+  },
+  "warnings": [],
+  "note": null,
+  "refusal": null,
+  "config": null,
+  "desktop": {
+    "outcome": null,
+    "before": null,
+    "after": null,
+    "identity": null,
+    "detail": "the swap did not apply, so the desktop app was left alone"
   }
 }
 `,

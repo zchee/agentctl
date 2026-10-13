@@ -25,9 +25,10 @@ func TestSwapAuditLegacyWireCompatibility(t *testing.T) {
 		line      string
 		from, to  string
 		direction WriteDirection
+		id        AuditID
 	}{
-		"success: before direction was recorded":     {line: `{"ts":"2026-09-10T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"live","from_digest8":"deadbeef","to_digest8":"cafebabe","outcome":"applied"}`, from: "deadbeef", to: "cafebabe", direction: DirectionForward},
-		"success: undo before identity was recorded": {line: `{"ts":"2026-09-11T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"live","from_digest8":"cafebabe","to_digest8":"deadbeef","outcome":"applied","direction":"undo"}`, from: "cafebabe", to: "deadbeef", direction: DirectionUndo},
+		"success: before direction was recorded":     {line: `{"ts":"2026-09-10T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"live","from_digest8":"deadbeef","to_digest8":"cafebabe","outcome":"applied"}`, from: "deadbeef", to: "cafebabe", direction: DirectionForward, id: AuditID{TS: "2026-09-10T00:00:00Z", PID: 1}},
+		"success: undo before identity was recorded": {line: `{"ts":"2026-09-11T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"live","from_digest8":"cafebabe","to_digest8":"deadbeef","outcome":"applied","direction":"undo"}`, from: "cafebabe", to: "deadbeef", direction: DirectionUndo, id: AuditID{TS: "2026-09-11T00:00:00Z", PID: 1}},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -35,7 +36,7 @@ func TestSwapAuditLegacyWireCompatibility(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := Undoable{Kind: UndoLive, FromDigest8: &tt.from, ToDigest8: tt.to, Outcome: WriteApplied, Direction: tt.direction}
+			want := Undoable{Kind: UndoLive, FromDigest8: &tt.from, ToDigest8: tt.to, Outcome: WriteApplied, Direction: tt.direction, ID: tt.id}
 			if diff := gocmp.Diff(want, SelectUndo(AuditTail{Entries: []AuditEntry{entry}})); diff != "" {
 				t.Fatal(diff)
 			}

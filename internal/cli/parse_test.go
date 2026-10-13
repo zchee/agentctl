@@ -475,6 +475,45 @@ func TestClaudeUseRestartRemoteControlRequiresALivePass(t *testing.T) {
 	}
 }
 
+func TestClaudeUseDesktopRequiresALivePass(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		flags    []string
+		accepted bool
+	}{
+		"success: with --live":                     {flags: []string{"--live", "account", "--desktop"}, accepted: true},
+		"success: with --undo":                     {flags: []string{"--undo", "--desktop"}, accepted: true},
+		"success: --live --yes with the switch":    {flags: []string{"--live", "account", "--yes", "--desktop"}, accepted: true},
+		"success: with the Remote Control restart": {flags: []string{"--live", "account", "--restart-remote-control", "--desktop"}, accepted: true},
+		"success: --undo --yes --json with it":     {flags: []string{"--undo", "--yes", "--json", "--desktop"}, accepted: true},
+		"error: alone":                             {flags: []string{"--desktop"}},
+		"error: with an isolated session id":       {flags: []string{"account", "--desktop"}},
+		"error: with --forget":                     {flags: []string{"--forget", "account", "--desktop"}},
+		"error: with --forget and --undo together": {flags: []string{"--undo", "--forget", "account", "--desktop"}},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			args := append([]string{"claude", "use"}, tt.flags...)
+			if tt.accepted {
+				var got ClaudeUseOptions
+				h := Handlers{ClaudeUse: func(_ context.Context, _ Globals, opts ClaudeUseOptions) error { got = opts; return nil }}
+				if _, err := execute(t, h, args...); err != nil {
+					t.Fatalf("expected `%s` to parse: %v", strings.Join(args, " "), err)
+				}
+				if !got.Desktop {
+					t.Fatalf("`%s` parsed without the desktop switch", strings.Join(args, " "))
+				}
+				return
+			}
+			mustReject(t, args...)
+		})
+	}
+}
+
 func TestClaudeExecRequiresATrailingCommand(t *testing.T) {
 	t.Parallel()
 

@@ -1,0 +1,279 @@
+# The desktop app switch that follows a live swap. Every arm composes the
+# swap fixture with the desktop testing world: the process table the fake
+# osascript and open edit, the fake app bundle under the harness root, and
+# the swap fixture's own HOME. Nothing here can reach the installed app or
+# a real profile.
+[!darwin] skip 'the desktop switch exists only on macOS'
+env MAIN=/Applications/Claude.app/Contents/MacOS/Claude
+
+# forward applied: the swap applies, then the app quits, the owner's profile
+# is stored under its account and the incoming account starts fresh
+swapfixture live forward
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "selected",$'
+! stdout SENTINEL
+! stderr SENTINEL
+! stderr 'warning: the desktop'
+exists $STORE/profiles/$OWNER/config.json
+! exists $D/config.json
+grep '"type":"desktop_intent".*"command":"use --live --desktop".*"swap_audit_id":"[^"]+#[0-9]+"' $STORE/journal.jsonl
+grep '"type":"desktop_result".*"command":"use --live --desktop".*"swap_audit_id":"[^"]+#[0-9]+".*"outcome":"applied"' $STORE/journal.jsonl
+swap-check 1 0 2
+swap-audit applied 1
+
+grep '"type":"desktop_intent".*"store":"[^"]*/home/.claude"' $STORE/journal.jsonl
+
+# the text report names the switch on its own line
+swapfixture live forward-text
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec agentctl claude use $INCOMING --live --yes --desktop
+stdout '^swapped: '
+stdout '^desktop: selected fresh operation [0-9a-f]{16}$'
+! stderr 'warning: the desktop'
+
+# undo after the first-use sign-in completed: the incoming account signed in
+# on its new profile, which is allowed, and the owner's profile comes back
+swapfixture live undo-first-use
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+cp config-incoming.json $D/config.json
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "selected",$'
+stdout '^    "identity": "matches",$'
+! stderr 'warning: the desktop'
+cmp $D/config.json config-owner.json
+cmp $STORE/profiles/$INCOMING/config.json config-incoming.json
+! exists $STORE/profiles/$OWNER
+grep -count=1 '"type":"desktop_intent".*"command":"use --undo --desktop"' $STORE/journal.jsonl
+grep '"type":"desktop_result".*"command":"use --undo --desktop".*"outcome":"applied"' $STORE/journal.jsonl
+
+# undo after a forward switch that moved an unknown default aside: the undo
+# runs and selects the owner's own profile, and the profile stored as
+# unknown-<operation> stays stored; the detail and the warning name it and
+# how to remove it, so nobody takes it for restored
+swapfixture live undo-unknown
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-unknown.json $D/config.json
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+stdout '"state": "unknown"'
+cp config-incoming.json $D/config.json
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "selected",$'
+stdout '^    "identity": "fresh",$'
+stdout '"detail": "the profile the switch being undone moved aside is still stored as unknown-[0-9a-f]{16} and was not put back, because it was never tied to an account; `agentctl claude desktop forget unknown-[0-9a-f]{16}` removes it"'
+stderr -count=1 '^warning: the profile the switch being undone moved aside is still stored as unknown-[0-9a-f]{16} and was not put back'
+exec ls $STORE/profiles
+stdout '^unknown-[0-9a-f]{16}$'
+stdout '^44444444-4444-4444-8444-444444444444$'
+cmp $STORE/profiles/$INCOMING/config.json config-incoming.json
+! exists $D/config.json
+
+# undo after a manual sign-in as a third account: refused, nothing moved
+swapfixture live undo-third
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+cp config-third.json $D/config.json
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "desktop_profile_mismatch",$'
+stdout 'now reads as account 55555555-5555-4555-8555-555555555555'
+stderr -count=1 '^warning: the desktop app switch ended desktop_profile_mismatch: '
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-third.json
+cmp $STORE/profiles/$OWNER/config.json config-owner.json
+grep -count=1 '"type":"desktop_intent"' $STORE/journal.jsonl
+
+# the target's launch fails and the recovery launch succeeds: the switch is
+# reverted with a warning, and the swap keeps its own outcome and exit 0
+swapfixture live reverted
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+env AGCTL_FAKE_OPEN=fail-once
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "reverted_relaunched",$'
+stdout '^    "journal": "reverted",$'
+stdout '"the desktop app switch ended reverted_relaunched: '
+stderr -count=1 '^warning: the desktop app switch ended reverted_relaunched: '
+cmp $D/config.json config-owner.json
+grep -count=2 '^open' $AGCTL_FAKE_DESKTOP_LOG
+rm $AGENTCTL_TEST_PROCESS_TABLE.open-failed
+env AGCTL_FAKE_OPEN=
+swap-audit applied 1
+
+# undo of a reverted switch: nothing to put back, a warning, nothing moved
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": null,$'
+stdout 'ended reverted_relaunched, so there is nothing to put back'
+stderr -count=1 '^warning: the desktop app was not switched: the desktop switch recorded for the swap being undone \(operation [0-9a-f]{16}\) ended reverted_relaunched'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-owner.json
+grep -count=1 '"type":"desktop_intent"' $STORE/journal.jsonl
+
+# a forward swap without the flag, then its undo with it: no switch was
+# recorded for that swap, so nothing is quit or moved
+swapfixture live undo-unrecorded
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec agentctl claude use $INCOMING --live --yes --json
+! stdout '"desktop"'
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": null,$'
+stderr -count=1 '^warning: the desktop app was not switched: no desktop switch was recorded for the swap being undone, so nothing was quit or moved$'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-owner.json
+! exists $STORE/journal.jsonl
+
+# forward when the app already runs on the incoming account's profile: one
+# noop result, nothing quit or moved, the swap unaffected
+swapfixture live already
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-incoming.json $D/config.json
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "already_selected",$'
+stdout '^    "journal": "noop",$'
+! stderr 'warning: the desktop'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-incoming.json
+grep -count=1 '"type":"desktop_result".*"command":"use --live --desktop".*"swap_audit_id":"[^"]+".*"outcome":"noop"' $STORE/journal.jsonl
+! grep '"type":"desktop_intent"' $STORE/journal.jsonl
+swap-check 1 0 2
+
+# forward refused by an open intent: a warning, nothing quit or moved
+swapfixture live intent-open
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+mkdir $STORE
+cp open-intent.jsonl $STORE/journal.jsonl
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "desktop_intent_open",$'
+stderr -count=1 '^warning: the desktop app switch ended desktop_intent_open: operation 0123456789abcdef recorded its intent and no result'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-owner.json
+cmp $STORE/journal.jsonl open-intent.jsonl
+swap-check 1 0 2
+
+# undo whose data path holds another directory than the one the switch
+# installed, even one signed in to the same account: refused, nothing moved
+swapfixture live undo-inode
+undo-setup
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^    "outcome": "selected",$'
+mv $D $WORK/installed-by-the-switch
+mkdir $D
+cp config-incoming.json $D/config.json
+rm $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude use --undo --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "desktop_profile_mismatch",$'
+stdout 'is not the one the desktop switch for the swap being undone installed'
+stderr -count=1 '^warning: the desktop app switch ended desktop_profile_mismatch: '
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-incoming.json
+cmp $STORE/profiles/$OWNER/config.json config-owner.json
+exists $WORK/installed-by-the-switch
+
+# the swap's question names what the switch will close and move; nobody is
+# there to answer, so the swap is cancelled and the switch never runs
+swapfixture live consent
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+exec expectexit 20 agentctl claude use $INCOMING --live --json --desktop
+stdout '^  "outcome": "cancelled",$'
+stdout 'Then quit the Claude desktop app \(1 running process\(es\) close\), the profile at the data path \(account 11111111-2222-3333-4444-555555555555\) moves to 11111111-2222-3333-4444-555555555555, a new profile is created at the next start \(sign in once\), and start the app for account 44444444-4444-4444-8444-444444444444; the switch looks at the app again'
+stdout '^    "outcome": null,$'
+stdout '"detail": "the swap did not apply, so the desktop app was left alone"'
+! stderr 'warning: the desktop'
+! exists $AGCTL_FAKE_DESKTOP_LOG
+! exists $STORE
+cmp $D/config.json config-owner.json
+swap-check 0 0 1
+
+# Remote Control's follow-up runs first, then the desktop switch: their
+# warnings come out in that order
+swapfixture live rc-then-desktop
+rcmod seed a reconnect=expired
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+mkdir $STORE
+cp open-intent.jsonl $STORE/journal.jsonl
+exec agentctl claude use $INCOMING --live --yes --json --restart-remote-control --desktop
+stdout '^  "outcome": "applied",$'
+rcmod counts eligible=1 dropped=1 not_confirmed=1
+stderr '(?s)warning: 1 Claude Code session did not confirm that Remote Control started again.*warning: the desktop app switch ended desktop_intent_open'
+stdout '(?s)"remote_control": \{.*"desktop": \{'
+rcmod check a 1 1
+
+-- config-owner.json --
+{"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}
+-- config-incoming.json --
+{"lastKnownAccountUuid":"44444444-4444-4444-8444-444444444444","darkMode":"system"}
+-- config-unknown.json --
+{"darkMode":"system"}
+-- config-third.json --
+{"lastKnownAccountUuid":"55555555-5555-4555-8555-555555555555","darkMode":"system"}
+-- open-intent.jsonl --
+{"type":"desktop_intent","op_id":"0123456789abcdef","time":"2026-10-13T00:00:00Z","command":"use","requested_account":"55555555-5555-4555-8555-555555555555","outgoing":null,"target":{"name":"55555555-5555-4555-8555-555555555555","identity":{"state":"none"},"source":"/nonexistent","target_existed":false,"park":"fresh-0123456789abcdef-target"}}

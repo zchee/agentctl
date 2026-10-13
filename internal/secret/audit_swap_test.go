@@ -31,15 +31,16 @@ func TestSelectUndo(t *testing.T) {
 		tail AuditTail
 		want Undoable
 	}{
-		"success: empty":                                {AuditTail{}, Undoable{}},
-		"success: namespace first write":                {AuditTail{Entries: []AuditEntry{namespace}}, wantNamespace},
-		"success: live outranks later refresh":          {AuditTail{Entries: []AuditEntry{live, namespace}}, wantLive},
-		"success: unknown undo leaves live outstanding": {AuditTail{Entries: []AuditEntry{live, unknownUndo, namespace}}, wantLive},
-		"success: applied undo clears forward":          {AuditTail{Entries: []AuditEntry{live, appliedUndo, namespace}}, wantNamespace},
-		"success: undo is reversible":                   {AuditTail{Entries: []AuditEntry{live, appliedUndo}}, Undoable{Kind: UndoLive, ToDigest8: "aaaaaaaa", Outcome: WriteApplied, Direction: DirectionUndo}},
-		"success: newer forward rearms":                 {AuditTail{Entries: []AuditEntry{appliedUndo, live, namespace}}, wantLive},
-		"error: damaged line outranks all":              {AuditTail{Entries: []AuditEntry{live, namespace}, Unreadable: []UnreadableAuditLine{{Line: 7}, {Line: 8}}}, Undoable{Kind: UndoUnreadable, Line: 7}},
-		"success: failed and discarded are ignored":     {AuditTail{Entries: []AuditEntry{namespace, {Event: &WriteEvent{Target: TargetLive, Outcome: WriteFailed}}, {Event: &WriteEvent{Target: TargetLive, Outcome: WriteDiscarded}}, {Event: &ConfigWriteRecord{}}, {Event: &UnrecognizedEvent{}}}}, wantNamespace},
+		"success: empty":                                       {AuditTail{}, Undoable{}},
+		"success: namespace first write":                       {AuditTail{Entries: []AuditEntry{namespace}}, wantNamespace},
+		"success: live outranks later refresh":                 {AuditTail{Entries: []AuditEntry{live, namespace}}, wantLive},
+		"success: unknown undo leaves live outstanding":        {AuditTail{Entries: []AuditEntry{live, unknownUndo, namespace}}, wantLive},
+		"success: applied undo clears forward":                 {AuditTail{Entries: []AuditEntry{live, appliedUndo, namespace}}, wantNamespace},
+		"success: undo is reversible":                          {AuditTail{Entries: []AuditEntry{live, appliedUndo}}, Undoable{Kind: UndoLive, ToDigest8: "aaaaaaaa", Outcome: WriteApplied, Direction: DirectionUndo}},
+		"success: newer forward rearms":                        {AuditTail{Entries: []AuditEntry{appliedUndo, live, namespace}}, wantLive},
+		"error: damaged line outranks all":                     {AuditTail{Entries: []AuditEntry{live, namespace}, Unreadable: []UnreadableAuditLine{{Line: 7}, {Line: 8}}}, Undoable{Kind: UndoUnreadable, Line: 7}},
+		"success: the selected entry carries its own audit id": {AuditTail{Entries: []AuditEntry{{TS: "2026-10-13T07:00:00Z", PID: 4242, Event: &WriteEvent{Target: TargetLive, ToDigest8: "eeeeeeee", Outcome: WriteApplied, Direction: DirectionForward}}, {TS: "2026-10-13T07:00:01Z", PID: 4243, Event: &ConfigWriteRecord{}}}}, Undoable{Kind: UndoLive, ToDigest8: "eeeeeeee", Outcome: WriteApplied, Direction: DirectionForward, ID: AuditID{TS: "2026-10-13T07:00:00Z", PID: 4242}}},
+		"success: failed and discarded are ignored":            {AuditTail{Entries: []AuditEntry{namespace, {Event: &WriteEvent{Target: TargetLive, Outcome: WriteFailed}}, {Event: &WriteEvent{Target: TargetLive, Outcome: WriteDiscarded}}, {Event: &ConfigWriteRecord{}}, {Event: &UnrecognizedEvent{}}}}, wantNamespace},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

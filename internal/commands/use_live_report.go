@@ -63,6 +63,8 @@ type useOutcomeDocument struct {
 	// RemoteControl is present only when `--restart-remote-control` was
 	// given, and then always, with every count.
 	RemoteControl *claude.RemoteControlCounts `json:"remote_control,omitzero"`
+	// Desktop is present only when `--desktop` was given, and then always.
+	Desktop *useDesktop `json:"desktop,omitzero"`
 }
 
 type usePlanDocument struct {
@@ -92,6 +94,11 @@ type useReport struct {
 	remoteControl *claude.RemoteControlCounts
 	// rc is the preflight's result, which the follow-up acts on.
 	rc *useRemoteControl
+	// store is the store directory the swap wrote, recorded by the desktop
+	// switch that follows it.
+	store *string
+	// desktop is the desktop switch's outcome, set only with the flag.
+	desktop *useDesktop
 }
 
 func useRefused(refusal claude.SwapRefusal, service, note string) *useReport {
@@ -112,6 +119,7 @@ func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 			Warnings:      report.warnings,
 			Note:          report.note,
 			RemoteControl: report.remoteControl,
+			Desktop:       report.desktop,
 		}
 		doc.Audit.ID = report.auditID
 		if report.config != nil {
@@ -157,6 +165,11 @@ func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 	}
 	if report.auditID != nil {
 		if err := tell(p.Out, "audit: "+*report.auditID); err != nil {
+			return err
+		}
+	}
+	if report.desktop != nil {
+		if err := tell(p.Out, renderUseDesktop(report.desktop)); err != nil {
 			return err
 		}
 	}

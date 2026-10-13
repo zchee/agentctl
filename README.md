@@ -61,8 +61,8 @@ All entries below follow `agentctl claude`.
 | `import --from keychain [--dry-run]` | Record other Claude Code stores as read-only accounts. |
 | `doctor [--remove-stale PATH] [--yes]` | Inspect stores and locks; optionally remove one proven-stale lock. |
 | `use <id> [--new-only] [--json]` | Start Claude Code in an isolated session; `--new-only` is a synonym. |
-| `use --live <id> [--restart-remote-control] [--yes] [--json]` | Swap the live credential after consent. |
-| `use --undo [--restart-remote-control] [--yes] [--json]` | Reverse the most recent live swap. |
+| `use --live <id> [--restart-remote-control] [--desktop] [--yes] [--json]` | Swap the live credential after consent. |
+| `use --undo [--restart-remote-control] [--desktop] [--yes] [--json]` | Reverse the most recent live swap. |
 | `use --forget <id> [--yes]` | Delete the generated session, not the account's credentials. |
 | `exec <id> -- <command>...` | Run a command directly in the isolated environment, without a shell. |
 | `env <id> [--shell zsh\|bash\|fish]` | Print shell setup for the isolated environment; default shell is zsh. |
@@ -154,7 +154,7 @@ claude.ai under the new account has not been verified.
 
 The desktop commands are macOS (darwin) only and use `/Applications/Claude.app`. A desktop switch is
 separate from a Claude Code credential swap: the app uses its own web session, so a CLI swap does not
-switch the desktop account.
+switch the desktop account unless `--desktop` asks for it.
 
 `desktop use <id>` resolves a registered account, asks the app to quit, waits for its main and counted
 family processes to stop, exchanges the whole directory at `~/Library/Application Support/Claude/`
@@ -188,6 +188,19 @@ Otherwise it reports the layout and requires `--complete` to install the target 
 the original. An inconsistent layout is left untouched. A launch failure can leave the previous
 profile restored, or an open intent needing repair; see the [desktop outcome words](#desktop-outcome-words).
 A reported launch means a main process was observed, never that authentication or the Code tab works.
+
+`use --live <id> --desktop` follows an applied swap with the same switch to that account, after the
+Remote Control follow-up; the swap's question names what will close and move, and `--yes` answers both.
+The switch never changes the swap's outcome or exit code: a switch that does not finish, or does not run,
+is a warning, and the JSON outcome gains a `desktop` object (`outcome`, `before`, `after`, `identity`;
+`outcome` is `null` when nothing ran). `use --undo --desktop` switches back only when the journal holds
+an `applied` switch recorded for the swap being undone, the data path still holds the directory that
+switch installed, and that profile still reads as the switch observed it, as the account it switched
+to (its first sign-in finished since), or as signed in to nobody; anything else is
+`desktop_profile_mismatch` with nothing moved. The undo selects the account's own stored profile; a
+profile the forward switch stored as `fresh-…` or `unknown-…` stays stored, and the warning names it
+and the `desktop forget` that removes it. A swap whose audit entry could not be written records a
+switch no undo can match.
 
 agentctl automates only the local lifecycle of your own app: quit, exchange its data directory,
 relaunch. It never automates access to the service and never copies or injects a session. You decide

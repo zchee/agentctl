@@ -40,6 +40,9 @@ type Undoable struct {
 	Outcome          KeychainWriteOutcome
 	Direction        WriteDirection
 	IncomingIdentity *IncomingIdentity
+	// ID names the selected write entry, so a follow-up recorded against
+	// that swap can be found again.
+	ID AuditID
 }
 
 // SelectUndo prefers an outstanding live forward swap over namespace refreshes.
@@ -56,6 +59,7 @@ func SelectUndo(tail AuditTail) Undoable {
 		if !ok {
 			continue
 		}
+		candidate.ID = v.ID()
 		if newest.Kind == UndoNothing {
 			newest = candidate
 		}

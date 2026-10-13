@@ -40,6 +40,9 @@ type SessionProcess struct {
 	Out     io.Writer
 	Err     io.Writer
 	Signals *signals.Controller
+	// Desktop runs the desktop app switch that `--desktop` adds to a live
+	// swap. Its zero value reaches the real system.
+	Desktop DesktopProcess
 }
 
 // Exec starts argv directly with the session environment and returns its status.

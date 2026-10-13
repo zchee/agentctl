@@ -1,5 +1,5 @@
-# Elsewhere than macOS every desktop command refuses before it reads
-# anything of the desktop app.
+# Elsewhere than macOS every desktop command, and the desktop step of a
+# swap, refuses before it reads anything of the desktop app.
 [darwin] skip 'covered on macOS by the other desktop scripts'
 env B=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
 cp registry.json $AGENTCTL_CONFIG_DIR/config.json
@@ -13,6 +13,20 @@ stderr 'desktop_unsupported_platform'
 exec expectexit 30 agentctl claude desktop repair --yes
 stderr 'desktop_unsupported_platform'
 ! exists $HOME/Library
+
+# A live swap with --desktop: the swap keeps its own outcome and exit
+# status, the desktop step is refused as a warning beside the desktop
+# object, and nothing of the desktop app is read or written.
+swapfixture namespace desktop-other
+exec agentctl claude use $INCOMING --live --yes --json --desktop
+stdout '^  "outcome": "applied",$'
+stdout '^    "outcome": "desktop_unsupported_platform",$'
+stdout '^    "before": null,$'
+stderr -count=1 '^warning: the desktop app switch ended desktop_unsupported_platform: the desktop app switch is supported only on macOS$'
+! stdout SENTINEL
+! stderr SENTINEL
+! exists $HOME/Library
+swap-check 1 0 0
 
 -- registry.json --
 {

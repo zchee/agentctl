@@ -109,6 +109,23 @@ type desktopEnv struct {
 	prompt Prompter
 	log    *slog.Logger
 	fault  fault.Fault
+	// command names the form that runs the switch in the journal: `use`,
+	// or the swap form when the switch follows a live swap.
+	command string
+	// store and swapAuditID tie a switch that follows a live swap to that
+	// swap: the store it wrote and its audit entry. Both are empty for
+	// `desktop use`.
+	store       string
+	swapAuditID string
+	// guard, when set, decides under the lock, after the journal is read,
+	// whether the switch may run at all. The undo of a swap uses it to
+	// find the switch recorded for that swap.
+	guard func(entries []desktop.Entry) error
+	// before is what the profile at the data path read as when the switch
+	// looked at it under the lock, and recorded the result row written,
+	// for a caller that reports them beside its own outcome.
+	before   *desktop.IdentityRecord
+	recorded *desktop.Result
 }
 
 // newEnv resolves the layout from HOME and the system boundary. Off macOS
@@ -133,7 +150,8 @@ func (p DesktopProcess) newEnv() (*desktopEnv, error) {
 	sys.Log = log
 	return &desktopEnv{
 		layout: layout, sys: sys, out: p.Out, log: log, fault: fault.Active(),
-		prompt: TerminalPrompt{In: p.In, Out: p.Out},
+		prompt:  TerminalPrompt{In: p.In, Out: p.Out},
+		command: "use",
 	}, nil
 }
 
@@ -207,7 +225,8 @@ func (e *desktopEnv) appendRecord(record any, injectedFailure bool) error {
 	}
 	// A kill right after a result is durable must leave an operation the
 	// next command finds closed.
-	if _, ok := record.(desktop.Result); ok {
+	if res, ok := record.(desktop.Result); ok {
+		e.recorded = &res
 		crashPoint(e.fault.Is(fault.DesktopAbortAfterResult))
 	}
 	return nil

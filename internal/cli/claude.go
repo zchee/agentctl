@@ -123,6 +123,7 @@ type ClaudeUseOptions struct {
 	ID                   string
 	Live                 bool
 	RestartRemoteControl bool
+	Desktop              bool
 	NewOnly              bool
 	Undo                 bool
 	Forget               string
@@ -372,12 +373,16 @@ func (c *CLI) newClaudeUseCmd() *cobra.Command {
 			if opts.RestartRemoteControl && !opts.Live && !opts.Undo {
 				return errors.New("--restart-remote-control requires --live or --undo")
 			}
+			if opts.Desktop && !opts.Live && !opts.Undo {
+				return errors.New("--desktop requires --live or --undo")
+			}
 			return dispatch(c, cmd, c.handlers.ClaudeUse, opts)
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&opts.Live, "live", false, "Hot-swap the live Claude Code credential instead of starting an isolated session.")
 	f.BoolVar(&opts.RestartRemoteControl, "restart-remote-control", false, "After a live swap, ask each running Claude Code session that had Remote Control on and has the agentctl Remote Control mod to start Remote Control again. The swap is refused, with nothing written, if such a session does not answer.")
+	f.BoolVar(&opts.Desktop, "desktop", false, "After a live swap, switch the Claude desktop app to the same account: quit it, exchange its data directory and start it again. With --undo, reverse the switch recorded for the swap being undone. A desktop step that does not succeed adds a warning; it never changes the swap's outcome or exit status. --yes also answers the desktop question.")
 	f.BoolVar(&opts.NewOnly, "new-only", false, "Accepted as a synonym for the default (isolated-session) behaviour.")
 	f.BoolVar(&opts.Undo, "undo", false, "Undo the most recent --live swap.")
 	f.StringVar(&opts.Forget, "forget", "", "Remove the session directory created by an earlier use <id>.")
@@ -391,6 +396,7 @@ func (c *CLI) newClaudeUseCmd() *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("live", "forget")
 	cmd.MarkFlagsMutuallyExclusive("undo", "forget")
 	cmd.MarkFlagsMutuallyExclusive("restart-remote-control", "forget")
+	cmd.MarkFlagsMutuallyExclusive("desktop", "forget")
 	return cmd
 }
 
