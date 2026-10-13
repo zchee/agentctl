@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -268,9 +269,9 @@ func lastResult(t *testing.T, e *desktopEnv) *desktop.Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Result != nil {
-			return entries[i].Result
+	for _, entry := range slices.Backward(entries) {
+		if entry.Result != nil {
+			return entry.Result
 		}
 	}
 	t.Fatal("the journal holds no result row")
