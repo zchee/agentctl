@@ -263,12 +263,37 @@ unobservable holder (a truthful label would be "unobservable"); the full suites 
 | Power-loss durability | the journal is fsynced and `repair` recovers from the recorded (device, inode) pairs; not exercised |
 | Fresh versus external `D` | run 2 exercised an app-created fresh tree; a profile created elsewhere and renamed in has not been exercised |
 
+## Stage 2: the `--desktop` flag on `use --live` and `use --undo` (2026-10-13 18:49:24 JST)
+
+The operator verification that was to gate this stage was skipped on the user's instruction; the stage was gated by
+fixtures and three review lanes instead, and the operator run stays available as a later record. Commits `116178f`
+(the flag), `69bb236` (the consent expectation) and `47858ab` (the undo's `before`), pushed 2026-10-13.
+
+What the flag does is in the README's desktop subsection. Two findings from the review rounds changed the design:
+
+- The swap's question describes the desktop step from a look taken before the swap (which profile leaves the data
+  path, which target arrives, or that nothing moves, or that the step will be refused). The switch then re-observed
+  under the lock and acted on what it found, so a profile signed into between the question and the switch could
+  have been quit and moved without anyone agreeing to that. The description now travels into the switch as a typed
+  expectation, compared under the lock before any intent is written; a difference refuses with the new outcome word
+  `desktop_consent_stale` and moves nothing. The running-instance count is deliberately not compared.
+- The undo acts only on the journal result that names the swap being undone, and only while the data path still
+  holds the (device, inode) pair that result installed and reads as that result observed it, as the account it
+  switched to (first sign-in since), or as nobody. When the forward switch stored an unidentified profile
+  (`fresh-<op>`, `unknown-<op>`), the undo says it is still stored rather than pretending it was restored.
+
+Gate evidence: macOS gates green on every commit (both race suites, release gate, tidy); Linux gate on each commit's
+tree (`.omc/artifacts/w14/linux-gate-{116178f,69bb236,47858ab}.log`): the refusal arm, the desktop packages,
+`internal/cli` and `internal/commands` pass in both tag modes; the full-suite failures are the unchanged set listed
+above. Reports: `.omc/handoffs/w14/verify-stage2{,b,c}.md`, `review-stage2{,b}.md`, `security-stage2{,b}.md`.
+
 ## Next
 
-The gate before the `--desktop` flag on `use --live` and `use --undo` is an operator verification on this
-Mac, after the `desktop` command family exists: `desktop use` with the second account shows the sign-in
-screen; the person signs in as the second account; `desktop status` shows `D` with that account's identity;
-`desktop use` with the original account brings back the original account with its chats. Each quit and launch
-latency is recorded with `date`, and with the Code tab open in each profile: whether it works, whether its
-hosted process (path under `D/claude-code/`) appears in the status's family count, and whether it is gone
-after the quit (helpers under the bundle are not a proxy for it). The result is appended to this record.
+The operator verification on this Mac remains the one check no fixture replaces: `desktop use` with the second
+account shows the sign-in screen; the person signs in as the second account; `desktop status` shows `D` with that
+account's identity; `desktop use` with the original account brings back the original account with its chats; then
+the same through `use --live <id> --desktop` and `use --undo --desktop`. Each quit and launch latency is recorded
+with `date`, and with the Code tab open in each profile: whether it works, whether its hosted process (path under
+`D/claude-code/`) appears in the status's family count, and whether it is gone after the quit (helpers under the
+bundle are not a proxy for it). The user skipped it before stage 2 (2026-10-13 18:49:24 JST); the result is appended to this
+record whenever it is run.
