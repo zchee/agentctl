@@ -49,7 +49,15 @@ func (p SessionProcess) RunUndo(ctx context.Context, globals cli.Globals, opts c
 	case secret.UndoUnreadable:
 		return errs.NewConfig(fmt.Sprintf("the audit log's line %d could not be read, and it may be the entry `--undo` needs; agentctl will not guess which swap to reverse (`agentctl claude doctor` names the line)", entry.Line))
 	case secret.UndoNothing:
-		return tell(p.Out, "there is no swap to undo: the audit log records no reversible write")
+		if err := tell(p.Out, "there is no swap to undo: the audit log records no reversible write"); err != nil {
+			return err
+		}
+		// There is no swap report to carry a desktop object, so the flag
+		// gets its warning alone; nothing desktop is read or locked.
+		if opts.Desktop {
+			return tell(p.Err, "warning: "+useDesktopWarning(&useDesktop{Detail: "there is no swap to undo, so the desktop app was left alone"}))
+		}
+		return nil
 	case secret.UndoNamespace:
 		reversal, err = namespacedReversal(ctx, paths, registry, entry)
 	case secret.UndoLive:
@@ -60,13 +68,14 @@ func (p SessionProcess) RunUndo(ctx context.Context, globals cli.Globals, opts c
 	}
 	env := claude.EnvFromProcess()
 	swap := useLiveSwap{paths: paths, config: registry, env: &env, live: reversal.live, inherited: reversal.inherited, process: p}
+	follow := useDesktopFollow{account: reversal.owner.AccountUUID, command: useDesktopUndo, undone: entry.ID.String()}
 	if opts.Desktop && !opts.Yes {
-		swap.desktopClause = p.desktopConsentClause(ctx, reversal.owner.AccountUUID, true)
+		swap.desktopClause, follow.expect = p.desktopConsentClause(ctx, reversal.owner.AccountUUID, true)
 	}
 	incoming := useIncoming{record: &reversal.owner, direction: secret.DirectionUndo, source: reversal.source, undone: reversal.undone}
 	report := swap.swapIn(ctx, incoming, reversal.store, opts)
 	p.followUpRemoteControl(ctx, opts, report)
-	p.followUpDesktop(ctx, opts, report, useDesktopFollow{account: reversal.owner.AccountUUID, command: useDesktopUndo, undone: entry.ID.String()})
+	p.followUpDesktop(ctx, opts, report, follow)
 	if err := p.emitUse(report, opts.JSON); err != nil {
 		return err
 	}

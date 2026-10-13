@@ -59,6 +59,7 @@ exec agentctl claude use --undo --yes --json --desktop
 stdout '^  "outcome": "applied",$'
 stdout '^    "outcome": "selected",$'
 stdout '^    "identity": "matches",$'
+stdout '(?s)"before": \{\s*"state": "uuid",\s*"uuid": "44444444-4444-4444-8444-444444444444"\s*\},\s*"after": \{\s*"state": "uuid",\s*"uuid": "11111111-2222-3333-4444-555555555555"\s*\}'
 ! stderr 'warning: the desktop'
 cmp $D/config.json config-owner.json
 cmp $STORE/profiles/$INCOMING/config.json config-incoming.json
@@ -109,6 +110,7 @@ exec agentctl claude use --undo --yes --json --desktop
 stdout '^  "outcome": "applied",$'
 stdout '^    "outcome": "desktop_profile_mismatch",$'
 stdout 'now reads as account 55555555-5555-4555-8555-555555555555'
+stdout '(?s)"before": \{\s*"state": "uuid",\s*"uuid": "55555555-5555-4555-8555-555555555555"\s*\},\s*"after": null,'
 stderr -count=1 '^warning: the desktop app switch ended desktop_profile_mismatch: '
 ! exists $AGCTL_FAKE_DESKTOP_LOG
 cmp $D/config.json config-third.json
@@ -266,6 +268,64 @@ rcmod counts eligible=1 dropped=1 not_confirmed=1
 stderr '(?s)warning: 1 Claude Code session did not confirm that Remote Control started again.*warning: the desktop app switch ended desktop_intent_open'
 stdout '(?s)"remote_control": \{.*"desktop": \{'
 rcmod check a 1 1
+
+# undo with the flag when the audit log records no swap: the usual line,
+# one desktop warning on stderr, and nothing desktop is read, locked or
+# created; there is no swap report, so there is no desktop object
+swapfixture live undo-nothing
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec agentctl claude use --undo --yes --desktop
+stdout -count=1 '^there is no swap to undo: the audit log records no reversible write$'
+stderr -count=1 '^warning: the desktop app was not switched: there is no swap to undo, so the desktop app was left alone$'
+! exists $STORE
+! exists $AGCTL_FAKE_DESKTOP_LOG
+cmp $D/config.json config-owner.json
+exec agentctl claude use --undo --yes --json --desktop
+stdout -count=1 '^there is no swap to undo: the audit log records no reversible write$'
+! stdout '"desktop"'
+stderr -count=1 '^warning: the desktop app was not switched: there is no swap to undo, so the desktop app was left alone$'
+! exists $STORE
+! exists $AGCTL_FAKE_DESKTOP_LOG
+exec agentctl claude use --undo --yes
+stdout '^there is no swap to undo'
+! stderr .
+
+# a switch that follows a swap, killed after its first rename: status shows
+# the open intent under the swap form that recorded it, and repair resolves
+# it the way it resolves an interrupted `desktop use`
+swapfixture live crash-flagged
+env D=$HOME/Library/Application' 'Support/Claude
+env STORE=$HOME/Library/Application' 'Support/agentctl/claude-desktop
+exec proctable init $AGENTCTL_TEST_PROCESS_TABLE
+mkdir $D
+cp config-owner.json $D/config.json
+exec proctable add $AGENTCTL_TEST_PROCESS_TABLE 500 1 $MAIN
+env AGENTCTL_FAULT=desktop_abort_after_outgoing_rename
+exec expectexit 134 agentctl claude use $INCOMING --live --yes --json --desktop
+env AGENTCTL_FAULT=
+swap-audit applied 1
+! exists $D
+grep -count=1 '"type":"desktop_intent".*"command":"use --live --desktop"' $STORE/journal.jsonl
+! grep '"type":"desktop_result"' $STORE/journal.jsonl
+exec agentctl claude desktop status --json
+stdout '"command": "use --live --desktop"'
+stdout '"requested_account": "44444444-4444-4444-8444-444444444444"'
+exec agentctl claude desktop status
+stdout '^interrupted use --live --desktop [0-9a-f]{16} \(account 44444444-4444-4444-8444-444444444444\): run `agentctl claude desktop repair`$'
+exec expectexit 30 agentctl claude desktop repair --yes
+stdout '^state outgoing-moved'
+stderr 'desktop_repair_needs_choice'
+! exists $D
+exec agentctl claude desktop repair --revert --yes
+stdout '^repaired account '
+grep -count=1 '"type":"desktop_result".*"command":"use --live --desktop".*"outcome":"reverted","word":"repaired"' $STORE/journal.jsonl
+cmp $D/config.json config-owner.json
+exec agentctl claude desktop status --json
+stdout '"open_intents": \[\]'
 
 -- config-owner.json --
 {"lastKnownAccountUuid":"11111111-2222-3333-4444-555555555555","darkMode":"system"}

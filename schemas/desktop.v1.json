@@ -184,7 +184,8 @@
             "desktop_profile_in_place",
             "desktop_repair_needs_choice",
             "desktop_destination_exists",
-            "desktop_profile_symlink"
+            "desktop_profile_symlink",
+            "desktop_consent_stale"
           ]
         },
         "detail": { "type": "string" },

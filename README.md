@@ -191,13 +191,20 @@ A reported launch means a main process was observed, never that authentication o
 
 `use --live <id> --desktop` follows an applied swap with the same switch to that account, after the
 Remote Control follow-up; the swap's question names what will close and move, and `--yes` answers both.
-The switch never changes the swap's outcome or exit code: a switch that does not finish, or does not run,
-is a warning, and the JSON outcome gains a `desktop` object (`outcome`, `before`, `after`, `identity`;
-`outcome` is `null` when nothing ran). `use --undo --desktop` switches back only when the journal holds
-an `applied` switch recorded for the swap being undone, the data path still holds the directory that
-switch installed, and that profile still reads as the switch observed it, as the account it switched
-to (its first sign-in finished since), or as signed in to nobody; anything else is
-`desktop_profile_mismatch` with nothing moved. The undo selects the account's own stored profile; a
+When the question was asked, the switch checks under the desktop lock that it would still do what the
+question described (the same profile leaving the data path, the same stored profile arriving, an app
+still on the account when nothing was to move, a refusal when a refusal was promised); anything else is
+`desktop_consent_stale` with nothing quit or moved. The number of running app processes is not part of
+that check. The switch never changes the swap's outcome or exit code: after an applied swap, a switch
+that does not finish, or does not run, is a warning; a swap that did not apply leaves the desktop app
+alone without a warning. The JSON outcome gains a `desktop` object (`outcome`, `before`, `after`,
+`identity`; `outcome` is `null` when nothing ran, and its `detail` says why). `use --undo --desktop`
+switches back only when the journal holds an `applied` switch recorded for the swap being undone, the
+data path still holds the directory that switch installed, and that profile still reads as the switch
+observed it, as the account it switched to (its first sign-in finished since), or as signed in to
+nobody; anything else is `desktop_profile_mismatch` with nothing moved, and `before` names what the
+data path held. When there is no swap to undo at all, `use --undo --desktop` prints its usual line and
+a desktop warning on stderr; there is no swap report, so there is no `desktop` object. The undo selects the account's own stored profile; a
 profile the forward switch stored as `fresh-…` or `unknown-…` stays stored, and the warning names it
 and the `desktop forget` that removes it. A swap whose audit entry could not be written records a
 switch no undo can match.
@@ -428,6 +435,7 @@ fatal configuration or I/O failures exit 1. Such errors use `error` in a JSON op
 | `desktop_repair_needs_choice` | 30 | The interrupted layout needs an explicit `--complete` or `--revert`. |
 | `desktop_destination_exists` | 30 | A rename destination already exists; agentctl does not overwrite it. |
 | `desktop_profile_symlink` | 30 | Deletion encountered a symlink and stopped; the message says whether anything was deleted and what remains. |
+| `desktop_consent_stale` | 30 | A switch that follows a swap would no longer do what the swap's question described; nothing was quit or moved. |
 | `reverted_relaunched` | 30 | The target did not start; the original profile was restored and its recovery launch was observed. |
 | `relaunch_failed` | 30 | The original profile was restored, but its recovery launch was not confirmed. |
 | `exchange_not_restored` | 30 | The exchange could not be restored safely; the intent stays open for repair. |

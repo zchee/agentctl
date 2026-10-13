@@ -81,6 +81,9 @@ func TestDesktopUndoGuard(t *testing.T) {
 		// leaving the data path under, or empty for no intent row.
 		outgoing     string
 		wantLeftover string
+		// wantBefore, when set, is the identity the guard must report as
+		// read at the data path.
+		wantBefore *desktop.IdentityRecord
 	}{
 		"success: an outgoing profile stored under a drawn name is named as left behind": {
 			layout:   layout{config: useDesktopConfig(useDesktopIncoming)},
@@ -242,6 +245,7 @@ func TestDesktopUndoGuard(t *testing.T) {
 			},
 			want:       desktopProfileMismatch,
 			wantDetail: "now reads as account " + useDesktopThird,
+			wantBefore: &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopThird},
 		},
 		"error: a profile that cannot be read is no identity the switch accounts for": {
 			layout: layout{config: `["not", "an", "object"]`},
@@ -274,7 +278,8 @@ func TestDesktopUndoGuard(t *testing.T) {
 				entries = append(entries, desktop.Entry{Line: i + 1, Result: &res})
 			}
 			var leftover string
-			err := desktopUndoGuard(useDesktopSwapID, useDesktopOwner, data, &leftover)(entries)
+			var before *desktop.IdentityRecord
+			err := desktopUndoGuard(useDesktopSwapID, useDesktopOwner, data, &before, &leftover)(entries)
 			got := ""
 			var nothing *nothingToUndo
 			var refusal *desktopRefusal
@@ -296,6 +301,19 @@ func TestDesktopUndoGuard(t *testing.T) {
 			}
 			if leftover != tt.wantLeftover {
 				t.Errorf("leftover = %q, want %q", leftover, tt.wantLeftover)
+			}
+			// A guard that found the switch to undo reports what it read at
+			// the data path, whether it then allows the undo or refuses it;
+			// one that found nothing to undo looked at nothing.
+			var wantBefore *desktop.IdentityRecord
+			if tt.layout.config != "-" && got != "nothing" {
+				wantBefore = new(desktop.RecordOf(desktop.ReadDesktopIdentity(data)))
+			}
+			if tt.wantBefore != nil {
+				wantBefore = tt.wantBefore
+			}
+			if diff := gocmp.Diff(wantBefore, before); diff != "" {
+				t.Errorf("before (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -343,43 +361,53 @@ func TestDesktopConsentClause(t *testing.T) {
 		undo     bool
 		want     string
 		wantPart string
+		wantKind desktopExpectKind
 	}{
 		"success: an account profile leaves and a new one is created": {
 			data: useDesktopConfig(useDesktopOwner), list: running, account: useDesktopIncoming,
-			want: ". Then quit the Claude desktop app (2 running process(es) close), the profile at the data path (account " + useDesktopOwner + ") moves to " + useDesktopOwner + ", a new profile is created at the next start (sign in once), and start the app for account " + useDesktopIncoming + tail,
+			want:     ". Then quit the Claude desktop app (2 running process(es) close), the profile at the data path (account " + useDesktopOwner + ") moves to " + useDesktopOwner + ", a new profile is created at the next start (sign in once), and start the app for account " + useDesktopIncoming + tail,
+			wantKind: expectSwitch,
 		},
 		"success: the stored profile moves in for an undo": {
 			data: useDesktopConfig(useDesktopIncoming), stored: true, account: useDesktopOwner, undo: true,
-			want: ". Then quit the Claude desktop app (0 running process(es) close), the profile at the data path (account " + useDesktopIncoming + ") moves to " + useDesktopIncoming + ", the stored profile " + useDesktopOwner + " moves in, and start the app for account " + useDesktopOwner + ", if the desktop switch recorded for the swap being undone is still in place" + tail,
+			want:     ". Then quit the Claude desktop app (0 running process(es) close), the profile at the data path (account " + useDesktopIncoming + ") moves to " + useDesktopIncoming + ", the stored profile " + useDesktopOwner + " moves in, and start the app for account " + useDesktopOwner + ", if the desktop switch recorded for the swap being undone is still in place" + tail,
+			wantKind: expectSwitch,
 		},
 		"success: a profile nobody signed in to gets a name drawn by the switch": {
 			data: "", account: useDesktopIncoming,
 			wantPart: "the profile at the data path (fresh) moves to fresh-<operation id>",
+			wantKind: expectSwitch,
 		},
 		"success: no data path yet": {
 			data: "-", account: useDesktopIncoming,
 			wantPart: "no profile is at the data path, a new profile is created",
+			wantKind: expectSwitch,
 		},
 		"success: the account already in place": {
 			data: useDesktopConfig(useDesktopIncoming), account: useDesktopIncoming,
-			want: ". The desktop app already runs on that account's profile, so the desktop switch quits and moves nothing",
+			want:     ". The desktop app already runs on that account's profile, so the desktop switch quits and moves nothing",
+			wantKind: expectNoop,
 		},
 		"error: another platform": {
 			data: "-", sysErr: rdesktop.ErrUnsupportedPlatform, account: useDesktopIncoming,
-			want: ". The desktop app switch will be refused (desktop_unsupported_platform: the desktop app switch is supported only on macOS); the swap is not affected",
+			want:     ". The desktop app switch will be refused (desktop_unsupported_platform: the desktop app switch is supported only on macOS); the swap is not affected",
+			wantKind: expectRefused,
 		},
 		"error: the processes cannot be listed": {
 			data: "-", account: useDesktopIncoming,
 			list:     func(context.Context, uint32) ([]rdesktop.Record, error) { return nil, errors.New("EIO") },
 			wantPart: ". The desktop app switch will be refused (desktop_observe_failed: could not observe the app's processes: ",
+			wantKind: expectRefused,
 		},
 		"error: the profile at the data path cannot be read": {
 			data: "[1]", account: useDesktopIncoming,
 			wantPart: ". The desktop app switch will be refused (the profile at the data path cannot be read: ",
+			wantKind: expectRefused,
 		},
 		"error: an account without a UUID the app could record": {
 			data: "-", account: "not-a-uuid",
-			want: ". The desktop app switch will be refused (the account has no account UUID the desktop app could record); the swap is not affected",
+			want:     ". The desktop app switch will be refused (the account has no account UUID the desktop app could record); the swap is not affected",
+			wantKind: expectRefused,
 		},
 	}
 	for name, tt := range tests {
@@ -398,8 +426,11 @@ func TestDesktopConsentClause(t *testing.T) {
 				useDesktopProfile(t, layout.Profile(tt.account), useDesktopConfig(tt.account))
 			}
 			p := SessionProcess{Desktop: DesktopProcess{System: useDesktopSystem(t, root, tt.list, tt.sysErr), LockWait: time.Second}}
-			got := p.desktopConsentClause(t.Context(), tt.account, tt.undo)
-			t.Logf("clause: %s", got)
+			got, expect := p.desktopConsentClause(t.Context(), tt.account, tt.undo)
+			t.Logf("clause: %s; expectation: %+v", got, expect)
+			if expect == nil || expect.kind != tt.wantKind {
+				t.Errorf("expectation = %+v, want kind %d", expect, tt.wantKind)
+			}
 			if tt.want != "" {
 				if diff := gocmp.Diff(tt.want, got); diff != "" {
 					t.Errorf("clause (-want +got):\n%s", diff)
@@ -589,6 +620,308 @@ func TestUseDesktopWarning(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if diff := gocmp.Diff(tt.want, useDesktopWarning(tt.desktop)); diff != "" {
 				t.Errorf("warning (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestDesktopExpectationStale pins the comparison between what the swap's
+// question promised and what the switch sees under the desktop lock.
+func TestDesktopExpectationStale(t *testing.T) {
+	owner := &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopOwner}
+	incoming := &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopIncoming}
+	third := &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopThird}
+	fresh := &desktop.IdentityRecord{State: desktop.StateFresh}
+	switchFrom := func(leaving *desktop.IdentityRecord, stored bool) *desktopExpectation {
+		return &desktopExpectation{kind: expectSwitch, leaving: leaving, target: useDesktopIncoming, targetExisted: stored}
+	}
+	tests := map[string]struct {
+		expect     *desktopExpectation
+		now        desktopSeen
+		wantStale  bool
+		wantDetail string
+	}{
+		"success: the same account still leaves and the target is still absent": {
+			expect: switchFrom(owner, false), now: desktopSeen{dataPath: owner},
+		},
+		"success: an empty data path is still empty and the target still stored": {
+			expect: switchFrom(nil, true), now: desktopSeen{targetExisted: true},
+		},
+		"success: a profile nobody signed in to is still that": {
+			expect: switchFrom(fresh, false), now: desktopSeen{dataPath: fresh},
+		},
+		"success: the app still runs on the account": {
+			expect: &desktopExpectation{kind: expectNoop}, now: desktopSeen{dataPath: incoming},
+		},
+		"error: a third account signed in at the data path": {
+			expect: switchFrom(owner, false), now: desktopSeen{dataPath: third}, wantStale: true,
+			wantDetail: "the swap's question described a switch from account " + useDesktopOwner + " at the data path to a new profile for " + useDesktopIncoming + ", but the data path now holds account " + useDesktopThird + " and the profile " + useDesktopIncoming + " is not stored",
+		},
+		"error: the profile nobody signed in to was signed in since": {
+			expect: switchFrom(fresh, false), now: desktopSeen{dataPath: owner}, wantStale: true,
+		},
+		"error: a profile appeared at an empty data path": {
+			expect: switchFrom(nil, false), now: desktopSeen{dataPath: fresh}, wantStale: true,
+		},
+		"error: the profile at the data path went away": {
+			expect: switchFrom(owner, false), now: desktopSeen{}, wantStale: true,
+			wantDetail: "the data path now holds no profile",
+		},
+		"error: the account's profile was stored since": {
+			expect: switchFrom(owner, false), now: desktopSeen{dataPath: owner, targetExisted: true}, wantStale: true,
+			wantDetail: "is stored;",
+		},
+		"error: the account's stored profile was removed since": {
+			expect: switchFrom(owner, true), now: desktopSeen{dataPath: owner}, wantStale: true,
+			wantDetail: "to the stored profile " + useDesktopIncoming,
+		},
+		"error: the account the question named is now in place": {
+			expect: switchFrom(owner, false), now: desktopSeen{dataPath: incoming}, wantStale: true,
+		},
+		"error: a target named for another account": {
+			expect: &desktopExpectation{kind: expectSwitch, leaving: owner, target: useDesktopThird}, now: desktopSeen{dataPath: owner}, wantStale: true,
+		},
+		"error: the app no longer runs on the account": {
+			expect: &desktopExpectation{kind: expectNoop}, now: desktopSeen{dataPath: owner}, wantStale: true,
+			wantDetail: "the swap's question said the app already ran on account " + useDesktopIncoming + " and nothing would be quit or moved, but the data path now holds account " + useDesktopOwner,
+		},
+		"error: the data path emptied under an app that was already selected": {
+			expect: &desktopExpectation{kind: expectNoop}, now: desktopSeen{}, wantStale: true,
+		},
+		"error: a promised refusal stays a refusal whatever the state now": {
+			expect: &desktopExpectation{kind: expectRefused, reason: desktopObserveFailed}, now: desktopSeen{dataPath: owner}, wantStale: true,
+			wantDetail: "the swap's question said the desktop switch would be refused (desktop_observe_failed), and the state has changed since; only what the question described was agreed to, so nothing was quit or moved; `agentctl claude desktop use " + useDesktopIncoming + "` asks about the switch as it now stands",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			detail, stale := tt.expect.stale(useDesktopIncoming, tt.now)
+			t.Logf("stale = %v: %s", stale, detail)
+			if stale != tt.wantStale {
+				t.Fatalf("stale = %v, want %v", stale, tt.wantStale)
+			}
+			if !stale && detail != "" {
+				t.Errorf("a matching expectation gave a detail: %q", detail)
+			}
+			if tt.wantDetail != "" && !strings.Contains(detail, tt.wantDetail) {
+				t.Errorf("detail %q does not contain %q", detail, tt.wantDetail)
+			}
+		})
+	}
+}
+
+// useDesktopTreeSig is a signature of every entry under dir: its relative
+// path, mode, size and contents, so a test can prove nothing there moved
+// or changed.
+func useDesktopTreeSig(t *testing.T, dir string) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		b.WriteString(rel + " " + info.Mode().String())
+		if info.Mode().IsRegular() {
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			b.WriteString(" " + string(body))
+		}
+		b.WriteString("\n")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("signature of %s: %v", dir, err)
+	}
+	return b.String()
+}
+
+// TestFollowUpDesktopRefusesAStaleConsent drives the follow-up with the
+// expectation the swap's question was composed from, after the state it
+// described has changed. The harness changes the profile between the two
+// looks, the way a sign-in during the swap would. The switch must refuse
+// with desktop_consent_stale: the swap keeps its outcome and exit status,
+// the app is not quit, no intent is written and no profile moves.
+func TestFollowUpDesktopRefusesAStaleConsent(t *testing.T) {
+	start := time.Date(2026, 10, 13, 7, 0, 0, 0, time.UTC)
+	uid := uint32(os.Getuid())
+	running := func(context.Context, uint32) ([]rdesktop.Record, error) {
+		return []rdesktop.Record{{PID: 500, PPID: 1, UID: uid, Start: start, Path: rdesktop.MainPath}}, nil
+	}
+	tests := map[string]struct {
+		// asked is config.json at the data path when the question is
+		// composed, now the one the switch finds.
+		asked, now string
+		wantKind   desktopExpectKind
+		wantBefore *desktop.IdentityRecord
+		wantDetail string
+	}{
+		"error: a third account signed in after consent to switch away from the owner": {
+			asked: useDesktopConfig(useDesktopOwner), now: useDesktopConfig(useDesktopThird), wantKind: expectSwitch,
+			wantBefore: &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopThird},
+			wantDetail: "the swap's question described a switch from account " + useDesktopOwner + " at the data path to a new profile for " + useDesktopIncoming + ", but the data path now holds account " + useDesktopThird,
+		},
+		"error: the app no longer runs on the account the question found selected": {
+			asked: useDesktopConfig(useDesktopIncoming), now: useDesktopConfig(useDesktopOwner), wantKind: expectNoop,
+			wantBefore: &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopOwner},
+			wantDetail: "the swap's question said the app already ran on account " + useDesktopIncoming,
+		},
+		"error: a promised refusal that has cleared is still a refusal": {
+			asked: `["not", "an", "object"]`, now: useDesktopConfig(useDesktopOwner), wantKind: expectRefused,
+			wantDetail: "the swap's question said the desktop switch would be refused (" + desktopProfileUnreadable + "), and the state has changed since",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			home := filepath.Join(root, "home")
+			t.Setenv("HOME", home)
+			layout := desktop.Paths(home)
+			useDesktopProfile(t, layout.DefaultData, tt.asked)
+
+			// A stand-in for osascript and open that records every call, so
+			// a quit or a launch cannot go unnoticed.
+			calls := filepath.Join(root, "calls.log")
+			stub := filepath.Join(root, "stub")
+			if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$0 $*\" >> '"+calls+"'\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			base := useDesktopSystem(t, root, running, nil)
+			system := func(dataDir string) (*rdesktop.System, error) {
+				sys, err := base(dataDir)
+				if err != nil {
+					return nil, err
+				}
+				sys.Osascript, sys.Open = stub, stub
+				return sys, nil
+			}
+			var stderr bytes.Buffer
+			p := SessionProcess{Err: &stderr, Desktop: DesktopProcess{System: system, LockWait: time.Second}}
+
+			clause, expect := p.desktopConsentClause(t.Context(), useDesktopIncoming, false)
+			t.Logf("clause: %s", clause)
+			if expect == nil || expect.kind != tt.wantKind {
+				t.Fatalf("expectation = %+v, want kind %d", expect, tt.wantKind)
+			}
+			// The state changes between the question and the switch.
+			if err := os.WriteFile(filepath.Join(layout.DefaultData, "config.json"), []byte(tt.now), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			beforeID, err := desktop.StatID(layout.DefaultData)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeSig := useDesktopTreeSig(t, layout.DefaultData)
+
+			report := &useReport{outcome: claude.SwapOutcome{Kind: claude.SwapApplied}, auditID: new(useDesktopSwapID)}
+			p.followUpDesktop(t.Context(), cli.ClaudeUseOptions{Desktop: true}, report, useDesktopFollow{account: useDesktopIncoming, command: useDesktopForward, expect: expect})
+
+			if report.outcome.Kind != claude.SwapApplied || report.outcome.ExitCode() != 0 {
+				t.Errorf("swap outcome = %v (exit %d), want applied with exit 0", report.outcome.Kind, report.outcome.ExitCode())
+			}
+			got := report.desktop
+			if got == nil || got.Outcome == nil {
+				t.Fatalf("desktop object = %+v, want outcome %s", got, desktopConsentStale)
+			}
+			t.Logf("desktop: outcome %s, detail %s", *got.Outcome, got.Detail)
+			if *got.Outcome != desktopConsentStale {
+				t.Errorf("outcome = %q, want %q", *got.Outcome, desktopConsentStale)
+			}
+			if !strings.Contains(got.Detail, tt.wantDetail) {
+				t.Errorf("detail %q does not contain %q", got.Detail, tt.wantDetail)
+			}
+			if !strings.Contains(got.Detail, "nothing was quit or moved") {
+				t.Errorf("detail %q does not say nothing was quit or moved", got.Detail)
+			}
+			if diff := gocmp.Diff(tt.wantBefore, got.Before); diff != "" {
+				t.Errorf("before (-want +got):\n%s", diff)
+			}
+			if got.After != nil {
+				t.Errorf("after = %+v, want null: no result row was written", got.After)
+			}
+			wantWarning := "the desktop app switch ended " + desktopConsentStale + ": " + got.Detail
+			if diff := gocmp.Diff([]string{wantWarning}, report.warnings); diff != "" {
+				t.Errorf("warnings (-want +got):\n%s", diff)
+			}
+			if stderr.String() != "warning: "+wantWarning+"\n" {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+			if _, err := os.Lstat(calls); !errors.Is(err, os.ErrNotExist) {
+				body, _ := os.ReadFile(calls)
+				t.Errorf("osascript or open ran: %q", body)
+			}
+			if body, err := os.ReadFile(layout.Journal); err == nil && strings.Contains(string(body), desktop.TypeIntent) {
+				t.Errorf("an intent was written:\n%s", body)
+			} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			afterID, err := desktop.StatID(layout.DefaultData)
+			if err != nil || afterID != beforeID {
+				t.Errorf("the data path changed: before %s, after %s (%v)", beforeID, afterID, err)
+			}
+			if diff := gocmp.Diff(beforeSig, useDesktopTreeSig(t, layout.DefaultData)); diff != "" {
+				t.Errorf("the profile at the data path changed (-before +after):\n%s", diff)
+			}
+			if entries, err := os.ReadDir(layout.ProfilesDir); err == nil && len(entries) > 0 {
+				t.Errorf("profiles were stored: %v", entries)
+			}
+		})
+	}
+}
+
+// TestDesktopConsentGuardAllowsTheDescribedSwitch is the guard's control:
+// when nothing changed between the question and the lock, the guard lets
+// the switch run and reports what it read.
+func TestDesktopConsentGuardAllowsTheDescribedSwitch(t *testing.T) {
+	tests := map[string]struct {
+		data   string // config.json at the data path; "-" for none
+		stored bool
+		expect *desktopExpectation
+	}{
+		"success: the owner still leaves for a new profile": {
+			data:   useDesktopConfig(useDesktopOwner),
+			expect: &desktopExpectation{kind: expectSwitch, leaving: &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopOwner}, target: useDesktopIncoming},
+		},
+		"success: an empty data path and a stored target, unchanged": {
+			data: "-", stored: true,
+			expect: &desktopExpectation{kind: expectSwitch, target: useDesktopIncoming, targetExisted: true},
+		},
+		"success: the app still runs on the account": {
+			data:   useDesktopConfig(useDesktopIncoming),
+			expect: &desktopExpectation{kind: expectNoop},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			layout := desktop.Paths(t.TempDir())
+			if tt.data != "-" {
+				useDesktopProfile(t, layout.DefaultData, tt.data)
+			}
+			if tt.stored {
+				useDesktopProfile(t, layout.Profile(useDesktopIncoming), useDesktopConfig(useDesktopIncoming))
+			}
+			var before *desktop.IdentityRecord
+			if err := desktopConsentGuard(tt.expect, useDesktopIncoming, layout, &before)(nil); err != nil {
+				t.Fatalf("guard = %v, want the switch allowed", err)
+			}
+			var want *desktop.IdentityRecord
+			if tt.data != "-" {
+				want = new(desktop.RecordOf(desktop.ReadDesktopIdentity(layout.DefaultData)))
+			}
+			if diff := gocmp.Diff(want, before); diff != "" {
+				t.Errorf("before (-want +got):\n%s", diff)
 			}
 		})
 	}

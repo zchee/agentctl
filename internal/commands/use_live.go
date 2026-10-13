@@ -69,12 +69,13 @@ func (p SessionProcess) RunLive(ctx context.Context, globals cli.Globals, opts c
 		}
 	}
 	swap := useLiveSwap{paths: paths, config: registry, env: &env, live: !namespaced, inherited: inherited, process: p}
+	follow := useDesktopFollow{account: incoming.AccountUUID, command: useDesktopForward}
 	if opts.Desktop && !opts.Yes {
-		swap.desktopClause = p.desktopConsentClause(ctx, incoming.AccountUUID, false)
+		swap.desktopClause, follow.expect = p.desktopConsentClause(ctx, incoming.AccountUUID, false)
 	}
 	report := swap.swapIn(ctx, useIncoming{record: incoming, direction: secret.DirectionForward, source: useSource{kind: useSourceOwn}}, store, opts)
 	p.followUpRemoteControl(ctx, opts, report)
-	p.followUpDesktop(ctx, opts, report, useDesktopFollow{account: incoming.AccountUUID, command: useDesktopForward})
+	p.followUpDesktop(ctx, opts, report, follow)
 	if err := p.emitUse(report, opts.JSON); err != nil {
 		return err
 	}

@@ -60,6 +60,10 @@ const (
 	desktopObserveFailed       = "desktop_observe_failed"
 	desktopAppRunning          = "desktop_app_running"
 	desktopProfileInPlace      = "desktop_profile_in_place"
+	// desktopConsentStale refuses a switch that follows a swap when what
+	// the switch would do under the lock is not what the swap's question
+	// described.
+	desktopConsentStale = "desktop_consent_stale"
 )
 
 // desktopRefusal is a refusal with its word. It unwraps to the refusal
