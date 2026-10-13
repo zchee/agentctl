@@ -329,7 +329,14 @@ func joinDetail(detail, more string) string {
 // useDesktopOf turns what the switch did into the report's object.
 func useDesktopOf(rep *desktopReport, env *desktopEnv, err error) *useDesktop {
 	if nothing, ok := errors.AsType[*nothingToUndo](err); ok {
-		return &useDesktop{Detail: nothing.reason}
+		// The consent guard may already have read the profile at the data
+		// path before the undo guard found nothing to reverse; what it read
+		// is still what the step saw.
+		out := &useDesktop{Detail: nothing.reason}
+		if env != nil {
+			out.Before = env.before
+		}
+		return out
 	}
 	if err != nil && rep.OpID == "" && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return &useDesktop{Detail: "the swap was interrupted before the desktop step, so nothing was quit or moved"}

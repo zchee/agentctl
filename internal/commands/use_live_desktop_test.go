@@ -546,6 +546,32 @@ func TestFollowUpDesktopMovesNothingWhenItMustNotRun(t *testing.T) {
 	}
 }
 
+// TestNothingToUndoKeepsTheObservedIdentity covers an undo whose consent
+// guard read the profile at the data path and whose undo guard then found
+// no switch to reverse: the object still reports what was read as before,
+// with a null outcome and no after.
+func TestNothingToUndoKeepsTheObservedIdentity(t *testing.T) {
+	tests := map[string]struct {
+		before *desktop.IdentityRecord
+	}{
+		"success: the owner's profile was read before nothing was found": {
+			before: &desktop.IdentityRecord{State: desktop.StateUUID, UUID: useDesktopOwner},
+		},
+		"success: nothing was read": {},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			env := &desktopEnv{before: tt.before}
+			rep := &desktopReport{Version: 1, Command: "use", Account: useDesktopIncoming}
+			got := useDesktopOf(rep, env, &nothingToUndo{reason: "no desktop switch was recorded for the swap being undone, so nothing was quit or moved"})
+			want := &useDesktop{Before: tt.before, Detail: "no desktop switch was recorded for the swap being undone, so nothing was quit or moved"}
+			if diff := gocmp.Diff(want, got, gocmp.AllowUnexported(useDesktop{})); diff != "" {
+				t.Errorf("object (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestDesktopUseStopsOnACancelledContext drives the switch itself with a
 // context cancelled after the follow-up's own check: it must stop before
 // the lock and before any intent, so the journal stays absent and the
