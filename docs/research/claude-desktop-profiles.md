@@ -226,6 +226,33 @@ copy's main ran; no case restored while any process of the app (bundle helper or
 earlier result files (`results4.txt` to `results7.txt`) and the earlier script bytes (`spike.sh.rev6` to
 `spike.sh.rev9`) are kept for diffing and are not evidence for the final script.
 
+## Linux run of the non-darwin arm (2026-10-13 16:34:21 JST)
+
+The desktop code is macOS-only by design; what Linux must do is build, refuse, and keep every other test
+honest. Run on a Debian 13 host (go1.27.2 linux/amd64), tree sent by `git archive`; logs under
+`.omc/artifacts/w14/` (`linux-gate-410f209.log` before the test fix, `linux-gate-f53bf7f.log` after).
+
+| Check | Result |
+|---|---|
+| `go vet` and `go build`, both tag modes | exit 0 |
+| `TestScripts/e2e_desktop_other` (the refusal arm) | PASS; the four darwin desktop txtar files SKIP as designed |
+| `internal/provider/claude/desktop`, `internal/runtime/desktop`, both modes | PASS |
+| `internal/commands`, both modes | FAIL on 410f209, PASS on f53bf7f |
+
+The three `internal/commands` failures predate this work and assumed macOS: two tests expected the lock
+holder (the test process itself) to be reported `(alive)`, but off macOS `proc.Lookup` refuses with
+`UnsupportedPlatformError` and `holderLabel` prints `dead`; one execs `/bin/zsh`, which Debian does not
+ship. Commit f53bf7f changes test code only: a helper looks up the test's own pid and treats only the
+platform refusal as "not observable" (any other error fails the test), the `(alive)` word is asserted only
+where observable while the holder line, pid and taken time are asserted everywhere, and the zsh case skips
+only when the exact exec path is absent. On macOS all three still pass in both modes.
+
+Left for the Linux phase (P9 in `docs/plans/agctl-go-port.md`): `holderLabel` prints `dead` for an
+unobservable holder (a truthful label would be "unobservable"); the full suites still fail in
+`internal/provider/codex`, `internal/runtime/signals`, `internal/secret`, and the root arms `e2e_accounts`
+(the same `(alive)` expectation at `testdata/script/e2e_accounts.txtar:61`) and `e2e_swap`
+(`use --live --restart-remote-control` in the rc-reconnected arm, `testdata/script/e2e_swap.txtar:217`).
+
 ## Open questions carried
 
 | Question | State |
