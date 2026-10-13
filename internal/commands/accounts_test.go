@@ -324,6 +324,14 @@ func TestAccountsShow(t *testing.T) {
 
 	service := claude.LiveService + "-6cdd6b98"
 
+	// Off macOS proc.Lookup refuses, so the running lock holder cannot be
+	// shown alive there; on such a platform only its pid and the time it
+	// took the lock are checked.
+	holder := []string{fmt.Sprintf("pid %d (alive), taken 2026-09-08T00:00:00Z", os.Getpid())}
+	if !processesObservable(t) {
+		holder = []string{fmt.Sprintf("pid %d (", os.Getpid()), "), taken 2026-09-08T00:00:00Z"}
+	}
+
 	tests := map[string]struct {
 		seed     func(t *testing.T, store *seededStore)
 		id       string
@@ -354,14 +362,13 @@ func TestAccountsShow(t *testing.T) {
 				}
 			},
 			id: testutil.Acct,
-			contains: []string{
+			contains: append([]string{
 				testutil.Email,
 				"kind               owned",
 				"access expires",
 				"pending write",
 				".tmp.0123abcd",
-				fmt.Sprintf("pid %d (alive), taken 2026-09-08T00:00:00Z", os.Getpid()),
-			},
+			}, holder...),
 			absent: []string{"sk-ant-"},
 		},
 		"success: names the service and never passes it off as an account": {

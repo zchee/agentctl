@@ -15,6 +15,9 @@
 package commands
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -83,6 +86,14 @@ func TestEnvQuotingInRealShell(t *testing.T) {
 	tests := map[string]struct{ shell string }{"success: bash": {shell: "/bin/bash"}, "success: zsh": {shell: "/bin/zsh"}}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
+			// The test execs this exact path, so a lookup on PATH would
+			// test a different binary. Only absence skips; any other
+			// failure to stat it is a fault.
+			if _, err := os.Stat(tt.shell); errors.Is(err, fs.ErrNotExist) {
+				t.Skipf("%s is not installed on this host", tt.shell)
+			} else if err != nil {
+				t.Fatalf("stat %s: %v", tt.shell, err)
+			}
 			spec := ExportSpec{SecureStorageDir: "/path with ' quotes/$(printf expanded)/`printf expanded`", ConfigDir: "/session\\with ' spaces", MCPConfig: "/mcp/$(printf expanded)/`printf expanded`/'/mcp.json"}
 			script := "shopt -s expand_aliases 2>/dev/null || true\nfunction claude() { printf '%s\\n' \"$@\"; }\n" + RenderEnv(spec, cli.ShellBash) + "\nprintf '%s\\n' \"$CLAUDE_SECURESTORAGE_CONFIG_DIR\" \"$CLAUDE_CONFIG_DIR\" \"${CLAUDE_CODE_OAUTH_TOKEN-unset}\"\neval 'claude user-argument'\n"
 			cmd := exec.CommandContext(t.Context(), tt.shell, "-c", script)

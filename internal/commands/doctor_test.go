@@ -205,8 +205,13 @@ func TestDoctorHeldRecordAndNamespaceBody(t *testing.T) {
 	env := claude.EnvWithHome(fixture.Home())
 	command := Doctor{Paths: paths, Env: &env}
 	output := strings.Join(command.lockSection(t.Context()), "\n")
-	if !strings.Contains(output, "account.org.lock  pid") || !strings.Contains(output, "(alive)") {
+	if !strings.Contains(output, "account.org.lock  pid") {
 		t.Errorf("missing real holder:\n%s", output)
+	}
+	// Off macOS proc.Lookup refuses, so the holder, this very process,
+	// cannot be shown alive there.
+	if processesObservable(t) && !strings.Contains(output, "(alive)") {
+		t.Errorf("the real holder is not reported alive:\n%s", output)
 	}
 	record := secret.HeldLockRecord{WriterPID: uint32(os.Getpid()), Tree: secret.TreeLive, StoreDir: fixture.Home(), Paths: []string{filepath.Join(fixture.Home(), secret.RefreshLockName)}, TakenAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	document, err := json.Marshal(record)
