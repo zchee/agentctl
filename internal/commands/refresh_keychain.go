@@ -226,6 +226,7 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	}
 	writeErr := s.Writer.Write(ctx, item.service, update)
 	hold.Release()
+	audit.Signal = secret.KeychainWriteSignal(writeErr)
 	if errors.Is(writeErr, secret.ErrKeychainNotStarted) {
 		return refreshDiscarded(useNotStartedNote(writeErr))
 	}

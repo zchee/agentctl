@@ -45,6 +45,9 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 		gone      bool
 		holdPipes bool
 		shutdown  bool
+		// signalled ends the write's security(1) with SIGTERM before it
+		// stores anything.
+		signalled bool
 		kind      claude.SwapOutcomeKind
 		refusal   claude.SwapRefusalKind
 		audited   bool
@@ -60,6 +63,7 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 		"success: unreleased output is settled by the readback":       {holdPipes: true, staging: true, kind: claude.SwapApplied, audited: true, reads: 2},
 		"error: a refused spawn discards without a write":             {shutdown: true, staging: true, kind: claude.SwapDiscarded, reads: 1},
 		"error: unknown preserves namespace plaintext":                {unknown: true, shadow: true, kind: claude.SwapUnknown, audited: true, reads: 2},
+		"error: a write ended by SIGTERM is unknown and names it":     {signalled: true, live: true, kind: claude.SwapUnknown, audited: true, reads: 2},
 		"error: busy peer never reads under a hold":                   {busy: true, kind: claude.SwapBusy},
 		"error: vanished live store is not a compromised hold":        {live: true, gone: true, kind: claude.SwapRefused, refusal: claude.SwapLiveUnreachable},
 	}
@@ -121,6 +125,17 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 				wrapper := fixture.Scratch("unknown-security.sh")
 				marker := fixture.Scratch("write-done")
 				script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = find-generic-password ] && [ -f %q ]; then\n printf '%%s\\n' \"$*\" >> \"$AGCTL_FAKE_SECURITY_LOG\"\n exit 36\nfi\n%q \"$@\"\nstatus=$?\nif [ \"$1\" = add-generic-password ]; then touch %q; fi\nexit $status\n", marker, fixture.SecurityBin(), marker)
+				if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("AGENTCTL_SECURITY_BIN", wrapper)
+			}
+			if test.signalled {
+				// The wrapper is the leader; it ends itself with SIGTERM on
+				// the write, so the item keeps the outgoing credential and
+				// only the readback can say so.
+				wrapper := fixture.Scratch("signalled-security.sh")
+				script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = add-generic-password ]; then kill -TERM $$; fi\nexec %q \"$@\"\n", fixture.SecurityBin())
 				if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -229,6 +244,13 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 				}
 				if test.live && event.IncomingIdentity == nil {
 					t.Fatal("live write lost identity provenance")
+				}
+				wantSignal := ""
+				if test.signalled {
+					wantSignal = "SIGTERM"
+				}
+				if event.Signal != wantSignal {
+					t.Fatalf("audit signal = %q, want %q: %+v", event.Signal, wantSignal, event)
 				}
 			}
 			if test.staging {

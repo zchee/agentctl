@@ -181,7 +181,7 @@ func useWrite(ctx context.Context, input useWritePhase, credentials *claude.Cred
 	if elapsed > secret.HoldBudget {
 		slog.WarnContext(ctx, "the credential-store hold outlasted its budget", "hold_ms", elapsed.Milliseconds(), "budget_ms", secret.HoldBudget.Milliseconds())
 	}
-	audit := secret.WriteEvent{Target: input.subject.audit, FromDigest8: input.fromDigest8, ToDigest8: input.toDigest8, Direction: input.direction, IncomingIdentity: input.incomingIdentity, Carried: useCarriedNames(carried), Transport: transport}
+	audit := secret.WriteEvent{Target: input.subject.audit, FromDigest8: input.fromDigest8, ToDigest8: input.toDigest8, Direction: input.direction, IncomingIdentity: input.incomingIdentity, Carried: useCarriedNames(carried), Transport: transport, Signal: secret.KeychainWriteSignal(writeErr)}
 	// security(1) never ran, so the item is unchanged: a discard like any
 	// other under the hold, with no write to record.
 	if errors.Is(writeErr, secret.ErrKeychainNotStarted) {

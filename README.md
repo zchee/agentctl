@@ -127,11 +127,12 @@ With `--json`, a `use --live` or `use --undo` report whose swap reached the writ
 read back as written, `differs` when another process rewrote one after agentctl's write (the note
 names them), and `unverified` when the readback failed; it does not detect the loss described above.
 Each write entry in `keychain-writes.jsonl` records the carried member names, the readback verdict,
-and the transport. `status` and `doctor` print `mcp_oauth_entries=N`, the number of MCP servers whose
-OAuth tokens a row's keychain document holds, for the live row and every namespace row whose
-credential was read; `status --json` carries the same count as the row member `mcp_oauth_entries`,
-null on other rows. A namespace row read from its credential file reports 0. No report, log, or audit
-entry carries a member's value.
+and the transport, and for a write a signal ended, that signal's name (`signal`, such as `SIGTERM`).
+`status` and `doctor` print `mcp_oauth_entries=N`, the number of MCP servers whose OAuth tokens a
+row's keychain document holds, for the live row and every namespace row whose credential was read;
+`status --json` carries the same count as the row member `mcp_oauth_entries`, null on other rows. A
+namespace row read from its credential file reports 0. No report, log, or audit entry carries a
+member's value.
 
 #### Remote Control
 

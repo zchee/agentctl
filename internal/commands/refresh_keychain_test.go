@@ -17,6 +17,7 @@
 package commands
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -166,18 +167,23 @@ func TestMigratedRefreshSettlesAnUnsettledWriteByItsReadback(t *testing.T) {
 	tests := map[string]struct {
 		holdPipes   bool
 		shutdown    bool
+		signalled   bool
 		wantLock    string
 		wantStale   bool
 		wantNote    string
 		wantWrites  int
 		wantOutcome string
 		wantStored  string
+		wantSignal  string
 	}{
 		"success: unreleased output is settled by the readback": {
 			holdPipes: true, wantLock: "migrated_refreshed", wantWrites: 1, wantOutcome: "applied", wantStored: "Bearer rotated-access",
 		},
 		"error: a refused spawn discards the refresh without a write": {
 			shutdown: true, wantLock: "none", wantStale: true, wantNote: "a shutdown is in progress", wantOutcome: "discarded", wantStored: "Bearer old-access",
+		},
+		"error: a write ended by SIGTERM stays unknown and names the signal": {
+			signalled: true, wantLock: "migrated_refreshed", wantStale: true, wantNote: "could not be confirmed", wantOutcome: "unknown", wantStored: "Bearer old-access", wantSignal: "SIGTERM",
 		},
 	}
 	for name, tt := range tests {
@@ -193,6 +199,20 @@ func TestMigratedRefreshSettlesAnUnsettledWriteByItsReadback(t *testing.T) {
 			if tt.shutdown {
 				_, controller := signals.Install(t.Context())
 				controller.Stop()
+				world.status.Writer = secret.NewKeychainWriter(controller)
+			}
+			if tt.signalled {
+				// The wrapper is the write's leader and ends itself with
+				// SIGTERM before the stand-in stores anything; the writer
+				// is rebuilt because it fixes its binary when made.
+				wrapper := world.fixture.Scratch("signalled-security.sh")
+				script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = add-generic-password ]; then kill -TERM $$; fi\nexec %q \"$@\"\n", world.fixture.SecurityBin())
+				if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("AGENTCTL_SECURITY_BIN", wrapper)
+				_, controller := signals.Install(t.Context())
+				t.Cleanup(controller.Stop)
 				world.status.Writer = secret.NewKeychainWriter(controller)
 			}
 			result := world.status.refreshMigrated(t.Context(), paths, item, current)
@@ -218,6 +238,13 @@ func TestMigratedRefreshSettlesAnUnsettledWriteByItsReadback(t *testing.T) {
 			}
 			if !strings.Contains(string(audit), `"outcome":"`+tt.wantOutcome+`"`) {
 				t.Fatalf("audit lacks outcome %q: %s", tt.wantOutcome, audit)
+			}
+			tail, err := secret.TailAuditLog(paths, 1)
+			if err != nil || len(tail.Entries) != 1 {
+				t.Fatalf("audit tail = %+v, %v", tail, err)
+			}
+			if event, ok := tail.Entries[0].Event.(*secret.WriteEvent); !ok || event.Signal != tt.wantSignal {
+				t.Fatalf("audit write entry = %+v, want signal %q", tail.Entries[0].Event, tt.wantSignal)
 			}
 		})
 	}
