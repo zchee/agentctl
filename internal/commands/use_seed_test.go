@@ -821,6 +821,7 @@ func TestSeedLockCaps(t *testing.T) {
 			if tt.after {
 				point = fault.SeedAfterWrite
 			}
+			tracked := trackParsed(t)
 			report, resumed := w.seedPaused(t, t.Context(), nil, point, func() {
 				if tt.after {
 					if err := os.Mkdir(primary, 0o700); err != nil {
@@ -845,6 +846,7 @@ func TestSeedLockCaps(t *testing.T) {
 			if diff := gocmp.Diff(want, w.lockLeftovers(t)); diff != "" {
 				t.Errorf("lock artefacts left (-want +got):\n%s", diff)
 			}
+			tracked.requireWiped(t, 2)
 		})
 	}
 }
