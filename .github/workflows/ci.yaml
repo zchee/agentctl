@@ -91,6 +91,9 @@ jobs:
       - name: Test
         run: go test -count=1 ./...
       - name: Test the testing build
+        # Its own gate: the untagged Test step above still fails on Linux,
+        # and the default success() condition would skip this step with it.
+        if: ${{ !cancelled() }}
         # The fake security(1) is a POSIX shell script, so the testing build's
         # keychain writes and the swap and refresh scripts run here too, under
         # dash. Left out until Linux support lands, because process
