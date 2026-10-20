@@ -90,3 +90,38 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -count=1 ./...
+      - name: Test the testing build
+        # The fake security(1) is a POSIX shell script, so the testing build's
+        # keychain writes and the swap and refresh scripts run here too, under
+        # dash. Left out until Linux support lands, because process
+        # observation is darwin-only (these already failed on linux/amd64 at
+        # aaa26c1): ./internal/secret, ./internal/runtime/signals and
+        # ./internal/provider/codex, and from the root package's scripts
+        # e2e_accounts and e2e_swap. The root package runs its scripts below.
+        run: |
+          go test -tags agentctl_testing -count=1 \
+            ./fixtures \
+            ./internal/app \
+            ./internal/cli \
+            ./internal/commands \
+            ./internal/commands/codex \
+            ./internal/config \
+            ./internal/errs \
+            ./internal/lockfile \
+            ./internal/provider \
+            ./internal/provider/claude \
+            ./internal/provider/claude/desktop \
+            ./internal/render \
+            ./internal/runtime/cleanup \
+            ./internal/runtime/coordinator \
+            ./internal/runtime/desktop \
+            ./internal/runtime/fault \
+            ./internal/runtime/lockorder \
+            ./internal/runtime/logbuf \
+            ./internal/runtime/proc \
+            ./internal/runtime/tty \
+            ./internal/testutil \
+            ./internal/tui \
+            ./internal/usage \
+            ./schemas
+          go test -tags agentctl_testing -count=1 -run 'TestScripts|TestTaggedBuild' -skip 'TestScripts/(e2e_accounts|e2e_swap)$' .
