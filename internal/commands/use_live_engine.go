@@ -116,6 +116,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	if err != nil {
 		return useCannotAdopt(claude.AdoptionUnreadable, service)
 	}
+	defer item.Wipe()
 	itemPresent := item != nil
 	displaced := item
 	if !itemPresent {
@@ -126,6 +127,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		if err != nil {
 			return useCannotAdopt(claude.AdoptionUnreadable, service)
 		}
+		defer displaced.Wipe()
 	}
 	var before *claude.Digests
 	var from8 *string
@@ -178,6 +180,9 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		dir = swap.paths.NamespaceDir(incoming.record.AccountUUID, incoming.record.OrganizationUUID)
 	}
 	credentials, err := useReadStored(dir, incoming.source.kind)
+	// A refresh may hand back another value; the closure wipes whichever
+	// one the swap holds last.
+	defer func() { credentials.Wipe() }()
 	if err != nil || credentials == nil {
 		note := "the adopted copy that swap displaced is gone or unreadable, so there is nothing to put back"
 		if incoming.source.kind == useSourceOwn {
@@ -209,14 +214,12 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 			return catchUp(useAlreadyActive(service, from8, from8, "that account's credential is already the one the live store holds"))
 		}
 	}
-	// A credential file is never a source of the members carried beside the
-	// account object: only the keychain item's own members are written back.
-	credentials.CarrySiblingsFrom(nil)
+	// The size is admitted against the members the item holds now, before
+	// any token is requested, file written or credential adopted. A file is
+	// never a source of carried members, and an absent item carries none.
 	account := secret.CurrentAccount()
-	if _, err := credentials.ToKeychainUpdate(account, service); err != nil {
-		if errors.Is(err, secret.ErrCredentialTooLarge) {
-			return useCredentialTooLarge(service)
-		}
+	if refusal := useAdmitUpdate(credentials, item, account, service); refusal != nil {
+		return refusal
 	}
 	var third *config.AccountRecord
 	var ambiguous *[2]config.AccountRecord
@@ -353,12 +356,10 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	if err != nil {
 		return useCannotAdopt(claude.AdoptionUnreadable, service)
 	}
-	update, err := credentials.ToKeychainUpdate(account, service)
-	if err != nil {
-		if errors.Is(err, secret.ErrCredentialTooLarge) {
-			return useCredentialTooLarge(service)
-		}
-		return useCannotAdopt(claude.AdoptionUnreadable, service)
+	// Again after the refresh, which can grow the account object, and still
+	// before any adoption, so a refusal here leaves no adopted copy behind.
+	if refusal := useAdmitUpdate(credentials, item, account, service); refusal != nil {
+		return refusal
 	}
 	to8, ok := secret.Digest8(after.AccessSHA256)
 	if !ok {
@@ -382,6 +383,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		}
 		_ = unix.Close(fd)
 	}
+	fault.Active().PausePoint(fault.BeforeSwapWrite)
 	fault.Active().WaitIf(fault.BeforeSwapWrite)
 	var incomingIdentity *secret.IncomingIdentity
 	restored := ""
@@ -391,7 +393,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 			restored = dir
 		}
 	}
-	report := useWrite(ctx, useWritePhase{paths: swap.paths, env: swap.env, subject: subject, log: log, before: before, after: after, fromDigest8: from8, toDigest8: to8, adoptedTo: adopted, staged: staged, direction: incoming.direction, shadowingStore: !itemPresent && displaced != nil, restoredAdopted: restored, incomingIdentity: incomingIdentity, controller: swap.process.Signals}, update)
+	report := useWrite(ctx, useWritePhase{paths: swap.paths, env: swap.env, subject: subject, log: log, before: before, after: after, fromDigest8: from8, toDigest8: to8, adoptedTo: adopted, staged: staged, direction: incoming.direction, shadowingStore: !itemPresent && displaced != nil, restoredAdopted: restored, incomingIdentity: incomingIdentity, controller: swap.process.Signals, account: account}, credentials)
 	if swap.live {
 		report.config = useConfigStep(ctx, report.outcome, swap.env, installedProfile)
 		if report.config != nil {
@@ -422,6 +424,21 @@ func (swap useLiveSwap) noteUse(ctx context.Context, warnings *[]string, message
 
 func useAlreadyActive(service string, from, to *string, note string) *useReport {
 	return &useReport{outcome: claude.SwapOutcome{Kind: claude.SwapAlreadyActive}, service: service, fromDigest8: from, toDigest8: to, note: &note}
+}
+
+// useAdmitUpdate builds the keychain update the swap would write if item
+// still held its present members, and refuses before any mutation when it
+// cannot be built. The update is dropped: the write builds its own from the
+// item as re-read under the hold.
+func useAdmitUpdate(credentials, item *claude.Credentials, account, service string) *useReport {
+	credentials.CarrySiblingsFrom(item)
+	if _, err := credentials.ToKeychainUpdate(account, service); err != nil {
+		if errors.Is(err, secret.ErrCredentialTooLarge) {
+			return useCredentialTooLarge(service)
+		}
+		return useCannotAdopt(claude.AdoptionUnreadable, service)
+	}
+	return nil
 }
 
 func useCredentialTooLarge(service string) *useReport {

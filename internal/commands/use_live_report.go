@@ -43,6 +43,13 @@ type useDigestReport struct {
 	Digest8 *string `json:"digest8"`
 }
 
+// useCarriedMember describes one member carried beside the account object:
+// its name and, for an object, how many entries it holds; never a value.
+type useCarriedMember struct {
+	Name    string `json:"name"`
+	Entries *int   `json:"entries"`
+}
+
 type useOutcomeDocument struct {
 	Kind    string          `json:"kind"`
 	Outcome string          `json:"outcome"`
@@ -60,6 +67,15 @@ type useOutcomeDocument struct {
 	Refusal   *string                  `json:"refusal"`
 	Config    *claude.ConfigReportJSON `json:"config"`
 	Reason    *string                  `json:"reason,omitzero"`
+	// CarriedMembers is present once the keychain update was built under
+	// the hold, an empty list when the item carried nothing.
+	CarriedMembers *[]useCarriedMember `json:"carried_members,omitzero"`
+	// SiblingsReadback is present once the write reached its readback. It
+	// reports a change made after the write only; it is not a lost-update
+	// guard.
+	SiblingsReadback *secret.SiblingsReadback `json:"siblings_readback,omitzero"`
+	// Transport is present once a security(1) child was started.
+	Transport *secret.WriteTransport `json:"transport,omitzero"`
 	// RemoteControl is present only when `--restart-remote-control` was
 	// given, and then always, with every count.
 	RemoteControl *claude.RemoteControlCounts `json:"remote_control,omitzero"`
@@ -99,6 +115,11 @@ type useReport struct {
 	store *string
 	// desktop is the desktop switch's outcome, set only with the flag.
 	desktop *useDesktop
+	// carriedMembers, siblingsReadback and transport describe the keychain
+	// write, set only by the write phase.
+	carriedMembers   *[]useCarriedMember
+	siblingsReadback *secret.SiblingsReadback
+	transport        *secret.WriteTransport
 }
 
 func useRefused(refusal claude.SwapRefusal, service, note string) *useReport {
@@ -108,18 +129,21 @@ func useRefused(refusal claude.SwapRefusal, service, note string) *useReport {
 func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 	if asJSON {
 		doc := useOutcomeDocument{
-			Kind:          "outcome",
-			Outcome:       report.outcome.Word(),
-			Target:        report.target,
-			Service:       report.service,
-			From:          useDigestReport{Digest8: report.fromDigest8},
-			To:            useDigestReport{Digest8: report.toDigest8},
-			AdoptedTo:     report.adoptedTo,
-			Lock:          report.lock,
-			Warnings:      report.warnings,
-			Note:          report.note,
-			RemoteControl: report.remoteControl,
-			Desktop:       report.desktop,
+			Kind:             "outcome",
+			Outcome:          report.outcome.Word(),
+			Target:           report.target,
+			Service:          report.service,
+			From:             useDigestReport{Digest8: report.fromDigest8},
+			To:               useDigestReport{Digest8: report.toDigest8},
+			AdoptedTo:        report.adoptedTo,
+			Lock:             report.lock,
+			Warnings:         report.warnings,
+			Note:             report.note,
+			RemoteControl:    report.remoteControl,
+			Desktop:          report.desktop,
+			CarriedMembers:   report.carriedMembers,
+			SiblingsReadback: report.siblingsReadback,
+			Transport:        report.transport,
 		}
 		doc.Audit.ID = report.auditID
 		if report.config != nil {

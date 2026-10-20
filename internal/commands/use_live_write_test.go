@@ -134,12 +134,8 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			update, err := incoming.ToKeychainUpdate(testutil.KeychainAccount, subject.service)
-			if err != nil {
-				t.Fatal(err)
-			}
 			to8, _ := secret.Digest8(after.AccessSHA256)
-			input := useWritePhase{paths: paths, env: &env, subject: subject, before: before, after: after, toDigest8: to8, direction: secret.DirectionForward, shadowingStore: test.shadow, controller: testSignalController(t)}
+			input := useWritePhase{paths: paths, env: &env, subject: subject, before: before, after: after, toDigest8: to8, direction: secret.DirectionForward, shadowingStore: test.shadow, controller: testSignalController(t), account: testutil.KeychainAccount}
 			if test.live {
 				input.log, err = secret.OpenAuditLog(paths, secret.AuditLogPath(paths))
 				if err != nil {
@@ -197,7 +193,7 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 			if test.shutdown {
 				input.controller.Stop()
 			}
-			report := useWrite(t.Context(), input, update)
+			report := useWrite(t.Context(), input, incoming)
 			if diff := gocmp.Diff(test.kind, report.outcome.Kind); diff != "" {
 				t.Fatalf("outcome (-want +got):\n%s; note=%v", diff, report.note)
 			}
@@ -354,4 +350,265 @@ func testSignalController(t *testing.T) *signals.Controller {
 	_, controller := signals.Install(t.Context())
 	t.Cleanup(controller.Stop)
 	return controller
+}
+
+// withMembers appends top-level members to a credential document, the way
+// Claude Code keeps its MCP logins beside the account object.
+func withMembers(t *testing.T, blob, members string) string {
+	t.Helper()
+	trimmed := strings.TrimSpace(blob)
+	if !strings.HasSuffix(trimmed, "}") {
+		t.Fatalf("the fixture document does not end in an object")
+	}
+	return strings.TrimSuffix(trimmed, "}") + "," + members + "}"
+}
+
+func mustSummary(t *testing.T, document string) []claude.SiblingMeta {
+	t.Helper()
+	credentials, err := claude.ParseBlob([]byte(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := credentials.SiblingSummary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return summary
+}
+
+func TestUseWriteCarriesTheItemsOwnMembers(t *testing.T) {
+	const canary = "SIBLING-CANARY-9f31"
+	itemMembers := `"mcpOAuth":{"one":{"accessToken":"` + canary + `"},"two":{"accessToken":"b"}},"pluginSecrets":"p"`
+	tests := map[string]struct {
+		itemAbsent  bool
+		rewrite     bool
+		unreadable  bool
+		wantCarried []useCarriedMember
+		wantVerdict secret.SiblingsReadback
+		wantChanged string
+		wantKind    claude.SwapOutcomeKind
+	}{
+		"success: the item's members are written back and read back equal": {
+			wantCarried: []useCarriedMember{{Name: "mcpOAuth", Entries: new(2)}, {Name: "pluginSecrets"}},
+			wantVerdict: secret.SiblingsEqual, wantKind: claude.SwapApplied,
+		},
+		"success: an absent item carries nothing, whatever the file held": {
+			itemAbsent: true, wantCarried: []useCarriedMember{}, wantVerdict: secret.SiblingsEqual, wantKind: claude.SwapApplied,
+		},
+		"success: a rewrite after the write is reported, not prevented": {
+			rewrite:     true,
+			wantCarried: []useCarriedMember{{Name: "mcpOAuth", Entries: new(2)}, {Name: "pluginSecrets"}},
+			wantVerdict: secret.SiblingsDiffer, wantChanged: "mcpOAuth", wantKind: claude.SwapApplied,
+		},
+		"error: a failed readback knows nothing about the members": {
+			unreadable:  true,
+			wantCarried: []useCarriedMember{{Name: "mcpOAuth", Entries: new(2)}, {Name: "pluginSecrets"}},
+			wantVerdict: secret.SiblingsUnverified, wantKind: claude.SwapUnknown,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := testutil.New(t).WithKeychain()
+			fixture.WriteRegistry([]any{fixture.OwnedRecord(testutil.Acct, testutil.Org)})
+			paths, record := refreshRecord(t, fixture)
+			if err := paths.EnsureDirs(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			nsDir := fixture.NamespaceDir(testutil.Acct, testutil.Org)
+			itemBlob := withMembers(t, fixture.Blob("outgoing-access", "outgoing-refresh", testutil.FreshAt()), itemMembers)
+			// The incoming credential's file carries a member of its own; a
+			// file is never a source of carried members.
+			incomingBlob := withMembers(t, fixture.Blob("incoming-access", "incoming-refresh", testutil.FreshAt()), `"fileOnly":{"x":{}}`)
+			fixture.WriteCredentials(testutil.Acct, testutil.Org, incomingBlob)
+			env := claude.EnvWithHome(fixture.Home())
+			subject, refused := useBuildSubject(paths, &env, false, record, claude.ExportSpelling(nsDir))
+			if refused != nil {
+				t.Fatalf("subject refused: %+v", refused)
+			}
+			var before *claude.Digests
+			if !test.itemAbsent {
+				fixture.KeychainItem(subject.service, itemBlob)
+				outgoing, err := claude.ParseBlob([]byte(itemBlob))
+				if err != nil {
+					t.Fatal(err)
+				}
+				digest, err := outgoing.Digests()
+				if err != nil {
+					t.Fatal(err)
+				}
+				before = &digest
+			}
+			fixture.AllowWrite(subject.service)
+			for _, entry := range fixture.Environ() {
+				key, value, _ := strings.Cut(entry, "=")
+				if strings.HasPrefix(key, "AGCTL_FAKE_SECURITY_") || key == "AGENTCTL_SECURITY_BIN" || key == "USER" {
+					t.Setenv(key, value)
+				}
+			}
+			t.Setenv("AGENTCTL_KEYCHAIN_BACKEND", "")
+			if test.rewrite || test.unreadable {
+				// After the write, another process rewrites the item with a
+				// changed MCP login, or the item becomes unreadable.
+				rewritten := withMembers(t, fixture.Blob("incoming-access", "incoming-refresh", testutil.FreshAt()), `"mcpOAuth":{"one":{"accessToken":"rotated"},"two":{"accessToken":"b"}},"pluginSecrets":"p"`)
+				replacement := fixture.Scratch("rewritten.json")
+				if err := os.WriteFile(replacement, []byte(rewritten), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				marker := fixture.Scratch("write-done")
+				after := fmt.Sprintf("cp %q %q", replacement, fixture.KeychainItemPath(subject.service))
+				if test.unreadable {
+					after = "true"
+				}
+				wrapper := fixture.Scratch("rewriting-security.sh")
+				script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = find-generic-password ] && [ -f %q ] && [ %t = true ]; then exit 36; fi\n%q \"$@\"\nstatus=$?\nif [ \"$1\" = add-generic-password ] && [ $status = 0 ]; then %s; touch %q; fi\nexit $status\n", marker, test.unreadable, fixture.SecurityBin(), after, marker)
+				if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("AGENTCTL_SECURITY_BIN", wrapper)
+			}
+			incoming, err := claude.ParseBlob([]byte(incomingBlob))
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := incoming.Digests()
+			if err != nil {
+				t.Fatal(err)
+			}
+			to8, _ := secret.Digest8(after.AccessSHA256)
+			input := useWritePhase{paths: paths, env: &env, subject: subject, before: before, after: after, toDigest8: to8, direction: secret.DirectionForward, shadowingStore: test.itemAbsent, controller: testSignalController(t), account: testutil.KeychainAccount}
+			if before != nil {
+				digest8, _ := secret.Digest8(before.AccessSHA256)
+				input.fromDigest8 = &digest8
+			}
+
+			report := useWrite(t.Context(), input, incoming)
+
+			if report.outcome.Kind != test.wantKind {
+				t.Fatalf("outcome = %s, want %s; note=%s", report.outcome.Kind, test.wantKind, deref(report.note))
+			}
+			if report.carriedMembers == nil {
+				t.Fatal("carried_members is absent although the update was built")
+			}
+			if diff := gocmp.Diff(test.wantCarried, *report.carriedMembers); diff != "" {
+				t.Errorf("carried_members (-want +got):\n%s", diff)
+			}
+			if report.siblingsReadback == nil || *report.siblingsReadback != test.wantVerdict {
+				t.Errorf("siblings_readback = %v, want %s", report.siblingsReadback, test.wantVerdict)
+			}
+			if report.transport == nil || *report.transport != secret.TransportArgv {
+				t.Errorf("transport = %v, want argv", report.transport)
+			}
+			if test.wantChanged != "" && (report.note == nil || !strings.Contains(*report.note, "members "+test.wantChanged+" did not read back")) {
+				t.Errorf("the note must name %s: %v", test.wantChanged, report.note)
+			}
+			if !test.rewrite && !test.unreadable {
+				stored, err := os.ReadFile(fixture.KeychainItemPath(subject.service))
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := []claude.SiblingMeta{}
+				if !test.itemAbsent {
+					want = mustSummary(t, itemBlob)
+				}
+				if diff := gocmp.Diff(want, mustSummary(t, string(stored))); diff != "" {
+					t.Errorf("the stored item's members are not the held read's (-want +got):\n%s", diff)
+				}
+				if strings.Contains(string(stored), "fileOnly") {
+					t.Error("a member of the incoming credential's file reached the keychain item")
+				}
+			}
+			if !test.itemAbsent && !test.rewrite && !test.unreadable {
+				if stored, _ := os.ReadFile(fixture.KeychainItemPath(subject.service)); !strings.Contains(string(stored), canary) {
+					t.Error("the carried MCP login is missing from the stored item")
+				}
+			}
+			tail, err := secret.TailAuditLog(paths, 8)
+			if err != nil || len(tail.Entries) == 0 {
+				t.Fatalf("no audit entry: %v", err)
+			}
+			event, ok := tail.Entries[len(tail.Entries)-1].Event.(*secret.WriteEvent)
+			if !ok {
+				t.Fatalf("last audit entry is %T", tail.Entries[len(tail.Entries)-1].Event)
+			}
+			var wantNames []string
+			for _, member := range test.wantCarried {
+				wantNames = append(wantNames, member.Name)
+			}
+			if diff := gocmp.Diff(wantNames, event.Carried); diff != "" {
+				t.Errorf("audit carried (-want +got):\n%s", diff)
+			}
+			if event.SiblingsReadback != test.wantVerdict || event.Transport != secret.TransportArgv {
+				t.Errorf("audit readback=%q transport=%q", event.SiblingsReadback, event.Transport)
+			}
+			for _, path := range []string{secret.AuditLogPath(paths), os.Getenv("AGCTL_FAKE_SECURITY_LOG")} {
+				if data, err := os.ReadFile(path); err == nil && strings.Contains(string(data), canary) {
+					t.Errorf("%s carries a carried member's value", filepath.Base(path))
+				}
+			}
+		})
+	}
+}
+
+func deref(note *string) string {
+	if note == nil {
+		return "<nil>"
+	}
+	return *note
+}
+
+func TestUseAdmitUpdateCountsTheItemsMembersBeforeAnyMutation(t *testing.T) {
+	fixture := testutil.New(t)
+	incomingBlob := withMembers(t, fixture.Blob("incoming-access", "incoming-refresh", testutil.FreshAt()), `"fileOnly":{"x":{}}`)
+	small := withMembers(t, fixture.Blob("outgoing-access", "outgoing-refresh", testutil.FreshAt()), `"mcpOAuth":{"one":{}}`)
+	grown := withMembers(t, fixture.Blob("outgoing-access", "outgoing-refresh", testutil.FreshAt()), `"mcpOAuth":{"one":{"accessToken":"`+strings.Repeat("m", secret.KeychainBlobLimit)+`"}}`)
+	tests := map[string]struct {
+		item        string
+		account     string
+		wantRefusal claude.SwapRefusalKind
+		wantCarried []string
+	}{
+		"success: the item's members are carried": {item: small, account: testutil.KeychainAccount, wantCarried: []string{"mcpOAuth"}},
+		"success: an absent item carries nothing": {account: testutil.KeychainAccount},
+		"error: the item's members push the document over the ceiling": {
+			item: grown, account: testutil.KeychainAccount, wantRefusal: claude.SwapCredentialTooLarge,
+		},
+		"error: an account security would misread refuses as cannot-adopt": {
+			item: small, account: "two words", wantRefusal: claude.SwapCannotAdopt,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			credentials, err := claude.ParseBlob([]byte(incomingBlob))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var item *claude.Credentials
+			if tt.item != "" {
+				if item, err = claude.ParseBlob([]byte(tt.item)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report := useAdmitUpdate(credentials, item, tt.account, claude.LiveService)
+			if tt.wantRefusal == 0 {
+				if report != nil {
+					t.Fatalf("refused: %s", deref(report.note))
+				}
+			} else {
+				if report == nil || report.outcome.Kind != claude.SwapRefused || report.outcome.Refusal.Kind != tt.wantRefusal {
+					t.Fatalf("report = %+v, want refusal %v", report, tt.wantRefusal)
+				}
+				if tt.wantRefusal == claude.SwapCredentialTooLarge && (report.outcome.ExitCode() != 31 || report.outcome.Refusal.Reason() != "credential_too_large") {
+					t.Fatalf("exit %d reason %q", report.outcome.ExitCode(), report.outcome.Refusal.Reason())
+				}
+				return
+			}
+			var names []string
+			for _, member := range credentials.Siblings {
+				names = append(names, member.Name)
+			}
+			if diff := gocmp.Diff(tt.wantCarried, names); diff != "" {
+				t.Errorf("carried members (-want +got):\n%s", diff)
+			}
+		})
+	}
 }

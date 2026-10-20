@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/awnumar/memguard"
 
@@ -50,10 +51,18 @@ type useWritePhase struct {
 	// write registers its child with it so a signal ends the child before
 	// the hold is released.
 	controller *signals.Controller
+	// account is the keychain item's account attribute the update is built
+	// for.
+	account string
 }
 
 // useWrite takes peer locks only after all network and consent work is finished.
-func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainUpdate) *useReport {
+//
+// It owns credentials from here on: the members carried beside the account
+// object are taken from the item as re-read under the hold, immediately
+// before the update is built.
+func useWrite(ctx context.Context, input useWritePhase, credentials *claude.Credentials) *useReport {
+	defer credentials.Wipe()
 	report := &useReport{service: input.subject.service, fromDigest8: input.fromDigest8, toDigest8: new(input.toDigest8), adoptedTo: input.adoptedTo, lock: useLockReport{BudgetMS: new(uint64(secret.HoldBudget.Milliseconds()))}}
 	if input.staged != nil {
 		defer input.staged.Discard()
@@ -113,6 +122,7 @@ func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainU
 	readCtx, cancel := context.WithTimeout(ctx, secret.KeychainVerifyTimeout)
 	current, err := useReadKeychain(readCtx, reader, input.subject.service)
 	cancel()
+	defer current.Wipe()
 	if err != nil {
 		if errors.Is(err, secret.ErrKeychainLocked) {
 			return heldEnd(claude.SwapDiscarded, 0, "the keychain locked before the item could be re-read under the hold")
@@ -130,6 +140,22 @@ func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainU
 	if (observed == nil) != (input.before == nil) || observed != nil && *observed != *input.before {
 		return heldEnd(claude.SwapDiscarded, 0, "the item changed under the hold, so the swap was thrown away rather than written over a newer credential")
 	}
+	// A member another process changes from here until the write commits is
+	// overwritten and cannot be detected: the accepted residual race.
+	injected.PausePoint(fault.SwapAfterHeldRead)
+	credentials.CarrySiblingsFrom(current)
+	carried, err := credentials.SiblingSummary()
+	if err != nil {
+		return heldEnd(claude.SwapDiscarded, 0, "the members carried from the keychain item could not be described; no keychain update was issued")
+	}
+	update, err := credentials.ToKeychainUpdate(input.account, input.subject.service)
+	if err != nil {
+		if errors.Is(err, secret.ErrCredentialTooLarge) {
+			return heldEnd(claude.SwapDiscarded, 0, "credential_too_large: the keychain item grew under the hold; no keychain update was issued")
+		}
+		return heldEnd(claude.SwapDiscarded, 0, "the keychain update could not be built; no keychain update was issued")
+	}
+	report.carriedMembers = new(useCarried(carried))
 	injected.WaitIf(fault.SwapPauseInLocks)
 	if err := hold.DriftCheck(); err != nil {
 		return heldEnd(claude.SwapRefused, claude.SwapCompromisedHold, "the lock agentctl holds is compromised: "+err.Error())
@@ -141,10 +167,15 @@ func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainU
 		return heldEnd(claude.SwapRefused, claude.SwapCompromisedHold, "the lock agentctl holds is compromised: "+err.Error())
 	}
 	var writeErr error
+	var transport secret.WriteTransport
 	if injected.Is(fault.SwapWriteFail) {
 		writeErr = errors.New("the write was refused by the test fault switch")
 	} else {
 		writeErr = secret.NewKeychainWriter(input.controller).Write(ctx, input.subject.service, update)
+		if !errors.Is(writeErr, secret.ErrKeychainNotStarted) {
+			transport = secret.TransportArgv
+			report.transport = &transport
+		}
 	}
 	elapsed := hold.HoldElapsed()
 	report.lock.HoldMS = new(uint64(max(elapsed.Milliseconds(), 0)))
@@ -152,7 +183,7 @@ func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainU
 	if elapsed > secret.HoldBudget {
 		slog.WarnContext(ctx, "the credential-store hold outlasted its budget", "hold_ms", elapsed.Milliseconds(), "budget_ms", secret.HoldBudget.Milliseconds())
 	}
-	audit := secret.WriteEvent{Target: input.subject.audit, FromDigest8: input.fromDigest8, ToDigest8: input.toDigest8, Direction: input.direction, IncomingIdentity: input.incomingIdentity}
+	audit := secret.WriteEvent{Target: input.subject.audit, FromDigest8: input.fromDigest8, ToDigest8: input.toDigest8, Direction: input.direction, IncomingIdentity: input.incomingIdentity, Carried: useCarriedNames(carried), Transport: transport}
 	// security(1) never ran, so the item is unchanged: a discard like any
 	// other under the hold, with no write to record.
 	if errors.Is(writeErr, secret.ErrKeychainNotStarted) {
@@ -172,15 +203,20 @@ func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainU
 		}
 		return end(claude.SwapFailed, 0, "the credential could not be stored: "+writeErr.Error()+". "+recovery)
 	}
+	injected.PausePoint(fault.SwapAfterWrite)
 	// Readback is outside the hold: a peer winning this gap makes the result unknown.
 	readCtx, cancel = context.WithTimeout(ctx, secret.KeychainVerifyTimeout)
 	verified, verifyErr := useReadKeychain(readCtx, reader, input.subject.service)
 	cancel()
+	defer verified.Wipe()
 	applied := false
 	if verifyErr == nil && verified != nil {
 		digests, err := verified.Digests()
 		applied = err == nil && digests == input.after
 	}
+	readback, changed := useSiblingsReadback(carried, verified, verifyErr)
+	audit.SiblingsReadback = readback
+	report.siblingsReadback = &readback
 	audit.Outcome = secret.WriteUnknown
 	report.outcome.Kind = claude.SwapUnknown
 	if applied {
@@ -219,7 +255,71 @@ func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainU
 	if report.note == nil && !applied {
 		report.note = new("the write could not be confirmed; re-run `agentctl claude status`")
 	}
+	if readback == secret.SiblingsDiffer {
+		useJoinNote(report, fmt.Sprintf("the keychain item's members %s did not read back as written: another process rewrote them after this write", strings.Join(changed, ", ")))
+	}
 	return report
+}
+
+// useCarried is the report's value-free description of the carried members.
+func useCarried(carried []claude.SiblingMeta) []useCarriedMember {
+	members := make([]useCarriedMember, 0, len(carried))
+	for _, member := range carried {
+		members = append(members, useCarriedMember{Name: member.Name, Entries: member.Entries})
+	}
+	return members
+}
+
+// useCarriedNames is the audit's list of carried member names.
+func useCarriedNames(carried []claude.SiblingMeta) []string {
+	if len(carried) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(carried))
+	for _, member := range carried {
+		names = append(names, member.Name)
+	}
+	return names
+}
+
+// useSiblingsReadback compares the members the readback found beside the
+// account object with the ones written, member by member. It detects a
+// change made after the write only; one made between the re-read under the
+// hold and the write is in what was written. changed names, in the written
+// order and then the new ones, every member whose digest differs, which is
+// missing, or which is new.
+func useSiblingsReadback(written []claude.SiblingMeta, verified *claude.Credentials, verifyErr error) (secret.SiblingsReadback, []string) {
+	if verifyErr != nil {
+		return secret.SiblingsUnverified, nil
+	}
+	var read []claude.SiblingMeta
+	if verified != nil {
+		var err error
+		if read, err = verified.SiblingSummary(); err != nil {
+			return secret.SiblingsUnverified, nil
+		}
+	}
+	readDigest := make(map[string]string, len(read))
+	for _, member := range read {
+		readDigest[member.Name] = member.SHA256
+	}
+	var changed []string
+	seen := make(map[string]bool, len(written))
+	for _, member := range written {
+		seen[member.Name] = true
+		if digest, ok := readDigest[member.Name]; !ok || digest != member.SHA256 {
+			changed = append(changed, member.Name)
+		}
+	}
+	for _, member := range read {
+		if !seen[member.Name] {
+			changed = append(changed, member.Name)
+		}
+	}
+	if len(changed) != 0 {
+		return secret.SiblingsDiffer, changed
+	}
+	return secret.SiblingsEqual, nil
 }
 
 func useReadKeychain(ctx context.Context, reader secret.Reader, service string) (*claude.Credentials, error) {

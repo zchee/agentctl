@@ -92,6 +92,14 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	if err != nil {
 		return refreshOutcome{state: new(claude.StateOfStale()), note: "the item could not be re-read before the refresh", lockState: "none"}
 	}
+	// The early read is wiped on every return except the one that hands it
+	// to the caller as the adopted credential.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			peer.Wipe()
+		}
+	}()
 	if !refreshIdentityMatches(peer, &item.owner) {
 		return refreshOccupied(item, peer)
 	}
@@ -100,22 +108,30 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 		return refreshFailure(err)
 	}
 	if observed != before {
+		handedOff = true
 		return refreshAdopted(item, peer)
+	}
+	// The size is admitted against the members the item holds now, before
+	// any token is requested.
+	if _, err := refreshUpdate(current, peer, item); err != nil {
+		return refreshUpdateRefused(err)
 	}
 	current, err = s.Refresher.RefreshAccess(ctx, current)
 	if err != nil {
 		if auth, ok := errors.AsType[*errs.AuthError](err); ok && auth.InvalidGrant {
 			injected.PausePoint(fault.BeforeInvalidGrantReread)
-			peer, readErr := s.readRefreshItem(ctx, item.service)
+			rejected, readErr := s.readRefreshItem(ctx, item.service)
 			if readErr != nil {
 				return refreshOutcome{state: new(claude.StateOfStale()), note: "the refresh was rejected and the item could not be re-read", lockState: "none"}
 			}
-			if !refreshIdentityMatches(peer, &item.owner) {
-				return refreshOccupied(item, peer)
+			if !refreshIdentityMatches(rejected, &item.owner) {
+				defer rejected.Wipe()
+				return refreshOccupied(item, rejected)
 			}
-			if observed, digestErr := peer.Digests(); digestErr == nil && observed != before {
-				return refreshAdopted(item, peer)
+			if observed, digestErr := rejected.Digests(); digestErr == nil && observed != before {
+				return refreshAdopted(item, rejected)
 			}
+			rejected.Wipe()
 		}
 		return refreshFailure(err)
 	}
@@ -132,18 +148,16 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	from, _ := secret.Digest8(before.AccessSHA256)
 	audit := secret.WriteEvent{Target: secret.NamespaceTarget(item.sha8), FromDigest8: &from, ToDigest8: to, Outcome: secret.WriteDiscarded, Direction: secret.DirectionForward}
 	defer func() { appendRefreshAudit(ctx, paths, &audit) }()
-	// Discovery's file copy is never a source of carried members.
-	current.CarrySiblingsFrom(nil)
-	update, err := current.ToKeychainUpdate(item.account, item.service)
+	// Again after the refresh, which can grow the account object; the plan
+	// fields asked for on the way are dropped first when they alone tip it
+	// over.
+	_, err = refreshUpdate(current, peer, item)
 	if _, tooLarge := errors.AsType[*secret.BlobTooLargeError](err); tooLarge && (current.SubscriptionType != unplannedType || current.RateLimitTier != unplannedTier) {
 		current.SubscriptionType, current.RateLimitTier = unplannedType, unplannedTier
-		update, err = current.ToKeychainUpdate(item.account, item.service)
+		_, err = refreshUpdate(current, peer, item)
 	}
 	if err != nil {
-		if errors.Is(err, secret.ErrCredentialTooLarge) {
-			return refreshRefused(claude.StateOfError(refreshTooLargeLabel), "none")
-		}
-		return refreshFailure(err)
+		return refreshUpdateRefused(err)
 	}
 	injected.PausePoint(fault.BeforeMigratedWrite)
 	dir, err := secret.OpenNamespaceDir(paths, item.nsDir)
@@ -176,18 +190,34 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 		return refreshRefused(claude.StateOfError("refresh refused: "+err.Error()), "unavailable")
 	}
 	readCtx, cancel := context.WithTimeout(ctx, secret.KeychainVerifyTimeout)
-	peer, err = s.readRefreshItem(readCtx, item.service)
+	held, err := s.readRefreshItem(readCtx, item.service)
 	cancel()
+	defer held.Wipe()
 	if err != nil {
 		if errors.Is(err, secret.ErrKeychainLocked) {
 			return refreshRefused(claude.StateOfKeychainLocked(""), "unavailable")
 		}
 		return refreshDiscarded("the item could not be re-read")
 	}
-	observed, err = peer.Digests()
+	observed, err = held.Digests()
 	if err != nil || observed != before {
 		return refreshDiscarded("the item changed under us")
 	}
+	// A member another process changes from here until the write commits is
+	// overwritten and cannot be detected: the accepted residual race.
+	injected.PausePoint(fault.MigratedAfterHeldRead)
+	update, err := refreshUpdate(current, held, item)
+	if err != nil {
+		if errors.Is(err, secret.ErrCredentialTooLarge) {
+			return refreshDiscarded("credential_too_large: the keychain item grew under the hold")
+		}
+		return refreshDiscarded("the keychain update could not be built")
+	}
+	carried, err := current.SiblingSummary()
+	if err != nil {
+		return refreshDiscarded("the members carried from the keychain item could not be described")
+	}
+	audit.Carried = useCarriedNames(carried)
 	if err := hold.DriftCheck(); err != nil {
 		return refreshRefused(claude.StateOfError("refresh refused: "+err.Error()), "unavailable")
 	}
@@ -199,6 +229,7 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	if errors.Is(writeErr, secret.ErrKeychainNotStarted) {
 		return refreshDiscarded(useNotStartedNote(writeErr))
 	}
+	audit.Transport = secret.TransportArgv
 	// An outcome-unknown write may have committed: the readback decides.
 	if writeErr != nil && !errors.Is(writeErr, secret.ErrKeychainOutcomeUnknown) {
 		audit.Outcome = secret.WriteFailed
@@ -208,15 +239,35 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 		}
 		return refreshOutcome{state: &state, note: writeErr.Error(), lockState: "none"}
 	}
-	peer, err = s.readRefreshItem(ctx, item.service)
+	injected.PausePoint(fault.MigratedAfterWrite)
+	verified, err := s.readRefreshItem(ctx, item.service)
+	defer verified.Wipe()
+	audit.SiblingsReadback, _ = useSiblingsReadback(carried, verified, err)
 	if err == nil {
-		if observed, digestErr := peer.Digests(); digestErr == nil && observed == after {
+		if observed, digestErr := verified.Digests(); digestErr == nil && observed == after {
 			audit.Outcome = secret.WriteApplied
 			return refreshOutcome{credentials: current, lockState: "migrated_refreshed"}
 		}
 	}
 	audit.Outcome = secret.WriteUnknown
 	return refreshOutcome{credentials: current, state: new(claude.StateOfStale()), note: "the refreshed item could not be confirmed; re-run `status`", lockState: "migrated_refreshed"}
+}
+
+// refreshUpdate builds the keychain update for current with the members
+// source holds beside its account object; discovery's copy is never their
+// source, so they are replaced, not merged.
+func refreshUpdate(current, source *claude.Credentials, item *migratedRefreshTarget) (*secret.KeychainUpdate, error) {
+	current.CarrySiblingsFrom(source)
+	return current.ToKeychainUpdate(item.account, item.service)
+}
+
+// refreshUpdateRefused is the refusal of a refresh whose keychain update
+// cannot be built before anything was written.
+func refreshUpdateRefused(err error) refreshOutcome {
+	if errors.Is(err, secret.ErrCredentialTooLarge) {
+		return refreshRefused(claude.StateOfError(refreshTooLargeLabel), "none")
+	}
+	return refreshFailure(err)
 }
 
 func (s *Status) readRefreshItem(ctx context.Context, service string) (*claude.Credentials, error) {

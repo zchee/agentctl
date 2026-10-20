@@ -73,6 +73,14 @@ const (
 	SwapNamespaceAcquired = "swap_namespace_acquired"
 	// SwapPauseInLocks waits while holding the swap's peer locks.
 	SwapPauseInLocks = "swap_pause_in_locks"
+	// SwapAfterHeldRead pauses between a swap's re-read of the item under the hold and the build of its keychain update.
+	SwapAfterHeldRead = "swap_after_held_read"
+	// SwapAfterWrite pauses after a swap's keychain write, before its readback.
+	SwapAfterWrite = "swap_after_write"
+	// MigratedAfterHeldRead pauses between a migrated refresh's re-read under the hold and the build of its keychain update.
+	MigratedAfterHeldRead = "migrated_after_held_read"
+	// MigratedAfterWrite pauses after a migrated refresh's keychain write, before its readback.
+	MigratedAfterWrite = "migrated_after_write"
 	// SwapWriteFail fails the swap's keychain write.
 	SwapWriteFail = "swap_write_fail"
 	// BeforeRename pauses before replacing a credential file.

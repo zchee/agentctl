@@ -137,6 +137,62 @@ func TestAuditAWriteLineFromBeforeTheDirectionMemberReadsAsForwardNamingNobody(t
 	if event.IncomingIdentity != nil {
 		t.Errorf("no identity on an old line: %+v", event.IncomingIdentity)
 	}
+	if event.Carried != nil || event.SiblingsReadback != "" || event.Transport != "" {
+		t.Errorf("no carry record on an old line: %+v", event)
+	}
+}
+
+func TestAuditAWriteRecordsWhatItCarriedByNameAndHowItTravelled(t *testing.T) {
+	paths := newAuditStore(t)
+	event := writeEvent("aabbccdd", new("11223344"))
+	event.Carried = []string{"mcpOAuth", "pluginSecrets"}
+	event.SiblingsReadback = SiblingsDiffer
+	event.Transport = TransportArgv
+	entry := NewAuditEntry(event)
+
+	line, err := auditEntryLine(entry)
+	if err != nil {
+		t.Fatalf("serializable: %v", err)
+	}
+	value := lineValue(t, line)
+	if got := value["siblings_readback"]; got != "differs" {
+		t.Errorf("siblings_readback = %v, want differs", got)
+	}
+	if got := value["transport"]; got != "argv" {
+		t.Errorf("transport = %v, want argv", got)
+	}
+	if diff := gocmp.Diff([]any{"mcpOAuth", "pluginSecrets"}, value["carried"]); diff != "" {
+		t.Errorf("carried (-want +got):\n%s", diff)
+	}
+
+	if _, err := AuditAppend(t.Context(), paths, entry); err != nil {
+		t.Fatalf("the log should be appendable: %v", err)
+	}
+	read, err := TailAuditLog(paths, 10)
+	if err != nil {
+		t.Fatalf("the log should be readable: %v", err)
+	}
+	if diff := gocmp.Diff([]AuditEntry{entry}, read.Entries); diff != "" {
+		t.Errorf("entries mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAuditAWriteLineWithAnUnknownCarryTokenIsRefused(t *testing.T) {
+	tests := map[string]struct {
+		members string
+		want    string
+	}{
+		"error: unknown readback":  {members: `,"siblings_readback":"maybe"`, want: "unknown siblings readback"},
+		"error: unknown transport": {members: `,"transport":"stdin"`, want: "unknown write transport"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			line := `{"ts":"2026-09-10T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"live","from_digest8":"deadbeef","to_digest8":"cafebabe","outcome":"applied"` + tt.members + `}`
+			if _, err := decodeAuditLine([]byte(line)); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("decode = %v, want an error naming %q", err, tt.want)
+			}
+		})
+	}
 }
 
 func TestAuditALiveWriteRecordsTheAccountItInstalledByIDAlone(t *testing.T) {

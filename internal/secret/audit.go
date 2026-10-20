@@ -110,6 +110,28 @@ const (
 	DirectionUndo WriteDirection = "undo"
 )
 
+// SiblingsReadback is what the readback after a write said about the
+// members written beside the account object.
+type SiblingsReadback string
+
+const (
+	// SiblingsEqual means every carried member read back as written.
+	SiblingsEqual SiblingsReadback = "equal"
+	// SiblingsDiffer means a carried member read back changed, missing or
+	// new: another process rewrote the item after this write. It does not
+	// detect a change made between the re-read under the hold and the write.
+	SiblingsDiffer SiblingsReadback = "differs"
+	// SiblingsUnverified means the readback failed, so nothing is known.
+	SiblingsUnverified SiblingsReadback = "unverified"
+)
+
+// WriteTransport names how the keychain document reached security(1).
+type WriteTransport string
+
+// TransportArgv is a document passed hex-encoded in security(1)'s argument
+// vector.
+const TransportArgv WriteTransport = "argv"
+
 // IncomingIdentity is the account a live write installed in the item, by
 // id alone — never a token and never an email address.
 type IncomingIdentity struct {
@@ -141,6 +163,16 @@ type WriteEvent struct {
 	// entries written before the member existed — which is why an entry
 	// without it refuses rather than being guessed at.
 	IncomingIdentity *IncomingIdentity
+	// Carried names the members written beside the account object, carried
+	// over from the item as re-read under the hold; names only, never a
+	// value. Empty on entries written before the member existed.
+	Carried []string
+	// SiblingsReadback is the readback's verdict on the carried members;
+	// empty when no readback ran.
+	SiblingsReadback SiblingsReadback
+	// Transport is how the document reached security(1); empty when no
+	// child was started, and on entries written before the member existed.
+	Transport WriteTransport
 }
 
 func (*WriteEvent) auditEventName() string { return "write" }
@@ -324,6 +356,9 @@ type auditWriteLine struct {
 	Outcome          KeychainWriteOutcome `json:"outcome"`
 	Direction        WriteDirection       `json:"direction"`
 	IncomingIdentity *IncomingIdentity    `json:"incoming_identity,omitzero"`
+	Carried          []string             `json:"carried,omitzero"`
+	SiblingsReadback SiblingsReadback     `json:"siblings_readback,omitzero"`
+	Transport        WriteTransport       `json:"transport,omitzero"`
 }
 
 // auditLockBreakLine is a lock-break entry as the line spells it.
@@ -361,7 +396,7 @@ func auditEntryLine(entry AuditEntry) (string, error) {
 			direction = DirectionForward
 		}
 		provenance.Event = event.auditEventName()
-		line = &auditWriteLine{auditProvenance: provenance, Target: event.Target, FromDigest8: event.FromDigest8, ToDigest8: event.ToDigest8, Outcome: event.Outcome, Direction: direction, IncomingIdentity: event.IncomingIdentity}
+		line = &auditWriteLine{auditProvenance: provenance, Target: event.Target, FromDigest8: event.FromDigest8, ToDigest8: event.ToDigest8, Outcome: event.Outcome, Direction: direction, IncomingIdentity: event.IncomingIdentity, Carried: event.Carried, SiblingsReadback: event.SiblingsReadback, Transport: event.Transport}
 	case *LockBreakRecord:
 		provenance.Event = event.auditEventName()
 		line = &auditLockBreakLine{auditProvenance: provenance, LockBreakRecord: *event}
@@ -877,6 +912,9 @@ func decodeAuditLine(line []byte) (AuditEntry, error) {
 			Outcome          *string           `json:"outcome"`
 			Direction        *string           `json:"direction"`
 			IncomingIdentity *IncomingIdentity `json:"incoming_identity"`
+			Carried          []string          `json:"carried"`
+			SiblingsReadback *string           `json:"siblings_readback"`
+			Transport        *string           `json:"transport"`
 		}
 		if err := json.Unmarshal(line, &body); err != nil {
 			return AuditEntry{}, err
@@ -901,7 +939,23 @@ func decodeAuditLine(line []byte) (AuditEntry, error) {
 				return AuditEntry{}, fmt.Errorf("unknown write direction `%s`", direction)
 			}
 		}
-		entry.Event = &WriteEvent{Target: target, FromDigest8: body.FromDigest8, ToDigest8: *body.ToDigest8, Outcome: outcome, Direction: direction, IncomingIdentity: body.IncomingIdentity}
+		var readback SiblingsReadback
+		if body.SiblingsReadback != nil {
+			readback = SiblingsReadback(*body.SiblingsReadback)
+			switch readback {
+			case SiblingsEqual, SiblingsDiffer, SiblingsUnverified:
+			default:
+				return AuditEntry{}, fmt.Errorf("unknown siblings readback `%s`", readback)
+			}
+		}
+		var transport WriteTransport
+		if body.Transport != nil {
+			transport = WriteTransport(*body.Transport)
+			if transport != TransportArgv {
+				return AuditEntry{}, fmt.Errorf("unknown write transport `%s`", transport)
+			}
+		}
+		entry.Event = &WriteEvent{Target: target, FromDigest8: body.FromDigest8, ToDigest8: *body.ToDigest8, Outcome: outcome, Direction: direction, IncomingIdentity: body.IncomingIdentity, Carried: body.Carried, SiblingsReadback: readback, Transport: transport}
 	case "lock_break":
 		var record LockBreakRecord
 		if err := json.Unmarshal(line, &record); err != nil {

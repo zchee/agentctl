@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	gocmp "github.com/google/go-cmp/cmp"
+
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/signals"
@@ -105,6 +107,58 @@ func TestMigratedRefreshPersistsUnderPeerLocks(t *testing.T) {
 	}
 	if !strings.Contains(string(audit), `"outcome":"applied"`) {
 		t.Fatalf("missing applied audit: %s", audit)
+	}
+}
+
+func TestMigratedRefreshKeepsTheItemsMCPLogins(t *testing.T) {
+	const canary = "SIBLING-CANARY-9f31"
+	world, item, _ := migratedWorld(t)
+	paths, _ := refreshRecord(t, world.fixture)
+	seeded := withMembers(t, world.fixture.Blob("old-access", "old-refresh", testutil.ExpiredAt()), `"mcpOAuth":{"one":{"accessToken":"`+canary+`"},"two":{}},"pluginSecrets":"p"`)
+	if err := os.WriteFile(world.fixture.KeychainItemPath(item.service), []byte(seeded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := world.status.readRefreshItem(t.Context(), item.service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	world.status.Refresher = refreshOAuth(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}`))
+	})
+
+	result := world.status.refreshMigrated(t.Context(), paths, item, current)
+
+	if result.lockState != "migrated_refreshed" || result.state != nil {
+		t.Fatalf("refresh result = %+v", result)
+	}
+	stored, err := os.ReadFile(world.fixture.KeychainItemPath(item.service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := gocmp.Diff(mustSummary(t, seeded), mustSummary(t, string(stored))); diff != "" {
+		t.Errorf("the refresh dropped or changed the item's members (-want +got):\n%s", diff)
+	}
+	if !strings.Contains(string(stored), "rotated-access") {
+		t.Error("the refreshed account object is not in the item")
+	}
+	tail, err := secret.TailAuditLog(paths, 8)
+	if err != nil || len(tail.Entries) == 0 {
+		t.Fatalf("no audit entry: %v", err)
+	}
+	event, ok := tail.Entries[len(tail.Entries)-1].Event.(*secret.WriteEvent)
+	if !ok {
+		t.Fatalf("last audit entry is %T", tail.Entries[len(tail.Entries)-1].Event)
+	}
+	if diff := gocmp.Diff([]string{"mcpOAuth", "pluginSecrets"}, event.Carried); diff != "" {
+		t.Errorf("audit carried (-want +got):\n%s", diff)
+	}
+	if event.Outcome != secret.WriteApplied || event.SiblingsReadback != secret.SiblingsEqual || event.Transport != secret.TransportArgv {
+		t.Errorf("audit = %+v", event)
+	}
+	for _, path := range []string{secret.AuditLogPath(paths), os.Getenv("AGCTL_FAKE_SECURITY_LOG")} {
+		if data, err := os.ReadFile(path); err == nil && strings.Contains(string(data), canary) {
+			t.Errorf("%s carries a carried member's value", filepath.Base(path))
+		}
 	}
 }
 

@@ -67,6 +67,14 @@ const (
 	SwapNamespaceAcquired = ""
 	// SwapPauseInLocks is inert in a release build.
 	SwapPauseInLocks = ""
+	// SwapAfterHeldRead is inert in a release build.
+	SwapAfterHeldRead = ""
+	// SwapAfterWrite is inert in a release build.
+	SwapAfterWrite = ""
+	// MigratedAfterHeldRead is inert in a release build.
+	MigratedAfterHeldRead = ""
+	// MigratedAfterWrite is inert in a release build.
+	MigratedAfterWrite = ""
 	// SwapWriteFail is inert in a release build.
 	SwapWriteFail = ""
 	// BeforeRename is inert in a release build.
