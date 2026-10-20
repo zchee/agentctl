@@ -134,6 +134,28 @@ func TestStatusReportsTheMCPOAuthEntryCount(t *testing.T) {
 	}
 }
 
+func TestStatusByIdentityKeepsTheLiveItemsMCPOAuthCount(t *testing.T) {
+	world := newStatusWorld(t, serveBody(http.StatusOK, usageBody(t)))
+	world.seedLiveAndOwned(t)
+
+	stdout, err := world.run(t, cli.ClaudeStatusOptions{ByIdentity: true})
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, stdout)
+	}
+	// The live row folds into the owned row of the same account; the owned
+	// row was read from a file, which never holds the MCP logins, so the
+	// surviving row must show the live item's count, not the file's.
+	if !strings.Contains(stdout, "mcp_oauth_entries=2") {
+		t.Errorf("the folded row lost the live item's count:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "mcp_oauth_entries=0") {
+		t.Errorf("the folded row shows the file's count:\n%s", stdout)
+	}
+	if got := strings.Count(stdout, "mcp_oauth_entries="); got != 1 {
+		t.Errorf("want one folded row with a count, got %d:\n%s", got, stdout)
+	}
+}
+
 // capturingUsage records every credential a pass authenticates with, and
 // the sibling value buffers it carried at that moment, then answers with
 // the real client so the pass runs exactly as it would in production.

@@ -347,6 +347,8 @@ func configDirRow(ctx context.Context, id string, record *config.AccountRecord, 
 	}
 	credentials := result.credentials
 	if foldsIntoLive(liveDigests, credentials) {
+		// The row is dropped, and with it the only reference to this copy.
+		credentials.Wipe()
 		return AccountRow{}, false
 	}
 
@@ -486,6 +488,9 @@ func unclaimedRows(ctx context.Context, listing []secret.ServiceEntry, claimed, 
 		result := resolveKeychain(ctx, reader, entry.Service)
 		credentials := result.credentials
 		if foldsIntoLive(liveDigests, credentials) {
+			// The row is dropped, and with it the only reference to this
+			// copy.
+			credentials.Wipe()
 			continue
 		}
 

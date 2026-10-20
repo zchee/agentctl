@@ -596,9 +596,16 @@ func statusRows(outcomes []rowOutcome, byIdentity bool) []render.StatusRow {
 
 	type key struct{ acct, org string }
 	var folded []key
+	// The live row's MCP login count survives the fold: the owned row it
+	// folds into was read from a file, which never carries those logins.
+	liveEntries := map[key]*int{}
 	for i := range outcomes {
+		identity := key{acct: outcomes[i].record.AccountUUID, org: outcomes[i].record.OrganizationUUID}
 		if outcomes[i].sameIdentityAsLive {
-			folded = append(folded, key{acct: outcomes[i].record.AccountUUID, org: outcomes[i].record.OrganizationUUID})
+			folded = append(folded, identity)
+		}
+		if outcomes[i].record.Kind.Live && !outcomes[i].state.IsFailure() && outcomes[i].mcpOAuthEntries != nil {
+			liveEntries[identity] = outcomes[i].mcpOAuthEntries
 		}
 	}
 
@@ -612,6 +619,9 @@ func statusRows(outcomes []rowOutcome, byIdentity bool) []render.StatusRow {
 		row := outcome.statusRow()
 		if outcome.sameIdentityAsLive {
 			row.Kind = render.LiveAndOwnedKind
+			if entries, ok := liveEntries[identity]; ok {
+				row.MCPOAuthEntries = entries
+			}
 			// The Kind cell now says what the note said, so the note
 			// would only repeat it in the next column but one.
 			row.SameIdentityAsLive = false
