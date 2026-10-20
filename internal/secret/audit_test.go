@@ -137,7 +137,7 @@ func TestAuditAWriteLineFromBeforeTheDirectionMemberReadsAsForwardNamingNobody(t
 	if event.IncomingIdentity != nil {
 		t.Errorf("no identity on an old line: %+v", event.IncomingIdentity)
 	}
-	if event.Carried != nil || event.SiblingsReadback != "" || event.Transport != "" {
+	if event.Carried != nil || event.SiblingsReadback != "" || event.Transport != "" || event.Signal != "" {
 		t.Errorf("no carry record on an old line: %+v", event)
 	}
 }
@@ -580,6 +580,60 @@ func TestAuditABreakRecordSerialisesWithTheFixedFieldNames(t *testing.T) {
 		if _, present := sample[key]; !present {
 			t.Errorf("sample_a misses %s", key)
 		}
+	}
+}
+
+func TestAuditAWriteSignalIsANameOnly(t *testing.T) {
+	tests := map[string]struct {
+		signal  string
+		wantErr bool
+	}{
+		"success: SIGTERM":                    {signal: "SIGTERM"},
+		"success: SIGKILL":                    {signal: "SIGKILL"},
+		"success: no signal, no member":       {},
+		"error: a lowercase name":             {signal: "sigterm", wantErr: true},
+		"error: the description, not a name":  {signal: "terminated", wantErr: true},
+		"error: a bare prefix":                {signal: "SIG", wantErr: true},
+		"error: a planted token-shaped value": {signal: "SIGsk-ant-oat01-whatever", wantErr: true},
+		"error: an over-long name":            {signal: "SIGABCDEFGHIJKLM", wantErr: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			event := writeEvent("aabbccdd", nil)
+			event.Outcome = WriteUnknown
+			event.Signal = tt.signal
+			line, err := auditEntryLine(NewAuditEntry(event))
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "names only") {
+					t.Fatalf("the entry must be refused for its signal, got %v: %s", err, line)
+				}
+				// The refusal's own example aside, the value is not repeated.
+				if strings.Contains(strings.ReplaceAll(err.Error(), "`SIGTERM`", ""), tt.signal) {
+					t.Errorf("the refusal repeats the value: %v", err)
+				}
+				// The reader refuses the same value, should another writer
+				// have put it there.
+				planted := `{"ts":"2026-10-20T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"live","to_digest8":"aabbccdd","outcome":"unknown","signal":"` + tt.signal + `"}`
+				if _, decodeErr := decodeAuditLine([]byte(planted)); decodeErr == nil {
+					t.Errorf("a line whose signal is %q must not decode", tt.signal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("serializable: %v", err)
+			}
+			got, present := lineValue(t, line)["signal"]
+			if present != (tt.signal != "") || (present && got != tt.signal) {
+				t.Errorf("signal member = %v (present %t), want %q", got, present, tt.signal)
+			}
+			entry, err := decodeAuditLine([]byte(line))
+			if err != nil {
+				t.Fatalf("the line reads back: %v", err)
+			}
+			if read := entry.Event.(*WriteEvent); read.Signal != tt.signal {
+				t.Errorf("read back signal = %q, want %q", read.Signal, tt.signal)
+			}
+		})
 	}
 }
 

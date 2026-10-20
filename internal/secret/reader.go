@@ -148,6 +148,10 @@ type KeychainError struct {
 	// because a shutdown was already in progress, so a write site can say
 	// why nothing was written.
 	shutdown bool
+	// signal names the signal that ended an outcome-unknown write, such as
+	// `SIGTERM`; empty otherwise. It is a name only, so it can reach the
+	// audit log as it is.
+	signal string
 }
 
 // writeKind sorts a keychain write failure by what it says about the item.

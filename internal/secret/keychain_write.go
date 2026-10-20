@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/awnumar/memguard"
+	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/runtime/coordinator"
@@ -220,7 +221,10 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 	state, waitErr := pass.WaitChildTimeout(token, w.budget)
 	defer stderr.wipe()
 
-	if err := classifyWrite(ctx, state, waitErr, w.budget, stderr); err != nil {
+	// Read after the wait: a signal that arrived during the write is the
+	// one that cancelled it.
+	fired, _ := w.controller.Fired()
+	if err := classifyWrite(ctx, fired, state, waitErr, w.budget, stderr); err != nil {
 		if errors.Is(err, ErrKeychainOutcomeUnknown) {
 			// The leader is reaped by now. Whatever it left in its group
 			// must not outlive Write; an empty group answers ESRCH, which
@@ -236,10 +240,16 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 // outcome. The order is load-bearing: a cancelled run is a cancellation
 // whatever the wait handed back, because after a signal the wait usually
 // returns the leader's reaped, signal-ended state rather than nothing.
-func classifyWrite(ctx context.Context, state *os.ProcessState, waitErr error, budget time.Duration, stderr *boundedBuffer) error {
+//
+// fired is the termination signal the run's controller received, if any. A
+// cancelled run records it as the error's signal; a child ended by a signal
+// of its own records that one. A budget expiry, a cancellation no signal
+// caused, and an output held past the wait delay record none: the kill that
+// ended those children was this process's own.
+func classifyWrite(ctx context.Context, fired os.Signal, state *os.ProcessState, waitErr error, budget time.Duration, stderr *boundedBuffer) error {
 	switch {
 	case ctx.Err() != nil:
-		return &KeychainError{Class: errs.KeychainTimeout, Detail: "the run was cancelled while security was running", Transient: true, kind: writeOutcomeUnknown}
+		return &KeychainError{Class: errs.KeychainTimeout, Detail: "the run was cancelled while security was running", Transient: true, kind: writeOutcomeUnknown, signal: signalName(fired)}
 	case state == nil && waitErr == nil:
 		// The wait gave up at its bound and killed and reaped the child.
 		return &KeychainError{Class: errs.KeychainTimeout, Detail: fmt.Sprintf("security timed out after %d ms", budget.Milliseconds()), Transient: true, kind: writeOutcomeUnknown}
@@ -256,7 +266,11 @@ func classifyWrite(ctx context.Context, state *os.ProcessState, waitErr error, b
 	case !state.Exited():
 		// A child reaped after a signal reports exit code -1; it may have
 		// committed first, so the readback decides the outcome.
-		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "security was ended by a signal", Transient: true, kind: writeOutcomeUnknown}
+		var ended os.Signal
+		if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			ended = status.Signal()
+		}
+		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "security was ended by a signal", Transient: true, kind: writeOutcomeUnknown, signal: signalName(ended)}
 	}
 
 	code := state.ExitCode()
@@ -274,6 +288,29 @@ func classifyWrite(ctx context.Context, state *os.ProcessState, waitErr error, b
 	default:
 		return &KeychainError{Class: class.KeychainClass(), Detail: detail, Transient: true, kind: writeFailed}
 	}
+}
+
+// signalName spells sig the way the audit log records it, such as
+// `SIGTERM`, or returns "" for no signal or one the host does not name.
+func signalName(sig os.Signal) string {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		return ""
+	}
+	return unix.SignalName(s)
+}
+
+// KeychainWriteSignal names the signal that ended a keychain write whose
+// outcome is unknown, such as `SIGTERM`: the one this process received when
+// it cancelled the write, or the one that ended security(1) itself. It
+// returns "" for any other error, and for a write ended by a timeout or by a
+// cancellation no signal caused.
+func KeychainWriteSignal(err error) string {
+	ke, ok := errors.AsType[*KeychainError](err)
+	if !ok {
+		return ""
+	}
+	return ke.signal
 }
 
 // boundedBuffer keeps the first stderrCapture bytes written to it and

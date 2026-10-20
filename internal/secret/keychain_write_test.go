@@ -462,9 +462,21 @@ func TestKeychainWriteDeadlineKillsAndReapsTheGroup(t *testing.T) {
 
 			ctx := t.Context()
 			if tt.cancelled {
+				// The cancellation is armed by the leader's pid, not by a
+				// clock: a fixed deadline can end before a loaded machine
+				// has run the wrapper at all, and then there is no group
+				// to check. The stand-in's store is five seconds out, so a
+				// cancellation right after the pid still lands before it.
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 50*time.Millisecond)
+				ctx, cancel = context.WithCancel(ctx)
 				defer cancel()
+				go func() {
+					// Without a pid the budget ends the write, and
+					// waitForPID below fails the test.
+					if _, ok := lookupPID(pidfile); ok {
+						cancel()
+					}
+				}()
 			}
 			start := time.Now()
 			err := writer.Write(ctx, "target", newUpdate(t, "target", "new grant"))
@@ -492,9 +504,14 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 		cancelFirst bool
 		signal      syscall.Signal
 		class       errs.KeychainClass
+		// wantSignal is what the error and the audit line record. A
+		// cancellation this process's controller did not cause records
+		// nothing, whatever then ended the child.
+		wantSignal string
 	}{
 		"error: SIGTERM after the context is cancelled": {cancelFirst: true, signal: syscall.SIGTERM, class: errs.KeychainTimeout},
-		"error: SIGKILL from outside, context live":     {signal: syscall.SIGKILL, class: errs.KeychainUnavailable},
+		"error: SIGTERM from outside, context live":     {signal: syscall.SIGTERM, class: errs.KeychainUnavailable, wantSignal: "SIGTERM"},
+		"error: SIGKILL from outside, context live":     {signal: syscall.SIGKILL, class: errs.KeychainUnavailable, wantSignal: "SIGKILL"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -539,6 +556,80 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 				t.Errorf("errors.Is(ErrKeychainTimeout) = %t, want %t: only a timeout or a cancellation is one", got, tt.cancelFirst)
 			}
 			assertGroupGone(t, pid)
+			if got := KeychainWriteSignal(err); got != tt.wantSignal {
+				t.Errorf("KeychainWriteSignal = %q, want %q", got, tt.wantSignal)
+			}
+			assertSignalAudited(t, err, tt.wantSignal)
+		})
+	}
+}
+
+// assertSignalAudited records the write ended by err the way a write site
+// does, as an unknown outcome, and checks that the line carries want as its
+// signal member, or no such member when want is empty, and reads back
+// unchanged.
+func assertSignalAudited(t *testing.T, err error, want string) {
+	t.Helper()
+	paths := newAuditStore(t)
+	event := &WriteEvent{Target: NamespaceTarget("0123abcd"), ToDigest8: "aabbccdd", Outcome: WriteUnknown, Direction: DirectionForward, Transport: TransportArgv, Signal: KeychainWriteSignal(err)}
+	if _, appendErr := AuditAppend(t.Context(), paths, NewAuditEntry(event)); appendErr != nil {
+		t.Fatalf("append: %v", appendErr)
+	}
+	raw, readErr := os.ReadFile(AuditLogPath(paths))
+	if readErr != nil {
+		t.Fatalf("read the log: %v", readErr)
+	}
+	value := lineValue(t, strings.TrimSpace(string(raw)))
+	if value["outcome"] != "unknown" {
+		t.Errorf("outcome = %v, want unknown: a signal does not settle the write", value["outcome"])
+	}
+	got, present := value["signal"]
+	switch {
+	case want == "" && present:
+		t.Errorf("the line carries signal %v, want no such member", got)
+	case want != "" && got != want:
+		t.Errorf("the line's signal = %v, want %s\n%s", got, want, raw)
+	}
+	tail, tailErr := TailAuditLog(paths, 1)
+	if tailErr != nil || len(tail.Entries) != 1 {
+		t.Fatalf("tail = %+v, %v", tail, tailErr)
+	}
+	read, ok := tail.Entries[0].Event.(*WriteEvent)
+	if !ok || read.Signal != want || read.Outcome != WriteUnknown {
+		t.Errorf("read back %+v, want signal %q and an unknown outcome", tail.Entries[0].Event, want)
+	}
+}
+
+// TestKeychainWriteClassifyRecordsOnlyASignal covers the branches a stand-in
+// cannot reach without signalling the test binary itself: a cancellation
+// the controller caused by receiving a signal records that signal, and the
+// branches where this process did the killing record none.
+func TestKeychainWriteClassifyRecordsOnlyASignal(t *testing.T) {
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	tests := map[string]struct {
+		ctx        context.Context
+		fired      os.Signal
+		wantKind   string
+		wantSignal string
+	}{
+		"error: cancelled by a received SIGTERM":   {ctx: cancelled, fired: syscall.SIGTERM, wantKind: "outcome unknown", wantSignal: "SIGTERM"},
+		"error: cancelled by a received SIGHUP":    {ctx: cancelled, fired: syscall.SIGHUP, wantKind: "outcome unknown", wantSignal: "SIGHUP"},
+		"error: cancelled with no signal received": {ctx: cancelled, wantKind: "outcome unknown"},
+		"error: the budget ran out, context live":  {ctx: t.Context(), wantKind: "outcome unknown"},
+		"error: a signal after the budget ran out": {ctx: t.Context(), fired: syscall.SIGTERM, wantKind: "outcome unknown"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			stderr := newBoundedBuffer()
+			defer stderr.wipe()
+			// A nil state with no wait error is the wait giving up at its
+			// bound; a live context makes it a budget expiry.
+			err := classifyWrite(tt.ctx, tt.fired, nil, nil, time.Second, stderr)
+			assertKind(t, err, tt.wantKind)
+			if got := KeychainWriteSignal(err); got != tt.wantSignal {
+				t.Errorf("KeychainWriteSignal = %q, want %q", got, tt.wantSignal)
+			}
 		})
 	}
 }

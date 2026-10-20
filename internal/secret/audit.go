@@ -173,6 +173,11 @@ type WriteEvent struct {
 	// Transport is how the document reached security(1); empty when no
 	// child was started, and on entries written before the member existed.
 	Transport WriteTransport
+	// Signal names the signal that ended a write whose outcome is unknown,
+	// such as `SIGTERM`: the one agentctl received while security(1) ran,
+	// or the one that ended security(1) itself. Empty for every other
+	// write, and on entries written before the member existed.
+	Signal string
 }
 
 func (*WriteEvent) auditEventName() string { return "write" }
@@ -359,6 +364,7 @@ type auditWriteLine struct {
 	Carried          []string             `json:"carried,omitzero"`
 	SiblingsReadback SiblingsReadback     `json:"siblings_readback,omitzero"`
 	Transport        WriteTransport       `json:"transport,omitzero"`
+	Signal           string               `json:"signal,omitzero"`
 }
 
 // auditLockBreakLine is a lock-break entry as the line spells it.
@@ -391,12 +397,15 @@ func auditEntryLine(entry AuditEntry) (string, error) {
 		if err := checkDigest8("to_digest8", event.ToDigest8); err != nil {
 			return "", err
 		}
+		if event.Signal != "" && !isSignalName(event.Signal) {
+			return "", errs.NewConfig(fmt.Sprintf("an audit entry's `signal` must be a signal name such as `SIGTERM`, not %d characters; the audit log holds names only", len(event.Signal)))
+		}
 		direction := event.Direction
 		if direction == "" {
 			direction = DirectionForward
 		}
 		provenance.Event = event.auditEventName()
-		line = &auditWriteLine{auditProvenance: provenance, Target: event.Target, FromDigest8: event.FromDigest8, ToDigest8: event.ToDigest8, Outcome: event.Outcome, Direction: direction, IncomingIdentity: event.IncomingIdentity, Carried: event.Carried, SiblingsReadback: event.SiblingsReadback, Transport: event.Transport}
+		line = &auditWriteLine{auditProvenance: provenance, Target: event.Target, FromDigest8: event.FromDigest8, ToDigest8: event.ToDigest8, Outcome: event.Outcome, Direction: direction, IncomingIdentity: event.IncomingIdentity, Carried: event.Carried, SiblingsReadback: event.SiblingsReadback, Transport: event.Transport, Signal: event.Signal}
 	case *LockBreakRecord:
 		provenance.Event = event.auditEventName()
 		line = &auditLockBreakLine{auditProvenance: provenance, LockBreakRecord: *event}
@@ -915,6 +924,7 @@ func decodeAuditLine(line []byte) (AuditEntry, error) {
 			Carried          []string          `json:"carried"`
 			SiblingsReadback *string           `json:"siblings_readback"`
 			Transport        *string           `json:"transport"`
+			Signal           *string           `json:"signal"`
 		}
 		if err := json.Unmarshal(line, &body); err != nil {
 			return AuditEntry{}, err
@@ -955,7 +965,16 @@ func decodeAuditLine(line []byte) (AuditEntry, error) {
 				return AuditEntry{}, fmt.Errorf("unknown write transport `%s`", transport)
 			}
 		}
-		entry.Event = &WriteEvent{Target: target, FromDigest8: body.FromDigest8, ToDigest8: *body.ToDigest8, Outcome: outcome, Direction: direction, IncomingIdentity: body.IncomingIdentity, Carried: body.Carried, SiblingsReadback: readback, Transport: transport}
+		// The signal is checked for its shape, not against a list: a later
+		// build may record a signal this one does not name.
+		var signal string
+		if body.Signal != nil {
+			signal = *body.Signal
+			if !isSignalName(signal) {
+				return AuditEntry{}, fmt.Errorf("a write entry's signal is not a signal name (%d characters)", len(signal))
+			}
+		}
+		entry.Event = &WriteEvent{Target: target, FromDigest8: body.FromDigest8, ToDigest8: *body.ToDigest8, Outcome: outcome, Direction: direction, IncomingIdentity: body.IncomingIdentity, Carried: body.Carried, SiblingsReadback: readback, Transport: transport, Signal: signal}
 	case "lock_break":
 		var record LockBreakRecord
 		if err := json.Unmarshal(line, &record); err != nil {
@@ -1081,6 +1100,22 @@ func checkDigest8(field, value string) error {
 		return nil
 	}
 	return errs.NewConfig(fmt.Sprintf("an audit entry's `%s` must be %d lowercase hex digits, not %d characters; the audit log holds digest prefixes only", field, DigestPrefixLen, len(value)))
+}
+
+// isSignalName reports whether value is spelled like a signal name: `SIG`
+// and up to twelve uppercase letters or digits, such as `SIGTERM`. The shape
+// is what keeps the member free of anything but a name.
+func isSignalName(value string) bool {
+	rest, ok := strings.CutPrefix(value, "SIG")
+	if !ok || rest == "" || len(rest) > 12 {
+		return false
+	}
+	for _, b := range []byte(rest) {
+		if (b < 'A' || b > 'Z') && (b < '0' || b > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // isDigest8 reports whether value is exactly eight lowercase hex digits.
