@@ -58,10 +58,11 @@ const (
 	// short-circuits every credential store.
 	SwapExitRefusedC = 11
 
-	// SwapExitRefusedD is refusal D: the encoded credential line,
-	// including its newline, does not fit the 4032-byte keychain stdin
-	// bound. The code stays defined for scripts that branch on it after
-	// keychain updates stop using the stdin line.
+	// SwapExitRefusedD was refusal D: the encoded credential line,
+	// including its newline, did not fit the 4032-byte keychain stdin
+	// bound. Keychain updates now pass the document to security(1) in
+	// argv, so nothing produces it; it stays defined for scripts that
+	// branch on it.
 	SwapExitRefusedD = 12
 
 	// SwapExitRefusedE is refusal E: CLAUDE_SECURESTORAGE_CONFIG_DIR

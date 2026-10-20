@@ -83,9 +83,55 @@ live swap or undo; see [Remote Control](#remote-control) below.
 `--json` does not supply consent: use `--yes` only when you intend to authorize the writes.
 
 A live swap copies the incoming token pair into the live keychain item while retaining the owned copy.
+The item's other members, such as MCP logins, stay in place; see [MCP credentials](#mcp-credentials).
 A refresh on either side can invalidate the other's refresh token. Avoid competing account switchers
 and do not register the same refresh chain in independent stores. Owned credential files are private
 (0600), not encrypted at rest; processes running as your user can read them.
+
+#### MCP credentials
+
+Claude Code keeps more than the account's token pair in its keychain item: OAuth tokens for remote
+MCP servers (`mcpOAuth`), the client secrets of servers that registered dynamically
+(`mcpOAuthClientConfig`), and plugin secrets (`pluginSecrets`). They belong to the machine, not to the
+account. Every keychain write agentctl makes (a live swap, an undo, a namespace swap, and a refresh that
+`status` saves into a namespace's item) writes the account's tokens together with every other
+top-level member of the destination item, as read again while agentctl holds the item's locks. An
+owned credential file never contributes such members, and a namespace whose item is absent receives
+none. A swap does not touch the `headers` and `env` of `mcpServers` entries in `~/.claude.json`, nor
+`mcp-needs-auth-cache.json` and `mcp-discovery-cache/`. An isolated session (`use <id>`) keeps its own
+MCP logins in its namespace's item; agentctl does not copy the live item's into it. Claude desktop app
+connectors use the app's own web session and are out of scope.
+
+The write passes the whole document to `security add-generic-password -U` as hex in its argument
+list, for every write, large or small; Claude Code does the same for a write over 4032 bytes. While
+that `security` call runs, the document is visible to any process of your user that can list process
+arguments, such as `ps -ww`. The write adds no application to the item's access list. If an
+application other than `security` last wrote the item, macOS can ask for keychain access during the
+write; the write then ends at its timeout and the swap reports `unknown` (exit 18).
+
+The document may be up to 256 KiB. A larger one is refused before anything is written: a swap exits
+31 with reason `credential_too_large`, and a `status` refresh names `credential_too_large` in the
+row's state. A document that grows past the limit while agentctl holds the item, or one whose
+argument list the host refuses because it offers less argument space than the limit needs, is a
+discard (exit 17) whose note begins with `credential_too_large`; `security` never ran and the item is
+unchanged.
+
+agentctl re-reads the item under its locks and writes it within the same hold, but Claude Code does
+not take those locks: an MCP token Claude Code writes while a swap holds the item can be lost; the
+server then asks you to authorize again. The window is the hold, reported as `lock.hold_ms`, and no
+check can detect the loss afterwards.
+
+With `--json`, a `use --live` or `use --undo` report whose swap reached the write adds
+`carried_members` (each carried member's name and, for an object, its entry count),
+`siblings_readback`, and `transport` (`argv`). `siblings_readback` is `equal` when every carried member
+read back as written, `differs` when another process rewrote one after agentctl's write (the note
+names them), and `unverified` when the readback failed; it does not detect the loss described above.
+Each write entry in `keychain-writes.jsonl` records the carried member names, the readback verdict,
+and the transport. `status` and `doctor` print `mcp_oauth_entries=N`, the number of MCP servers whose
+OAuth tokens a row's keychain document holds, for the live row and every namespace row whose
+credential was read; `status --json` carries the same count as the row member `mcp_oauth_entries`,
+null on other rows. A namespace row read from its credential file reports 0. No report, log, or audit
+entry carries a member's value.
 
 #### Remote Control
 
@@ -378,7 +424,7 @@ separate store roots do not coordinate one refresh chain.
 | 2 | Usage error or partial/refused result; status counts only failed rows actually shown. |
 | 10 | Compromised held lock or non-unreachable lock acquisition failure. |
 | 11 | Non-empty `CLAUDE_CODE_OAUTH_TOKEN` refuses switching. |
-| 12 | Encoded keychain line exceeds 4032 bytes including its newline. |
+| 12 | No longer produced: keychain writes pass the document to `security` in argv. It meant an encoded keychain line over 4032 bytes. |
 | 13 | Live undo requested from a shell selecting a namespace. |
 | 14 | Outgoing credential cannot be safely adopted. |
 | 15 | Selected namespace is not owned by this registry. |
@@ -394,6 +440,7 @@ separate store roots do not coordinate one refresh chain.
 | 27 | Undo found a different account in the live item. |
 | 29 | Identity/profile unavailable or expired live token without audit attribution. |
 | 30 | Remote Control pre-write refusal, desktop refusal, or incomplete desktop result (see below). |
+| 31 | Credential document over the 256 KiB keychain update limit; reason `credential_too_large`, nothing written. |
 | 129, 130, 143 | HUP, INT, or TERM after child teardown and cleanup. |
 
 Codes 25, 26, and 28 are retired. Isolated `use` and `exec` forward the child's exit code, or

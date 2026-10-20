@@ -280,9 +280,9 @@ func PlanOf(profile *Profile) (string, bool) {
 // in the shape the reference readers store.
 //
 // organization.rate_limit_tier of the same GET, verbatim, but only when
-// planWord admits it: the bound is what keeps the stored word inside the
-// keychain line budget, so a long server string cannot turn a later write
-// into a refusal. A refused value is logged by its length only — it is
+// planWord admits it: the bound is what keeps the stored word small
+// against the keychain update ceiling, so a long server string cannot turn
+// a later write into a refusal. A refused value is logged by its length only — it is
 // server text this build did not validate, and no log line may be where
 // it gets printed.
 func RateLimitTierOf(profile *Profile) (string, bool) {
