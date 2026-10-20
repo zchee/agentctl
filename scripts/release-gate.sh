@@ -119,6 +119,7 @@ production=(
 seam_files=(
 	internal/commands/use_live_deadline_testing.go
 	internal/commands/use_live_remote_control_testing.go
+	internal/commands/use_live_wipe_testing.go
 	internal/provider/claude/browser_testing.go
 	internal/provider/claude/oauth_endpoint_testing.go
 	internal/provider/claude/oauth_login_endpoint_testing.go

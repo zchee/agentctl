@@ -59,6 +59,7 @@ func namespacedReversal(ctx context.Context, paths *config.Paths, registry *conf
 	}
 	dir := paths.NamespaceDir(store.AccountUUID, store.OrganizationUUID)
 	displaced := readUndoCredential(ctx, dir, secret.AdoptedFile)
+	defer displaced.Wipe()
 	if displaced == nil {
 		return useReversal{}, errs.NewConfig(fmt.Sprintf("the credential that swap displaced is no longer in `%s`, so there is nothing to put back", filepath.Join(dir, secret.AdoptedFile)))
 	}
@@ -105,12 +106,16 @@ func liveReversal(ctx context.Context, paths *config.Paths, registry *config.Reg
 			if credentials == nil {
 				continue
 			}
+			// Only the digests and the identity verdict outlive this
+			// iteration; the snapshot itself is wiped before any branch.
 			digests, err := credentials.Digests()
+			sameIdentity := err == nil && claude.SameIdentity(credentials, &record)
+			credentials.Wipe()
 			if err != nil {
 				return useReversal{}, err
 			}
 			prefix, _ := secret.Digest8(digests.AccessSHA256)
-			if prefix != *entry.FromDigest8 || !claude.SameIdentity(credentials, &record) {
+			if prefix != *entry.FromDigest8 || !sameIdentity {
 				continue
 			}
 			if adoptedDigests != nil && *adoptedDigests == digests {
@@ -145,5 +150,6 @@ func readUndoCredential(ctx context.Context, dir, name string) *claude.Credentia
 	}
 	defer memguard.WipeBytes(read.Bytes)
 	credentials, _ := claude.ParseBlob(read.Bytes)
+	useObserveParsed(credentials)
 	return credentials
 }

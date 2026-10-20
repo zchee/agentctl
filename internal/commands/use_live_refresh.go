@@ -91,16 +91,12 @@ func useAdoptedTakesRefresh(dir string, derivedFrom claude.Digests) error {
 	if _, err := os.Stat(filepath.Join(dir, secret.PendingFile)); err == nil {
 		return errors.New("an unresolved pending write is parked in its namespace")
 	}
-	read, err := secret.ReadAdopted(dir)
-	if err != nil || !read.Present {
-		return errors.New("its adopted copy can no longer be read")
-	}
-	found, err := claude.ParseBlob(read.Bytes)
-	memguard.WipeBytes(read.Bytes)
-	if err != nil {
+	found, err := useReadStored(dir, useSourceAdopted)
+	if err != nil || found == nil {
 		return errors.New("its adopted copy can no longer be read")
 	}
 	digest, err := found.Digests()
+	found.Wipe()
 	if err != nil {
 		return err
 	}

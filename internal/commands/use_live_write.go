@@ -23,8 +23,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/awnumar/memguard"
-
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/fault"
@@ -336,21 +334,18 @@ func useReadKeychain(ctx context.Context, reader secret.Reader, service string) 
 		credentials, parseErr = claude.ParseBlob(blob)
 		return parseErr
 	})
+	useObserveParsed(credentials)
 	return credentials, err
 }
 
 func useRemoveDuplicateAdopted(paths *config.Paths, dir string, restored claude.Digests) error {
-	for _, read := range []func(string) (secret.ReadOutcome, error){secret.ReadCredentials, secret.ReadAdopted} {
-		item, err := read(dir)
-		if err != nil || !item.Present {
-			return nil
-		}
-		credentials, err := claude.ParseBlob(item.Bytes)
-		memguard.WipeBytes(item.Bytes)
-		if err != nil {
+	for _, source := range []useSourceKind{useSourceOwn, useSourceAdopted} {
+		credentials, err := useReadStored(dir, source)
+		if err != nil || credentials == nil {
 			return nil
 		}
 		digests, err := credentials.Digests()
+		credentials.Wipe()
 		if err != nil || digests != restored {
 			return nil
 		}

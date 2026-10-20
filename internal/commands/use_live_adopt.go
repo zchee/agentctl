@@ -78,7 +78,8 @@ func useDecideAdoption(ctx context.Context, parties useAdoptionParties) (useAdop
 		return refuse(claude.AdoptionUnreadable)
 	}
 	if parties.direction == secret.DirectionUndo && !parties.live {
-		existing, _, _ := useInspectStored(parties.subject.storeDir, useSourceAdopted, displacedDigest)
+		existing, _, found := useInspectStored(parties.subject.storeDir, useSourceAdopted, displacedDigest)
+		found.Wipe()
 		decision := claude.DecideUndoAdoption(claude.AdoptionInput{PendingPresent: usePendingPresent(parties.subject.storeDir), Existing: existing})
 		if decision.Kind == claude.AdoptionAlreadyPresent {
 			return nothing, nil
@@ -104,9 +105,12 @@ func useDecideAdoption(ctx context.Context, parties useAdoptionParties) (useAdop
 		var found *claude.Credentials
 		existing, _, found = useInspectStored(dir, useSourceAdopted, displacedDigest)
 		occupiedByAnother = found != nil && !claude.SameIdentity(found, parties.incoming)
+		found.Wipe()
 	case same:
 		dir = parties.subject.storeDir
-		existing, _, _ = useInspectStored(dir, useSourceAdopted, displacedDigest)
+		var found *claude.Credentials
+		existing, _, found = useInspectStored(dir, useSourceAdopted, displacedDigest)
+		found.Wipe()
 	default:
 		if parties.third == nil {
 			if parties.live && parties.identity != nil {
@@ -116,11 +120,14 @@ func useDecideAdoption(ctx context.Context, parties useAdoptionParties) (useAdop
 		}
 		dir = parties.paths.NamespaceDir(parties.third.AccountUUID, parties.third.OrganizationUUID)
 		if parkedBeside {
-			if _, digest, _ := useInspectStored(dir, useSourceOwn, displacedDigest); digest != nil && *digest == displacedDigest {
+			_, digest, own := useInspectStored(dir, useSourceOwn, displacedDigest)
+			own.Wipe()
+			if digest != nil && *digest == displacedDigest {
 				return nothing, nil
 			}
 			var found *claude.Credentials
 			existing, _, found = useInspectStored(dir, useSourceAdopted, displacedDigest)
+			defer found.Wipe()
 			if existing.Kind == claude.ExistingDifferent && found != nil {
 				if !claude.SameIdentity(found, parties.third) {
 					return refuse(claude.AdoptionOccupiedByAnother)
@@ -131,7 +138,9 @@ func useDecideAdoption(ctx context.Context, parties useAdoptionParties) (useAdop
 				existing = claude.Existing{Kind: claude.ExistingAbsent}
 			}
 		} else {
-			existing, prior, _ = useInspectStored(dir, useSourceOwn, displacedDigest)
+			var found *claude.Credentials
+			existing, prior, found = useInspectStored(dir, useSourceOwn, displacedDigest)
+			found.Wipe()
 		}
 	}
 	targetMigrated := false
@@ -186,6 +195,7 @@ func usePerformAdoption(ctx context.Context, paths *config.Paths, plan useAdopti
 		return new(secret.AdoptedFile), nil, ""
 	case useAdoptionThirdStore:
 		current, err := useReadStored(plan.dir, useSourceOwn)
+		defer current.Wipe()
 		if err != nil {
 			return nil, nil, claude.AdoptionUnreadable
 		}
@@ -226,7 +236,9 @@ func useReadStored(dir string, source useSourceKind) (*claude.Credentials, error
 		return nil, err
 	}
 	defer memguard.WipeBytes(read.Bytes)
-	return claude.ParseBlob(read.Bytes)
+	credentials, err := claude.ParseBlob(read.Bytes)
+	useObserveParsed(credentials)
+	return credentials, err
 }
 
 func useInspectStored(dir string, source useSourceKind, displaced claude.Digests) (claude.Existing, *claude.Digests, *claude.Credentials) {
@@ -258,6 +270,7 @@ func useMigrated(ctx context.Context, paths *config.Paths, record *config.Accoun
 		return false
 	}
 	credentials, err := useReadKeychain(ctx, secret.NewReader(), subject.service)
+	credentials.Wipe()
 	return err == nil && credentials != nil
 }
 

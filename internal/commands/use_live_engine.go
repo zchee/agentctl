@@ -52,6 +52,9 @@ type useLiveSwap struct {
 	// desktopClause is the desktop switch's part of the question, empty
 	// unless `--desktop` was given without `--yes`.
 	desktopClause string
+	// refresher refreshes an expired incoming credential; nil uses the
+	// OAuth client this process is configured for.
+	refresher claude.TokenRefresher
 }
 
 type useSource struct {
@@ -180,9 +183,9 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 		dir = swap.paths.NamespaceDir(incoming.record.AccountUUID, incoming.record.OrganizationUUID)
 	}
 	credentials, err := useReadStored(dir, incoming.source.kind)
-	// A refresh may hand back another value; the closure wipes whichever
-	// one the swap holds last.
-	defer func() { credentials.Wipe() }()
+	// Bound now, so the value read here is wiped even when a failed refresh
+	// leaves nothing to replace it; a distinct refreshed value gets its own.
+	defer credentials.Wipe()
 	if err != nil || credentials == nil {
 		note := "the adopted copy that swap displaced is gone or unreadable, so there is nothing to put back"
 		if incoming.source.kind == useSourceOwn {
@@ -318,13 +321,21 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 				return &useReport{outcome: claude.SwapOutcome{Kind: claude.SwapNeedsRefresh}, service: service, note: new(fmt.Sprintf("`%s`'s parked credential has expired, and %v, so a refresh of it could not be saved; nothing was written — run `agentctl claude status` to settle that namespace, then run this again", usePrintable(incoming.record.AccountUUID), err))}
 			}
 		}
-		client, err := claude.NewOAuthClientFromEnv()
-		if err != nil {
-			return useCannotAdopt(claude.AdoptionUnreadable, service)
+		refresher := swap.refresher
+		if refresher == nil {
+			client, err := claude.NewOAuthClientFromEnv()
+			if err != nil {
+				return useCannotAdopt(claude.AdoptionUnreadable, service)
+			}
+			refresher = client
 		}
-		credentials, err = client.RefreshAccess(ctx, credentials)
+		refreshed, err := refresher.RefreshAccess(ctx, credentials)
 		if err != nil {
 			return useRefused(claude.SwapRefusal{Kind: claude.SwapCannotAdopt, Adoption: claude.AdoptionUnreadable}, service, err.Error())
+		}
+		if refreshed != credentials {
+			defer refreshed.Wipe()
+			credentials = refreshed
 		}
 		var saveErr error
 		home, consequence := "its own store", "that account may need `agentctl claude login`"
