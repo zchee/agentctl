@@ -267,6 +267,24 @@ func (f *Fixture) SecurityWrite(line string) Output {
 	return Finish(f.tb, cmd, stdout, stderr)
 }
 
+// SecurityWriteArgvCommand returns an unstarted command that runs the fake
+// security the way the argv write transport does: add-generic-password with
+// the account, the service and the hex payload in argv, and no standard
+// input. A test that needs a process group or a wait delay sets them before
+// starting it.
+func (f *Fixture) SecurityWriteArgvCommand(account, service, hex string) *exec.Cmd {
+	f.tb.Helper()
+	cmd := exec.CommandContext(testContext(f.tb), f.SecurityBin(), "add-generic-password", "-U", "-a", account, "-s", service, "-X", hex)
+	return f.Apply(cmd)
+}
+
+// SecurityWriteArgv runs SecurityWriteArgvCommand to completion and returns
+// what it said.
+func (f *Fixture) SecurityWriteArgv(account, service, hex string) Output {
+	f.tb.Helper()
+	return Run(f.tb, f.SecurityWriteArgvCommand(account, service, hex))
+}
+
 // ItemFileName returns the name fold the fake security applies to an
 // account or a service. The fold has to match the tr -c 'A-Za-z0-9._-' '_'
 // inside the installed script; the two change together.
