@@ -16,6 +16,8 @@ package claude
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
@@ -181,6 +183,27 @@ type Credentials struct {
 	// Extra is every member this build does not recognise, in arrival
 	// order.
 	Extra []ExtraMember
+	// Siblings is every top-level member of the document other than
+	// claudeAiOauth, in arrival order, with its value kept opaque. Claude
+	// Code keeps MCP OAuth tokens, MCP client secrets and plugin secrets
+	// there, in the same keychain item as the account credential; they are
+	// identities at third parties, so only [Credentials.KeychainBlobJSON]
+	// writes them back and no credential file ever receives them.
+	Siblings []ExtraMember
+}
+
+// SiblingMeta describes one top-level sibling without carrying its value,
+// so it can be reported, compared and kept after the value is wiped.
+type SiblingMeta struct {
+	// Name is the member name.
+	Name string
+	// Entries is the number of distinct member names of an object-valued
+	// sibling, or nil when the value is not an object.
+	Entries *int
+	// SHA256 is the lowercase hex SHA-256 of the member exactly as
+	// [Credentials.KeychainBlobJSON] writes it: the quoted name, a colon
+	// and the value.
+	SHA256 string
 }
 
 // ParseBlob parses a credential blob in Claude Code's shape.
@@ -189,8 +212,14 @@ type Credentials struct {
 // because older blobs genuinely lack refreshTokenExpiresAt, clientId and
 // tokenAccount, and refusing them would hide real accounts from the user.
 //
+// Every top-level member other than claudeAiOauth is kept in Siblings; a
+// duplicated top-level name keeps its first position and its last value,
+// the rule every reader of the document applies.
+//
 // The caller keeps responsibility for wiping blob: it carries the tokens
-// in plaintext.
+// in plaintext. The returned credentials are the caller's to dispose of
+// with [Credentials.Wipe]; on an error nothing copied from blob is left
+// behind.
 func ParseBlob(blob []byte) (*Credentials, error) {
 	root, err := readWholeValue(blob)
 	if err != nil {
@@ -280,12 +309,84 @@ func ParseBlob(blob []byte) (*Credentials, error) {
 	}
 
 	if credentials.AccessToken == nil {
+		credentials.Wipe()
 		return nil, &MissingFieldError{Field: "accessToken"}
 	}
 	if !hasMember(members, "expiresAt") || !isInt64(memberValue(members, "expiresAt")) {
+		credentials.Wipe()
 		return nil, &MissingFieldError{Field: "expiresAt"}
 	}
+
+	// The root members are wiped when this function returns, so each kept
+	// sibling is a copy the credentials own.
+	for _, m := range rootMembers {
+		if m.name == BlobRoot {
+			continue
+		}
+		credentials.Siblings = append(credentials.Siblings, ExtraMember{Name: m.name, Value: bytes.Clone(m.value)})
+	}
 	return credentials, nil
+}
+
+// Wipe zeroes every sibling and unrecognised member value and empties both
+// lists, because those values can carry third-party tokens in plaintext.
+// The token fields are sealed secrets with their own lifetime and are left
+// alone. Wipe is safe on a nil receiver, so an owner can defer it before
+// knowing whether a parse succeeded.
+func (c *Credentials) Wipe() {
+	if c == nil {
+		return
+	}
+	wipeExtraMembers(c.Siblings)
+	wipeExtraMembers(c.Extra)
+	c.Siblings = nil
+	c.Extra = nil
+}
+
+// CarrySiblingsFrom replaces these credentials' siblings with a copy of
+// src's, wiping the ones they held. A nil src clears them: a destination
+// with no keychain item has nothing to carry, and siblings that arrived
+// from anywhere else must not reach the item.
+func (c *Credentials) CarrySiblingsFrom(src *Credentials) {
+	// Wiping first would destroy the very values being carried.
+	if src == c {
+		return
+	}
+	wipeExtraMembers(c.Siblings)
+	c.Siblings = nil
+	if src == nil || len(src.Siblings) == 0 {
+		return
+	}
+	c.Siblings = make([]ExtraMember, 0, len(src.Siblings))
+	for _, m := range src.Siblings {
+		c.Siblings = append(c.Siblings, ExtraMember{Name: m.Name, Value: bytes.Clone(m.Value)})
+	}
+}
+
+// SiblingSummary returns the name, entry count and digest of every sibling
+// in order: metadata that carries no value and outlives [Credentials.Wipe].
+//
+// The digest covers the bytes the keychain serializer emits for the member,
+// not the bytes it arrived as, so two documents that differ only in
+// insignificant whitespace or escaping summarize equal.
+func (c *Credentials) SiblingSummary() ([]SiblingMeta, error) {
+	summary := make([]SiblingMeta, 0, len(c.Siblings))
+	for _, m := range c.Siblings {
+		digest, err := siblingDigest(m)
+		if err != nil {
+			return nil, fmt.Errorf("the credentials blob member `%s` is not valid JSON: %w", m.Name, err)
+		}
+		meta := SiblingMeta{Name: m.Name, SHA256: digest}
+		if m.Value.Kind() == '{' {
+			entries, err := objectEntries(m.Value)
+			if err != nil {
+				return nil, fmt.Errorf("the credentials blob member `%s` is not valid JSON: %w", m.Name, err)
+			}
+			meta.Entries = &entries
+		}
+		summary = append(summary, meta)
+	}
+	return summary, nil
 }
 
 // BlobJSON serializes the blob, ready to be written to its store.
@@ -295,22 +396,117 @@ func ParseBlob(blob []byte) (*Credentials, error) {
 // members are omitted rather than written as null, which is what Claude
 // Code does and what makes the round-trip of an old blob byte-stable.
 //
+// Siblings are never written: this is the document credential files hold,
+// and those files must not receive third-party identities.
+//
 // The output carries the tokens in plaintext. It exists only to be handed
 // to a credential store, and the caller must wipe it after that I/O.
 func (c *Credentials) BlobJSON() ([]byte, error) {
 	var buffer bytes.Buffer
 	enc := jsontext.NewEncoder(&buffer)
-
-	write := func(tokens ...jsontext.Token) error {
-		for _, token := range tokens {
-			if err := enc.WriteToken(token); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if err := write(jsontext.BeginObject, jsontext.String(BlobRoot), jsontext.BeginObject); err != nil {
+	if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(BlobRoot)); err != nil {
 		return nil, err
+	}
+	if err := c.writeAccountObject(enc); err != nil {
+		return nil, err
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		return nil, err
+	}
+
+	// The encoder appends a newline after the top-level value; the blob is
+	// a single line in both its stores.
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+}
+
+// KeychainBlobJSON serializes the whole keychain document: claudeAiOauth
+// as [Credentials.BlobJSON] writes it, then every sibling in order.
+//
+// Sibling values are written as the decoder read them, re-encoded under
+// options that accept a duplicated name and invalid UTF-8 anywhere inside
+// a value, so a document Claude Code wrote never makes the write fail.
+// Re-encoding removes insignificant whitespace and normalizes escapes;
+// what is preserved is the value, and [Credentials.SiblingSummary]
+// digests the re-encoded bytes for that reason.
+//
+// The output carries the account tokens and every sibling's secrets in
+// plaintext. It exists only to be handed to the keychain, and the caller
+// must wipe it after that I/O.
+func (c *Credentials) KeychainBlobJSON() ([]byte, error) {
+	var buffer bytes.Buffer
+	// A buffer that grows leaves the plaintext it outgrew behind in memory
+	// no one can wipe, so it is sized for the whole document up front.
+	size := 4096
+	for _, m := range c.Siblings {
+		size += len(m.Name) + len(m.Value) + 8
+	}
+	for _, m := range c.Extra {
+		size += len(m.Name) + len(m.Value) + 8
+	}
+	buffer.Grow(size)
+	enc := jsontext.NewEncoder(&buffer, keychainValueOptions...)
+	if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(BlobRoot)); err != nil {
+		memguard.WipeBytes(buffer.Bytes())
+		return nil, err
+	}
+	if err := c.writeAccountObject(enc); err != nil {
+		memguard.WipeBytes(buffer.Bytes())
+		return nil, err
+	}
+	emitted := map[string]bool{BlobRoot: true}
+	for _, m := range c.Siblings {
+		// A second member under a name already written would leave the
+		// meaning of the document to whichever reader parses it; the
+		// account credential and the first sibling of a name are the ones
+		// written.
+		if emitted[m.Name] {
+			continue
+		}
+		emitted[m.Name] = true
+		if err := enc.WriteToken(jsontext.String(m.Name)); err != nil {
+			memguard.WipeBytes(buffer.Bytes())
+			return nil, err
+		}
+		if err := enc.WriteValue(m.Value); err != nil {
+			memguard.WipeBytes(buffer.Bytes())
+			return nil, fmt.Errorf("the credentials blob member `%s` is not valid JSON: %w", m.Name, err)
+		}
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		memguard.WipeBytes(buffer.Bytes())
+		return nil, err
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+}
+
+// keychainValueOptions are the options sibling values are written and read
+// under. The parser already accepted a duplicated name, and Claude Code's
+// own serializer never emits invalid UTF-8; accepting both keeps the write
+// from failing on a value this build does not own.
+var keychainValueOptions = []jsontext.Options{
+	jsontext.AllowDuplicateNames(true),
+	jsontext.AllowInvalidUTF8(true),
+}
+
+// writeTokens writes each token in order.
+func writeTokens(enc *jsontext.Encoder, tokens ...jsontext.Token) error {
+	for _, token := range tokens {
+		if err := enc.WriteToken(token); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeAccountObject writes the claudeAiOauth object: known members in the
+// order Claude Code writes them, then every unrecognised member in the
+// order it arrived.
+func (c *Credentials) writeAccountObject(enc *jsontext.Encoder) error {
+	write := func(tokens ...jsontext.Token) error {
+		return writeTokens(enc, tokens...)
+	}
+	if err := write(jsontext.BeginObject); err != nil {
+		return err
 	}
 
 	emitted := make(map[string]bool)
@@ -332,33 +528,33 @@ func (c *Credentials) BlobJSON() ([]byte, error) {
 	}
 
 	if err := writeSecretMember("accessToken", c.AccessToken); err != nil {
-		return nil, err
+		return err
 	}
 	if c.RefreshToken != nil {
 		if err := writeSecretMember("refreshToken", c.RefreshToken); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err := write(jsontext.String("expiresAt"), jsontext.Int(c.ExpiresAtMillis)); err != nil {
-		return nil, err
+		return err
 	}
 	emitted["expiresAt"] = true
 	if c.RefreshTokenExpiresAtMillis != nil {
 		if err := write(jsontext.String("refreshTokenExpiresAt"), jsontext.Int(*c.RefreshTokenExpiresAtMillis)); err != nil {
-			return nil, err
+			return err
 		}
 		emitted["refreshTokenExpiresAt"] = true
 	}
 	if err := write(jsontext.String("scopes"), jsontext.BeginArray); err != nil {
-		return nil, err
+		return err
 	}
 	for _, scope := range c.Scopes {
 		if err := write(jsontext.String(scope)); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err := write(jsontext.EndArray); err != nil {
-		return nil, err
+		return err
 	}
 	emitted["scopes"] = true
 	for _, optional := range []struct {
@@ -373,16 +569,16 @@ func (c *Credentials) BlobJSON() ([]byte, error) {
 			continue
 		}
 		if err := write(jsontext.String(optional.name), jsontext.String(*optional.value)); err != nil {
-			return nil, err
+			return err
 		}
 		emitted[optional.name] = true
 	}
 	if c.TokenAccount != nil {
 		if err := write(jsontext.String("tokenAccount")); err != nil {
-			return nil, err
+			return err
 		}
 		if err := json.MarshalEncode(enc, c.TokenAccount); err != nil {
-			return nil, err
+			return err
 		}
 		emitted["tokenAccount"] = true
 	}
@@ -393,19 +589,13 @@ func (c *Credentials) BlobJSON() ([]byte, error) {
 			continue
 		}
 		if err := write(jsontext.String(extra.Name)); err != nil {
-			return nil, err
+			return err
 		}
 		if err := enc.WriteValue(extra.Value); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	if err := write(jsontext.EndObject, jsontext.EndObject); err != nil {
-		return nil, err
-	}
-
-	// The encoder appends a newline after the top-level value; the blob is
-	// a single line in both its stores.
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+	return write(jsontext.EndObject)
 }
 
 // AuthorizationHeader returns the Authorization header value for a request
@@ -759,6 +949,62 @@ func collapseObject(object jsontext.Value) ([]rawMember, error) {
 func wipeMembers(members []rawMember) {
 	for _, m := range members {
 		memguard.WipeBytes(m.value)
+	}
+}
+
+// wipeExtraMembers wipes the kept member values, because any of them can
+// carry a token.
+func wipeExtraMembers(members []ExtraMember) {
+	for _, m := range members {
+		memguard.WipeBytes(m.Value)
+	}
+}
+
+// siblingDigest is the SHA-256 of the member exactly as the keychain
+// serializer writes it inside the document: the quoted name, a colon and
+// the re-encoded value.
+func siblingDigest(m ExtraMember) (string, error) {
+	var buffer bytes.Buffer
+	buffer.Grow(len(m.Name) + len(m.Value) + 16)
+	// The scratch encoding carries the value's secrets.
+	defer func() { memguard.WipeBytes(buffer.Bytes()) }()
+	enc := jsontext.NewEncoder(&buffer, keychainValueOptions...)
+	if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(m.Name)); err != nil {
+		return "", err
+	}
+	if err := enc.WriteValue(m.Value); err != nil {
+		return "", err
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		return "", err
+	}
+	// A one-member object holds, between its braces, exactly the bytes the
+	// member occupies in the full document.
+	object := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	sum := sha256.Sum256(object[1 : len(object)-1])
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// objectEntries counts the distinct member names of an object value, so a
+// duplicated name counts once, as every reader of the document sees it.
+func objectEntries(object jsontext.Value) (int, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(object), keychainValueOptions...)
+	if _, err := dec.ReadToken(); err != nil {
+		return 0, err
+	}
+	names := make(map[string]struct{})
+	for {
+		token, err := dec.ReadToken()
+		if err != nil {
+			return 0, err
+		}
+		if token.Kind() == '}' {
+			return len(names), nil
+		}
+		names[token.String()] = struct{}{}
+		if err := dec.SkipValue(); err != nil {
+			return 0, err
+		}
 	}
 }
 

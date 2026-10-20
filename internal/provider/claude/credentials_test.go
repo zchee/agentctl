@@ -31,6 +31,21 @@ import (
 	"github.com/zchee/agentctl/internal/secret"
 )
 
+// newBlobGolden is the exact compact document the blob's author writes for
+// the new fixture: known members in their fixed order, then the
+// unrecognised profile member, all on one line. Every serializer that does
+// not add siblings must keep producing these bytes.
+const newBlobGolden = `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-FAKE-NEW-ACCESS-TOKEN-NOT-A-REAL-CREDENTIAL",` +
+	`"refreshToken":"sk-ant-ort01-FAKE-NEW-REFRESH-TOKEN-NOT-A-REAL-CREDENTIAL",` +
+	`"expiresAt":1757600000000,"refreshTokenExpiresAt":1759900000000,` +
+	`"scopes":["user:file_upload","user:inference","user:mcp_servers","user:profile","user:sessions:claude_code"],` +
+	`"subscriptionType":"max","rateLimitTier":"default_claude_max_20x",` +
+	`"clientId":"9d1c250a-e61b-44d9-88ed-5944d1962f5e",` +
+	`"tokenAccount":{"uuid":"11111111-1111-4111-8111-111111111111","emailAddress":"user@example.com",` +
+	`"organizationUuid":"22222222-2222-4222-8222-222222222222","organizationName":"Example Org",` +
+	`"workspaceId":null,"workspaceName":null},` +
+	`"profile":{"display_name":"Example User","has_claude_max":true}}}`
+
 // fixtureBlob reads a credential fixture from testdata/credentials.
 func fixtureBlob(t *testing.T, name string) []byte {
 	t.Helper()
@@ -245,21 +260,8 @@ func TestBlobJSONRoundTripsUnknownKeys(t *testing.T) {
 func TestBlobJSONWritesTheFixtureInItsAuthorsShape(t *testing.T) {
 	t.Parallel()
 
-	// The exact compact document the blob's author would write for the new
-	// fixture: known members in their fixed order, then the unrecognised
-	// profile member, all on one line.
 	credentials := parseFixture(t, "credentials-new-blob.json")
-	want := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-FAKE-NEW-ACCESS-TOKEN-NOT-A-REAL-CREDENTIAL",` +
-		`"refreshToken":"sk-ant-ort01-FAKE-NEW-REFRESH-TOKEN-NOT-A-REAL-CREDENTIAL",` +
-		`"expiresAt":1757600000000,"refreshTokenExpiresAt":1759900000000,` +
-		`"scopes":["user:file_upload","user:inference","user:mcp_servers","user:profile","user:sessions:claude_code"],` +
-		`"subscriptionType":"max","rateLimitTier":"default_claude_max_20x",` +
-		`"clientId":"9d1c250a-e61b-44d9-88ed-5944d1962f5e",` +
-		`"tokenAccount":{"uuid":"11111111-1111-4111-8111-111111111111","emailAddress":"user@example.com",` +
-		`"organizationUuid":"22222222-2222-4222-8222-222222222222","organizationName":"Example Org",` +
-		`"workspaceId":null,"workspaceName":null},` +
-		`"profile":{"display_name":"Example User","has_claude_max":true}}}`
-	if diff := gocmp.Diff(want, string(mustBlobJSON(t, credentials))); diff != "" {
+	if diff := gocmp.Diff(newBlobGolden, string(mustBlobJSON(t, credentials))); diff != "" {
 		t.Fatalf("blob mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -562,5 +564,509 @@ func TestRefreshMarginIsFiveMinutes(t *testing.T) {
 
 	if RefreshMarginMillis != 300_000 {
 		t.Fatalf("the refresh lead is five minutes, got %d ms", RefreshMarginMillis)
+	}
+}
+
+// minimalAccount is the smallest claudeAiOauth object, written in the shape
+// the serializer emits, so a document built around it round-trips byte for
+// byte.
+const minimalAccount = `"claudeAiOauth":{"accessToken":"a","expiresAt":5,"scopes":[]}`
+
+// mustParse parses a document a test built.
+func mustParse(t *testing.T, document string) *Credentials {
+	t.Helper()
+	credentials, err := ParseBlob([]byte(document))
+	if err != nil {
+		t.Fatalf("the document should parse: %v\n%s", err, document)
+	}
+	return credentials
+}
+
+// mustKeychainBlobJSON serializes the keychain document.
+func mustKeychainBlobJSON(t *testing.T, c *Credentials) []byte {
+	t.Helper()
+	blob, err := c.KeychainBlobJSON()
+	if err != nil {
+		t.Fatalf("keychain blob JSON: %v", err)
+	}
+	return blob
+}
+
+// mustSiblingSummary returns the sibling metadata.
+func mustSiblingSummary(t *testing.T, c *Credentials) []SiblingMeta {
+	t.Helper()
+	summary, err := c.SiblingSummary()
+	if err != nil {
+		t.Fatalf("sibling summary: %v", err)
+	}
+	return summary
+}
+
+// canonicalMember encodes name and value as one member of an object, under
+// the options the keychain serializer documents, and returns the member's
+// bytes without the braces: what the document carries for it.
+func canonicalMember(t *testing.T, name string, value jsontext.Value) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	enc := jsontext.NewEncoder(&buffer, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.WriteToken(jsontext.String(name)); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.WriteValue(value); err != nil {
+		t.Fatalf("encoding %s: %v", name, err)
+	}
+	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+		t.Fatal(err)
+	}
+	object := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	return bytes.Clone(object[1 : len(object)-1])
+}
+
+// nonZeroBytes counts the bytes of every buffer that are not zero.
+func nonZeroBytes(buffers ...[]byte) int {
+	count := 0
+	for _, buffer := range buffers {
+		for _, b := range buffer {
+			if b != 0 {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// memberValues returns the value buffers of members, aliased rather than
+// copied, so a test can inspect them after the owner wipes them.
+func memberValues(members []ExtraMember) [][]byte {
+	values := make([][]byte, 0, len(members))
+	for _, m := range members {
+		values = append(values, m.Value)
+	}
+	return values
+}
+
+func TestParseBlobKeepsTheTopLevelSiblings(t *testing.T) {
+	t.Parallel()
+
+	// Claude Code keeps MCP OAuth tokens beside the account credential in
+	// the one keychain item; dropping them on a rewrite logs the user out
+	// of every remote MCP server.
+	tests := map[string]struct {
+		document string
+		want     []ExtraMember
+	}{
+		"success: siblings are kept in arrival order around the account": {
+			document: `{"mcpOAuth":{"srv|0123456789abcdef":{"accessToken":"mcp-token"}},` + minimalAccount +
+				`,"mcpOAuthClientConfig":{"srv|0123456789abcdef":{"clientSecret":"client-secret"}},"pluginSecrets":{"p":"v"}}`,
+			want: []ExtraMember{
+				{Name: "mcpOAuth", Value: jsontext.Value(`{"srv|0123456789abcdef":{"accessToken":"mcp-token"}}`)},
+				{Name: "mcpOAuthClientConfig", Value: jsontext.Value(`{"srv|0123456789abcdef":{"clientSecret":"client-secret"}}`)},
+				{Name: "pluginSecrets", Value: jsontext.Value(`{"p":"v"}`)},
+			},
+		},
+		"success: a duplicated top-level name keeps its first position and its last value": {
+			document: `{"mcpOAuth":{"first":1},` + minimalAccount + `,"pluginSecrets":{},"mcpOAuth":{"last":2}}`,
+			want: []ExtraMember{
+				{Name: "mcpOAuth", Value: jsontext.Value(`{"last":2}`)},
+				{Name: "pluginSecrets", Value: jsontext.Value(`{}`)},
+			},
+		},
+		"success: a wrong-typed member is kept opaque": {
+			document: `{` + minimalAccount + `,"mcpOAuth":"not an object","pluginSecrets":[1,{"x":2}],"empty":null,"count":7.5}`,
+			want: []ExtraMember{
+				{Name: "mcpOAuth", Value: jsontext.Value(`"not an object"`)},
+				{Name: "pluginSecrets", Value: jsontext.Value(`[1,{"x":2}]`)},
+				{Name: "empty", Value: jsontext.Value(`null`)},
+				{Name: "count", Value: jsontext.Value(`7.5`)},
+			},
+		},
+		"success: a document with only the account has no siblings": {
+			document: `{` + minimalAccount + `}`,
+			want:     nil,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			credentials := mustParse(t, tt.document)
+			if diff := gocmp.Diff(tt.want, credentials.Siblings); diff != "" {
+				t.Fatalf("siblings mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestBlobJSONNeverWritesSiblings(t *testing.T) {
+	t.Parallel()
+
+	// The credential files are written through BlobJSON, and an MCP token
+	// is the user's identity at a third party, not part of the account
+	// being stored; adding the siblings must leave those bytes unchanged.
+	withSiblings := strings.TrimSuffix(newBlobGolden, "}") +
+		`,"mcpOAuth":{"srv|0123456789abcdef":{"accessToken":"SIBLING-CANARY-9f31"}},"pluginSecrets":{"p":"SIBLING-CANARY-9f31"}}`
+	credentials := mustParse(t, withSiblings)
+	if len(credentials.Siblings) != 2 {
+		t.Fatalf("the siblings should be read, got %v", credentials.Siblings)
+	}
+	got := mustBlobJSON(t, credentials)
+	if diff := gocmp.Diff(newBlobGolden, string(got)); diff != "" {
+		t.Fatalf("the file document changed (-want +got):\n%s", diff)
+	}
+	if bytes.Contains(got, []byte("SIBLING-CANARY-9f31")) {
+		t.Fatal("a sibling value reached the file document")
+	}
+}
+
+func TestKeychainBlobJSONWritesTheAccountThenTheSiblings(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		document string
+		want     string
+	}{
+		"success: without siblings it writes the golden bytes": {
+			document: string(fixtureBlob(t, "credentials-new-blob.json")),
+			want:     newBlobGolden,
+		},
+		"success: the account comes first and the siblings follow in arrival order": {
+			document: `{"mcpOAuth":{"a":{"accessToken":"m"}},` + minimalAccount + `,"pluginSecrets":{"p":"v"}}`,
+			want:     `{` + minimalAccount + `,"mcpOAuth":{"a":{"accessToken":"m"}},"pluginSecrets":{"p":"v"}}`,
+		},
+		"success: a wrong-typed sibling is written back as it arrived": {
+			document: `{` + minimalAccount + `,"pluginSecrets":[1,"two",null],"mcpOAuth":"text"}`,
+			want:     `{` + minimalAccount + `,"pluginSecrets":[1,"two",null],"mcpOAuth":"text"}`,
+		},
+		"success: a duplicated top-level name is written once with its last value": {
+			document: `{"mcpOAuth":{"first":1},` + minimalAccount + `,"mcpOAuth":{"last":2}}`,
+			want:     `{` + minimalAccount + `,"mcpOAuth":{"last":2}}`,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			credentials := mustParse(t, tt.document)
+			if diff := gocmp.Diff(tt.want, string(mustKeychainBlobJSON(t, credentials))); diff != "" {
+				t.Fatalf("keychain document mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestKeychainBlobJSONSkipsASiblingThatNamesTheAccount(t *testing.T) {
+	t.Parallel()
+
+	// The field is exported, so a sibling can be set by hand; the account
+	// object this build serializes is the one it vouches for.
+	credentials := mustParse(t, `{`+minimalAccount+`}`)
+	credentials.Siblings = []ExtraMember{
+		{Name: BlobRoot, Value: jsontext.Value(`{"accessToken":"forged","expiresAt":1}`)},
+		{Name: "pluginSecrets", Value: jsontext.Value(`{"p":"v"}`)},
+		{Name: "pluginSecrets", Value: jsontext.Value(`{"p":"second"}`)},
+	}
+	want := `{` + minimalAccount + `,"pluginSecrets":{"p":"v"}}`
+	if diff := gocmp.Diff(want, string(mustKeychainBlobJSON(t, credentials))); diff != "" {
+		t.Fatalf("keychain document mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestKeychainBlobJSONReencodesASiblingValueWithoutChangingIt(t *testing.T) {
+	t.Parallel()
+
+	// A value with insignificant whitespace, a nested duplicate name and a
+	// non-ASCII escape: the default encoder refuses the duplicate, so the
+	// keychain serializer must use its own options, and what it preserves
+	// is the value, not the original bytes.
+	seedValue := jsontext.Value(`{ "srv" : { "a" : 1 , "a" : 2 } , "who" : "café" }`)
+	document := `{` + minimalAccount + `,"mcpOAuth":` + string(seedValue) + `}`
+	if !strings.Contains(document, `é`) {
+		t.Fatal("the seed must carry the escape literally")
+	}
+
+	var strict bytes.Buffer
+	if err := jsontext.NewEncoder(&strict).WriteValue(seedValue); err == nil {
+		t.Fatal("the default encoder should refuse the nested duplicate name")
+	}
+
+	credentials := mustParse(t, document)
+	written := mustKeychainBlobJSON(t, credentials)
+
+	wantMember := canonicalMember(t, "mcpOAuth", seedValue)
+	if diff := gocmp.Diff(`"mcpOAuth":{"srv":{"a":1,"a":2},"who":"café"}`, string(wantMember)); diff != "" {
+		t.Fatalf("canonical member mismatch (-want +got):\n%s", diff)
+	}
+	if !bytes.Contains(written, wantMember) {
+		t.Fatalf("the document does not carry the canonical member:\n%s", written)
+	}
+
+	reparsed := mustParse(t, string(written))
+	if len(reparsed.Siblings) != 1 {
+		t.Fatalf("one sibling expected, got %v", reparsed.Siblings)
+	}
+	decode := func(value jsontext.Value) any {
+		var decoded any
+		if err := json.Unmarshal(value, &decoded, jsontext.AllowDuplicateNames(true)); err != nil {
+			t.Fatalf("decoding %s: %v", value, err)
+		}
+		return decoded
+	}
+	if diff := gocmp.Diff(decode(seedValue), decode(reparsed.Siblings[0].Value)); diff != "" {
+		t.Fatalf("the value changed (-seed +written):\n%s", diff)
+	}
+
+	summary := mustSiblingSummary(t, credentials)
+	if diff := gocmp.Diff(sha256Hex(string(wantMember)), summary[0].SHA256); diff != "" {
+		t.Fatalf("the digest is not over the encoder's bytes (-want +got):\n%s", diff)
+	}
+}
+
+func TestSiblingSummaryDescribesEachSiblingWithoutItsValue(t *testing.T) {
+	t.Parallel()
+
+	two, one, zero := 2, 1, 0
+	tests := map[string]struct {
+		document    string
+		wantNames   []string
+		wantEntries []*int
+	}{
+		"success: object siblings count their distinct names": {
+			document: `{` + minimalAccount + `,"mcpOAuth":{"a|1":{"accessToken":"SIBLING-CANARY-9f31"},"b|2":{"accessToken":"x"},"a|1":{"accessToken":"y"}},` +
+				`"mcpOAuthClientConfig":{"a|1":{"clientSecret":"SIBLING-CANARY-9f31"}},"pluginSecrets":{}}`,
+			wantNames:   []string{"mcpOAuth", "mcpOAuthClientConfig", "pluginSecrets"},
+			wantEntries: []*int{&two, &one, &zero},
+		},
+		"success: a non-object sibling has no entry count": {
+			document:    `{` + minimalAccount + `,"mcpOAuth":"SIBLING-CANARY-9f31","pluginSecrets":[1,2],"flag":true}`,
+			wantNames:   []string{"mcpOAuth", "pluginSecrets", "flag"},
+			wantEntries: []*int{nil, nil, nil},
+		},
+		"success: no siblings summarize empty": {
+			document:    `{` + minimalAccount + `}`,
+			wantNames:   []string{},
+			wantEntries: []*int{},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			credentials := mustParse(t, tt.document)
+			summary := mustSiblingSummary(t, credentials)
+			names := make([]string, 0, len(summary))
+			entries := make([]*int, 0, len(summary))
+			for i, meta := range summary {
+				names = append(names, meta.Name)
+				entries = append(entries, meta.Entries)
+				want := sha256Hex(string(canonicalMember(t, credentials.Siblings[i].Name, credentials.Siblings[i].Value)))
+				if meta.SHA256 != want {
+					t.Errorf("%s: digest %s, want %s", meta.Name, meta.SHA256, want)
+				}
+			}
+			if diff := gocmp.Diff(tt.wantNames, names); diff != "" {
+				t.Fatalf("names mismatch (-want +got):\n%s", diff)
+			}
+			if diff := gocmp.Diff(tt.wantEntries, entries); diff != "" {
+				t.Fatalf("entries mismatch (-want +got):\n%s", diff)
+			}
+			if rendered := fmt.Sprintf("%+v %#v", summary, summary); strings.Contains(rendered, "SIBLING-CANARY-9f31") {
+				t.Fatalf("the summary carries a value: %s", rendered)
+			}
+		})
+	}
+}
+
+func TestSiblingSummaryIsStableAcrossAReparse(t *testing.T) {
+	t.Parallel()
+
+	// The readback after a keychain write compares the summary of what was
+	// written with the summary of what is read back; the same members must
+	// summarize equal however they were formatted when they arrived.
+	tests := map[string]struct {
+		document string
+	}{
+		"success: compact siblings": {
+			document: `{` + minimalAccount + `,"mcpOAuth":{"a":{"accessToken":"m","expiresAt":1}},"pluginSecrets":{"p":"v"}}`,
+		},
+		"success: siblings with whitespace and escapes": {
+			document: "{\n  \"mcpOAuth\" : { \"a\" : { \"accessToken\" : \"m\\u0041\\/\" } },\n  " + minimalAccount +
+				",\n  \"pluginSecrets\" : [ 1 , 2 ]\n}",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			first := mustParse(t, tt.document)
+			second := mustParse(t, string(mustKeychainBlobJSON(t, first)))
+			third := mustParse(t, string(mustKeychainBlobJSON(t, second)))
+			want := mustSiblingSummary(t, first)
+			if diff := gocmp.Diff(want, mustSiblingSummary(t, second)); diff != "" {
+				t.Fatalf("summary changed across a reparse (-first +second):\n%s", diff)
+			}
+			if diff := gocmp.Diff(want, mustSiblingSummary(t, third)); diff != "" {
+				t.Fatalf("summary changed across two reparses (-first +third):\n%s", diff)
+			}
+			if diff := gocmp.Diff(mustDigests(t, first), mustDigests(t, second)); diff != "" {
+				t.Fatalf("account digests changed (-first +second):\n%s", diff)
+			}
+			if diff := gocmp.Diff(mustKeychainBlobJSON(t, second), mustKeychainBlobJSON(t, third)); diff != "" {
+				t.Fatalf("the re-encoded document is not a fixed point (-second +third):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestDigestsIgnoreTheSiblings(t *testing.T) {
+	t.Parallel()
+
+	// Digests are the account identity "already active" checks and undo
+	// selection compare; two copies of one account must not look different
+	// because one item also holds MCP tokens.
+	bare := mustParse(t, `{`+minimalAccount+`}`)
+	withSiblings := mustParse(t, `{`+minimalAccount+`,"mcpOAuth":{"a":{"accessToken":"m"}}}`)
+	if diff := gocmp.Diff(mustDigests(t, bare), mustDigests(t, withSiblings)); diff != "" {
+		t.Fatalf("siblings changed the account digests (-bare +with):\n%s", diff)
+	}
+}
+
+func TestWipeZeroesEverySiblingAndUnrecognisedValue(t *testing.T) {
+	t.Parallel()
+
+	credentials := mustParse(t, `{"claudeAiOauth":{"accessToken":"a","expiresAt":5,"scopes":[],"profile":{"secret":"inner"}},`+
+		`"mcpOAuth":{"a":{"accessToken":"SIBLING-CANARY-9f31"}},"pluginSecrets":{"p":"v"}}`)
+	values := append(memberValues(credentials.Siblings), memberValues(credentials.Extra)...)
+	if len(values) != 3 || nonZeroBytes(values...) == 0 {
+		t.Fatalf("the fixture should carry three non-empty values, got %d", len(values))
+	}
+
+	credentials.Wipe()
+
+	if n := nonZeroBytes(values...); n != 0 {
+		t.Fatalf("%d non-zero bytes left in the wiped values", n)
+	}
+	if len(credentials.Siblings) != 0 || len(credentials.Extra) != 0 {
+		t.Fatalf("the lists should be empty, got %d siblings and %d extra", len(credentials.Siblings), len(credentials.Extra))
+	}
+	if credentials.AccessToken == nil {
+		t.Fatal("the sealed token has its own lifetime and is not wiped")
+	}
+
+	var absent *Credentials
+	absent.Wipe()
+}
+
+func TestCarrySiblingsFromReplacesTheSiblings(t *testing.T) {
+	t.Parallel()
+
+	source := `{` + minimalAccount + `,"mcpOAuth":{"a":{"accessToken":"carried"}},"pluginSecrets":{"p":"v"}}`
+	tests := map[string]struct {
+		receiver string
+		source   *string
+		self     bool
+		want     []ExtraMember
+	}{
+		"success: a nil source clears the siblings": {
+			receiver: `{` + minimalAccount + `,"mcpOAuth":{"stale":{"accessToken":"from a file"}}}`,
+			source:   nil,
+			want:     nil,
+		},
+		"success: a source without siblings clears them": {
+			receiver: `{` + minimalAccount + `,"mcpOAuth":{"stale":{"accessToken":"from a file"}}}`,
+			source:   new(`{` + minimalAccount + `}`),
+			want:     nil,
+		},
+		"success: the source's siblings replace the receiver's in order": {
+			receiver: `{` + minimalAccount + `,"mcpOAuth":{"stale":{"accessToken":"from a file"}},"other":1}`,
+			source:   &source,
+			want: []ExtraMember{
+				{Name: "mcpOAuth", Value: jsontext.Value(`{"a":{"accessToken":"carried"}}`)},
+				{Name: "pluginSecrets", Value: jsontext.Value(`{"p":"v"}`)},
+			},
+		},
+		"success: carrying from itself keeps the siblings": {
+			receiver: source,
+			self:     true,
+			want: []ExtraMember{
+				{Name: "mcpOAuth", Value: jsontext.Value(`{"a":{"accessToken":"carried"}}`)},
+				{Name: "pluginSecrets", Value: jsontext.Value(`{"p":"v"}`)},
+			},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			receiver := mustParse(t, tt.receiver)
+			previous := memberValues(receiver.Siblings)
+
+			var src *Credentials
+			switch {
+			case tt.self:
+				src = receiver
+			case tt.source != nil:
+				src = mustParse(t, *tt.source)
+			}
+			receiver.CarrySiblingsFrom(src)
+
+			if diff := gocmp.Diff(tt.want, receiver.Siblings); diff != "" {
+				t.Fatalf("siblings mismatch (-want +got):\n%s", diff)
+			}
+			if tt.self {
+				return
+			}
+			if n := nonZeroBytes(previous...); n != 0 {
+				t.Fatalf("%d non-zero bytes left in the replaced siblings", n)
+			}
+			if src == nil {
+				return
+			}
+			// The carried values are copies: wiping the source must not
+			// reach into the receiver.
+			src.Wipe()
+			if diff := gocmp.Diff(tt.want, receiver.Siblings); diff != "" {
+				t.Fatalf("the carry aliased the source (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestKeychainBlobJSONRoundTripsAOneMebibyteDocument(t *testing.T) {
+	t.Parallel()
+
+	// Well past what the measured item holds today, to show the serializer
+	// has no size assumption of its own; the transport sets the ceiling.
+	var document strings.Builder
+	document.WriteString(`{` + minimalAccount + `,"mcpOAuth":{`)
+	token := strings.Repeat("0123456789abcdef", 64)
+	entries := 0
+	for document.Len() < 1<<20 {
+		if entries > 0 {
+			document.WriteByte(',')
+		}
+		fmt.Fprintf(&document, `"server-%05d|0123456789abcdef":{"serverName":"server-%05d","accessToken":"%s-%05d","expiresAt":%d}`,
+			entries, entries, token, entries, 1757600000000+int64(entries))
+		entries++
+	}
+	document.WriteString(`},"pluginSecrets":{"p":"v"}}`)
+	seed := document.String()
+
+	credentials := mustParse(t, seed)
+	written := mustKeychainBlobJSON(t, credentials)
+	if len(written) < 1<<20 {
+		t.Fatalf("the document is %d bytes, want at least 1 MiB", len(written))
+	}
+	if !bytes.Equal([]byte(seed), written) {
+		t.Fatalf("a compact document in the author's order must round-trip byte for byte (seed %d bytes, written %d bytes)", len(seed), len(written))
+	}
+
+	reparsed := mustParse(t, string(written))
+	summary := mustSiblingSummary(t, reparsed)
+	if diff := gocmp.Diff(mustSiblingSummary(t, credentials), summary); diff != "" {
+		t.Fatalf("summary mismatch (-want +got):\n%s", diff)
+	}
+	if summary[0].Entries == nil || *summary[0].Entries != entries {
+		t.Fatalf("mcpOAuth should count %d entries, got %v", entries, summary[0].Entries)
+	}
+	if diff := gocmp.Diff(newBlobGolden, string(mustBlobJSON(t, parseFixture(t, "credentials-new-blob.json")))); diff != "" {
+		t.Fatalf("the file document changed (-want +got):\n%s", diff)
 	}
 }
