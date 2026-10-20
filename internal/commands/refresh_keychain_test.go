@@ -26,6 +26,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/runtime/signals"
 	"github.com/zchee/agentctl/internal/secret"
 	"github.com/zchee/agentctl/internal/testutil"
 )
@@ -55,7 +56,9 @@ func migratedWorld(t *testing.T) (*statusWorld, *migratedRefreshTarget, *claude.
 		}
 	}
 	world.status.Reader = secret.NewReader()
-	world.status.Writer = secret.NewKeychainWriter()
+	_, controller := signals.Install(t.Context())
+	t.Cleanup(controller.Stop)
+	world.status.Writer = secret.NewKeychainWriter(controller)
 	item, note := migratedRefreshItem(paths, record, service, []secret.ServiceEntry{{Service: service, Account: testutil.KeychainAccount}})
 	if item == nil {
 		t.Fatal(note)

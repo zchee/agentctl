@@ -204,7 +204,7 @@ refresh-calls 1 1 0
 refresh-check stored rotated
 refresh-check write
 refresh-check audit applied
-refresh-check keychain-calls 6 11
+refresh-check keychain-calls 6 10
 refresh-check namespace
 refresh-check peers-absent
 

@@ -288,7 +288,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	if test.timeout {
 		security := ts.Getenv("AGENTCTL_SECURITY_BIN")
 		wrapper := filepath.Join(root, "slow-write-security")
-		write(wrapper, []byte("#!/bin/sh\nif [ \"$1\" = '-i' ]; then printf '%s\\n' '-i' >> \"$AGCTL_FAKE_SECURITY_LOG\"; sleep 5; fi\nexec \"$AGCTL_FAKE_SWAP_REAL_SECURITY\" \"$@\"\n"))
+		write(wrapper, []byte("#!/bin/sh\n"+slowWriteClause+"exec \"$AGCTL_FAKE_SWAP_REAL_SECURITY\" \"$@\"\n"))
 		ts.Check(os.Chmod(wrapper, 0o700))
 		ts.Setenv("AGCTL_FAKE_SWAP_REAL_SECURITY", security)
 		ts.Setenv("AGENTCTL_SECURITY_BIN", wrapper)
@@ -582,7 +582,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		log := ts.ReadFile(filepath.Join(root, "security.log"))
 		writes := 0
 		for line := range strings.SplitSeq(log, "\n") {
-			if line == "-i" {
+			if strings.HasPrefix(line, "add-generic-password ") {
 				writes++
 			}
 			if strings.Contains(line, "SENTINEL") || strings.HasPrefix(line, "delete-generic-password") {

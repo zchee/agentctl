@@ -238,7 +238,7 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 			}
 			writes := 0
 			for _, call := range fixture.SecurityLog() {
-				if call == "-i" {
+				if strings.HasPrefix(call, "add-generic-password ") {
 					writes++
 				}
 				if strings.Contains(call, "access") || strings.Contains(call, "refresh") || strings.HasPrefix(call, "delete-generic-password") {

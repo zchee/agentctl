@@ -83,6 +83,9 @@ func TestSwapExitCodeTable(t *testing.T) {
 		"success: 30 remote_control_refused fires on an unsupported platform or a bridged session that does not answer": {
 			name: "remote_control_refused", code: SwapExitRemoteControl,
 		},
+		"success: 31 credential_too_large fires when the credential document is over the keychain update ceiling": {
+			name: "credential_too_large", code: SwapExitCredentialTooLarge,
+		},
 	}
 
 	seen := make(map[string]int, len(SwapExitCodes))
@@ -112,8 +115,8 @@ func TestSwapExitCodeTable(t *testing.T) {
 func TestSwapExitCodesAreUniqueAndRetireTwentyFiveTwentySixAndTwentyEight(t *testing.T) {
 	t.Parallel()
 
-	if len(SwapExitCodes) != 18 {
-		t.Fatalf("the table's size = %d, want 18", len(SwapExitCodes))
+	if len(SwapExitCodes) != 19 {
+		t.Fatalf("the table's size = %d, want 19", len(SwapExitCodes))
 	}
 
 	byCode := make(map[int]string, len(SwapExitCodes))

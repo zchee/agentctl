@@ -272,7 +272,7 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 		}
 		writes := 0
 		for line := range strings.SplitSeq(ts.ReadFile(filepath.Join(root, "security.log")), "\n") {
-			if line == "-i" {
+			if strings.HasPrefix(line, "add-generic-password ") {
 				writes++
 			}
 			if strings.Contains(line, "SENTINEL") || strings.HasPrefix(line, "delete-generic-password") {
@@ -561,7 +561,7 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 		if args[0] == "peer" {
 			body += "\"$AGCTL_FAKE_UNDO_ORIGINAL\" \"$@\"\nstatus=$?\nif [ \"$1\" = 'find-generic-password' ]; then\n  touch \"$AGCTL_FAKE_UNDO_RESUME.reached\"\n  while [ ! -e \"$AGCTL_FAKE_UNDO_RESUME\" ]; do sleep 0.01; done\nfi\nexit $status\n"
 		} else {
-			body += "if [ \"$1\" = '-i' ]; then printf '%s\\n' '-i' >> \"$AGCTL_FAKE_SECURITY_LOG\"; sleep 5; fi\nexec \"$AGCTL_FAKE_UNDO_ORIGINAL\" \"$@\"\n"
+			body += slowWriteClause + "exec \"$AGCTL_FAKE_UNDO_ORIGINAL\" \"$@\"\n"
 		}
 		write(wrapper, []byte(body))
 		ts.Check(os.Chmod(wrapper, 0o700))

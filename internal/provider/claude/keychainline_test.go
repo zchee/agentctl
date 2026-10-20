@@ -15,7 +15,6 @@
 package claude
 
 import (
-	"bytes"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"errors"
@@ -31,14 +30,11 @@ import (
 // target.
 const liveService = LiveService
 
-// lineBytes captures the bytes a line puts on a pipe.
-func lineBytes(t *testing.T, line *secret.KeychainStdinLine) []byte {
-	t.Helper()
-	var sink bytes.Buffer
-	if _, err := line.WriteTo(&sink); err != nil {
-		t.Fatalf("a buffer accepts a write: %v", err)
-	}
-	return sink.Bytes()
+// retiredLineLen is the length the retired `security -i` line would have
+// had for update, trailing newline included: the figure the line limit is
+// still measured against.
+func retiredLineLen(update *secret.KeychainStdinLine) int {
+	return 42 + len(update.Account()) + len(update.Service()) + update.Len()
 }
 
 // credentialsOfBlobLen builds a credential whose serialized blob is
@@ -97,13 +93,8 @@ func TestTheKeychainLineIsTheUpdateShape(t *testing.T) {
 		t.Fatalf("the fixture blob is well under the limit: %v", err)
 	}
 
-	expected := fmt.Sprintf("add-generic-password -U -a %q -s %q -X %q\n",
-		"example", liveService, hex.EncodeToString(mustBlobJSON(t, credentials)))
-	if got := string(lineBytes(t, line)); got != expected {
-		t.Fatalf("line mismatch:\ngot  %q\nwant %q", got, expected)
-	}
-	if line.Len() != len(expected) {
-		t.Fatalf("Len() = %d, want %d", line.Len(), len(expected))
+	if want := len(hex.EncodeToString(mustBlobJSON(t, credentials))); line.Len() != want {
+		t.Fatalf("Len() = %d, want %d hex digits", line.Len(), want)
 	}
 	if line.Account() != "example" || line.Service() != liveService {
 		t.Fatalf("the line must record its item: %s", line)
@@ -118,8 +109,8 @@ func TestTheLinesLengthIsFixedOverheadPlusTwiceTheBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("well under the limit: %v", err)
 	}
-	if want := 42 + 1 + len(liveService) + 200; line.Len() != want {
-		t.Fatalf("Len() = %d, want %d", line.Len(), want)
+	if want := 42 + 1 + len(liveService) + 200; retiredLineLen(line) != want {
+		t.Fatalf("the line would be %d bytes, want %d", retiredLineLen(line), want)
 	}
 }
 
@@ -142,8 +133,8 @@ func TestTheLimitCountsTheTrailingNewline(t *testing.T) {
 				if err != nil {
 					t.Fatalf("a line of %d bytes is allowed: %v", tt.length, err)
 				}
-				if line.Len() != tt.length {
-					t.Fatalf("Len() = %d, want %d", line.Len(), tt.length)
+				if retiredLineLen(line) != tt.length {
+					t.Fatalf("the line would be %d bytes, want %d", retiredLineLen(line), tt.length)
 				}
 				return
 			}

@@ -253,20 +253,6 @@ func (f *Fixture) AssertKeychainReadOnly() {
 	}
 }
 
-// SecurityWrite runs the fake security the way the write transport does:
-// argv -i, with one command line on standard input.
-func (f *Fixture) SecurityWrite(line string) Output {
-	f.tb.Helper()
-	cmd := exec.CommandContext(testContext(f.tb), f.SecurityBin(), "-i")
-	f.Apply(cmd)
-	cmd.Stdin = strings.NewReader(line)
-	stdout, stderr := Capture(cmd)
-	if err := cmd.Start(); err != nil {
-		f.tb.Fatalf("start the stand-in: %v", err)
-	}
-	return Finish(f.tb, cmd, stdout, stderr)
-}
-
 // SecurityWriteArgvCommand returns an unstarted command that runs the fake
 // security the way the argv write transport does: add-generic-password with
 // the account, the service and the hex payload in argv, and no standard
@@ -301,3 +287,10 @@ func ItemFileName(service string) string {
 	}
 	return out.String()
 }
+
+// slowWriteClause is the shell a test wrapper around the fake security runs
+// first, to make a keychain write hang past the writer's budget: for an
+// add-generic-password it logs the redacted line the fake would log, with
+// the payload reduced to its length, and sleeps, so the writer's timeout
+// ends the wrapper before the fake stores anything.
+const slowWriteClause = "if [ \"$1\" = add-generic-password ]; then printf 'add-generic-password -U -a \"%s\" -s \"%s\" -X <REDACTED:%s>\\n' \"$4\" \"$6\" \"${#8}\" >> \"$AGCTL_FAKE_SECURITY_LOG\"; sleep 5; fi\n"

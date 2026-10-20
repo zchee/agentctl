@@ -32,17 +32,17 @@ func TestCredentialPayloadRedaction(t *testing.T) {
 	const marker = "planted-credential-marker-NEVER-LOG"
 	read := ReadOutcome{Bytes: []byte(marker)}
 	write := WriteRequest{BlobJSON: []byte(marker)}
-	line, err := NewKeychainStdinLine("account", "service", []byte(marker))
+	update, err := NewKeychainUpdate("account", "service", []byte(marker))
 	if err != nil {
 		t.Fatal(err)
 	}
 	tests := map[string]struct{ value any }{
-		"success: read value":    {value: read},
-		"success: read pointer":  {value: &read},
-		"success: write value":   {value: write},
-		"success: write pointer": {value: &write},
-		"success: line value":    {value: *line},
-		"success: line pointer":  {value: line},
+		"success: read value":     {value: read},
+		"success: read pointer":   {value: &read},
+		"success: write value":    {value: write},
+		"success: write pointer":  {value: &write},
+		"success: update value":   {value: *update},
+		"success: update pointer": {value: update},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

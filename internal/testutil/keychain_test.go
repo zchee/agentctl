@@ -121,53 +121,6 @@ func TestFindUnderAnotherAccountServesNothing(t *testing.T) {
 	}
 }
 
-func TestSecurityWriteStoresAnAllowedItem(t *testing.T) {
-	f := New(t).WithKeychain()
-	f.AllowWrite("svc-1")
-
-	// 68656c6c6f is "hello" in lowercase hexadecimal.
-	out := f.SecurityWrite(`add-generic-password -U -a "` + KeychainAccount + `" -s "svc-1" -X "68656c6c6f"`)
-	if code := out.ExitCode(t); code != 0 {
-		t.Fatalf("the write exited %d; stderr:\n%s", code, out.Stderr)
-	}
-
-	data, err := os.ReadFile(f.KeychainItemPath("svc-1"))
-	if err != nil {
-		t.Fatalf("read the stored item: %v", err)
-	}
-	if string(data) != "hello" {
-		t.Fatalf("the stored item holds %q, want the decoded payload", data)
-	}
-
-	// The stand-in logs its argv on entry and the parsed write line after,
-	// with the payload redacted down to its length in both.
-	log := f.SecurityLog()
-	if len(log) != 2 || log[0] != "-i" || !strings.Contains(log[1], "<REDACTED:10>") {
-		t.Fatalf("security log = %q, want the argv line and one redacted write line", log)
-	}
-	for _, line := range log {
-		if strings.Contains(line, "68656c6c6f") {
-			t.Fatalf("the payload reached the log unredacted: %q", line)
-		}
-	}
-	items := f.KeychainItems()
-	if len(items) != 1 || items[0].Name != KeychainAccount+"/svc-1" {
-		t.Fatalf("keychain items = %v, want exactly the one written item", items)
-	}
-}
-
-func TestSecurityWriteRefusesAnUnregisteredService(t *testing.T) {
-	f := New(t).WithKeychain()
-
-	out := f.SecurityWrite(`add-generic-password -U -a "` + KeychainAccount + `" -s "svc-unregistered" -X "ff"`)
-	if code := out.ExitCode(t); code == 0 {
-		t.Fatalf("a write to an unregistered service succeeded; stdout:\n%s", out.Stdout)
-	}
-	if _, err := os.Stat(f.KeychainItemPath("svc-unregistered")); err == nil {
-		t.Fatalf("the refused write still stored an item")
-	}
-}
-
 // helloHex is "hello" in lowercase hexadecimal, the payload the argv write
 // tests store.
 const helloHex = "68656c6c6f"
@@ -595,7 +548,7 @@ func TestItemFileNameMatchesTheScriptFold(t *testing.T) {
 	f := New(t).WithKeychain()
 	f.AllowWrite("svc with spaces/and slash")
 
-	out := f.SecurityWrite(`add-generic-password -U -a "` + KeychainAccount + `" -s "svc with spaces/and slash" -X "ff"`)
+	out := f.SecurityWriteArgv(KeychainAccount, "svc with spaces/and slash", "ff")
 	if code := out.ExitCode(t); code != 0 {
 		t.Fatalf("the write exited %d; stderr:\n%s", code, out.Stderr)
 	}

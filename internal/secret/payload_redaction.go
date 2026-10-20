@@ -66,9 +66,9 @@ func (WriteRequest) MarshalJSONTo(encoder *jsontext.Encoder) error {
 }
 
 // MarshalJSON returns a redacted JSON string.
-func (KeychainStdinLine) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
+func (KeychainUpdate) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
 
 // MarshalJSONTo writes a redacted JSON string through the streaming hook.
-func (KeychainStdinLine) MarshalJSONTo(encoder *jsontext.Encoder) error {
+func (KeychainUpdate) MarshalJSONTo(encoder *jsontext.Encoder) error {
 	return encoder.WriteToken(jsontext.String(redacted))
 }

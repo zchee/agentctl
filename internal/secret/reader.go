@@ -137,7 +137,30 @@ type KeychainError struct {
 	// credential file, because the two stores can hold different accounts'
 	// credentials and two readers of one refresh chain is how it dies.
 	Transient bool
+
+	// kind is set on a keychain write failure only: whether security(1)
+	// never started, may or may not have committed, or failed definitely.
+	// The class cannot carry that, because one class covers more than one
+	// kind.
+	kind writeKind
 }
+
+// writeKind sorts a keychain write failure by what it says about the item.
+type writeKind uint8
+
+const (
+	// writeKindNone marks a read failure, or a class-only sentinel.
+	writeKindNone writeKind = iota
+	// writeNotStarted means security(1) never ran, so the item is
+	// unchanged by construction.
+	writeNotStarted
+	// writeOutcomeUnknown means security(1) ran and may or may not have
+	// committed; only a readback can tell.
+	writeOutcomeUnknown
+	// writeFailed means security(1) exited on its own with a non-zero
+	// status while the run was live.
+	writeFailed
+)
 
 // The classified keychain failures callers branch on, as errors.Is targets.
 // Matching compares the class only, so a wrapped failure carrying extra
@@ -168,17 +191,30 @@ func (e *KeychainError) Error() string {
 }
 
 // Is reports whether target names the same failure class, which is what
-// makes the named values above work with errors.Is regardless of detail.
+// makes the named values above work with errors.Is regardless of detail. A
+// write-kind sentinel ([ErrKeychainNotStarted], [ErrKeychainOutcomeUnknown],
+// [ErrKeychainWriteFailed]) matches on the kind instead, so one error
+// matches both its class and its kind.
 func (e *KeychainError) Is(target error) bool {
 	other, ok := target.(*KeychainError)
-	return ok && other.Class == e.Class
+	if !ok {
+		return false
+	}
+	if other.kind != writeKindNone {
+		return other.kind == e.kind
+	}
+	return other.Class == e.Class
 }
 
 // Unwrap exposes the errs vocabulary, so errors.As reaches an
 // [errs.KeychainError] and main maps the failure onto a partial exit rather
-// than a fatal one.
-func (e *KeychainError) Unwrap() error {
-	return errs.NewKeychain(e.Class)
+// than a fatal one. A credential the host refused as too large also unwraps
+// to the unlettered refusal that carries its own exit status and reason.
+func (e *KeychainError) Unwrap() []error {
+	if e.Class == errs.KeychainCredentialTooLarge {
+		return []error{errs.NewKeychain(e.Class), errs.NewRefused(credentialTooLargeExit, errs.ReasonCredentialTooLarge)}
+	}
+	return []error{errs.NewKeychain(e.Class)}
 }
 
 // StderrClass is one of the ten classes a security(1) stderr message falls

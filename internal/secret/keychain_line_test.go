@@ -22,186 +22,239 @@ import (
 	"strings"
 	"testing"
 
+	gocmp "github.com/google/go-cmp/cmp"
+
+	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/errs"
 )
 
-// lineService is the service name the line vectors target. Any quotable
-// name works; the shape and length rules do not read it.
-const lineService = "example-service"
+// updateService is the service name the update vectors target. It carries
+// the space the live item's service carries.
+const updateService = "Claude Code-credentials"
 
-// keychainLineBytes captures the bytes a line puts on a pipe.
-func keychainLineBytes(t *testing.T, line *KeychainStdinLine) []byte {
-	t.Helper()
-	var sink bytes.Buffer
-	if _, err := line.WriteTo(&sink); err != nil {
-		t.Fatalf("a buffer accepts a write: %v", err)
-	}
-	return sink.Bytes()
-}
-
-// blobOfLen builds a payload of exactly blobLen bytes. The content is
-// arbitrary because the line carries its lowercase hex, never the bytes.
+// blobOfLen builds a synthetic document of exactly blobLen bytes. The
+// content is arbitrary because the update carries its lowercase hex.
 func blobOfLen(blobLen int) []byte {
 	return bytes.Repeat([]byte{'p'}, blobLen)
 }
 
-// keychainLineOfExactly builds a line of exactly length bytes, trailing
-// newline included. The blob contributes two bytes per byte, so the parity
-// of the length is fixed by the account and service names; one of the two
-// account lengths below always lands on the requested number.
-func keychainLineOfExactly(t *testing.T, length int) (*KeychainStdinLine, error) {
+// updatePayload opens the sealed hex of update, for the tests that check
+// the encoding.
+func updatePayload(t *testing.T, update *KeychainUpdate) string {
 	t.Helper()
-	// 28 bytes through the opening quote, 6 for `" -s "`, 6 for `" -X "`,
-	// 1 for the closing quote and 1 for the newline.
-	const fixed = 42
-	for accountLen := 1; accountLen <= 2; accountLen++ {
-		overhead := fixed + accountLen + len(lineService)
-		if length < overhead || (length-overhead)%2 != 0 {
-			continue
-		}
-		return NewKeychainStdinLine(strings.Repeat("u", accountLen), lineService, blobOfLen((length-overhead)/2))
+	var payload string
+	if err := update.hex.WithPlaintext(func(b []byte) error {
+		payload = string(b)
+		return nil
+	}); err != nil {
+		t.Fatalf("open the update's payload: %v", err)
 	}
-	t.Fatalf("no account length makes a line of exactly %d bytes", length)
-	return nil, nil
+	return payload
 }
 
-func TestTheKeychainLineIsTheUpdateShape(t *testing.T) {
+func TestKeychainUpdateCarriesTheDocumentAsLowercaseHex(t *testing.T) {
 	t.Parallel()
 
-	blob := []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-abc"}}`)
-	line, err := NewKeychainStdinLine("example", lineService, blob)
+	blob := []byte(`{"claudeAiOauth":{"accessToken":"synthetic-access"},"mcpOAuth":{"server":{"accessToken":"synthetic-mcp"}}}`)
+	original := bytes.Clone(blob)
+	update, err := NewKeychainUpdate("example", updateService, blob)
 	if err != nil {
-		t.Fatalf("the blob is well under the limit: %v", err)
+		t.Fatalf("the document is well under the ceiling: %v", err)
 	}
 
-	expected := fmt.Sprintf("add-generic-password -U -a %q -s %q -X %q\n",
-		"example", lineService, hex.EncodeToString(blob))
-	if got := string(keychainLineBytes(t, line)); got != expected {
-		t.Fatalf("line mismatch:\ngot  %q\nwant %q", got, expected)
+	if diff := gocmp.Diff(hex.EncodeToString(original), updatePayload(t, update)); diff != "" {
+		t.Errorf("payload mismatch (-want +got):\n%s", diff)
 	}
-	if line.Len() != len(expected) {
-		t.Fatalf("Len() = %d, want %d", line.Len(), len(expected))
+	if got, want := update.Len(), 2*len(original); got != want {
+		t.Errorf("Len() = %d, want %d: two hex digits per document byte", got, want)
 	}
-	if line.Account() != "example" || line.Service() != lineService {
-		t.Fatalf("the line must record its item: %s", line)
+	if update.Account() != "example" || update.Service() != updateService {
+		t.Errorf("the update must record its item: %s", update)
+	}
+	// The caller owns the plaintext document; the constructor reads it and
+	// leaves it as it was.
+	if !bytes.Equal(blob, original) {
+		t.Errorf("the constructor changed the caller's document")
 	}
 }
 
-func TestTheLinesLengthIsFixedOverheadPlusTwiceTheBlob(t *testing.T) {
-	t.Parallel()
-
-	line, err := NewKeychainStdinLine("u", lineService, blobOfLen(100))
-	if err != nil {
-		t.Fatalf("well under the limit: %v", err)
-	}
-	if want := 42 + 1 + len(lineService) + 200; line.Len() != want {
-		t.Fatalf("Len() = %d, want %d", line.Len(), want)
-	}
-}
-
-func TestTheLimitCountsTheTrailingNewline(t *testing.T) {
+func TestKeychainUpdateCeiling(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		length  int
+		blobLen int
 		refused bool
 	}{
-		"success: one byte under the limit": {length: 4031},
-		"success: exactly at the limit":     {length: KeychainLineLimit},
-		"error: one byte over the limit":    {length: 4033, refused: true},
+		"success: one byte under the ceiling":  {blobLen: KeychainBlobLimit - 1},
+		"success: exactly at the ceiling":      {blobLen: 262144},
+		"error: one byte over the ceiling":     {blobLen: 262145, refused: true},
+		"error: far over the ceiling (1 MiB)":  {blobLen: 1 << 20, refused: true},
+		"success: the measured 11.5 KB item":   {blobLen: 11776},
+		"success: a single byte is a document": {blobLen: 1},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			line, err := keychainLineOfExactly(t, tt.length)
+			update, err := NewKeychainUpdate("example", updateService, blobOfLen(tt.blobLen))
 			if !tt.refused {
 				if err != nil {
-					t.Fatalf("a line of %d bytes is allowed: %v", tt.length, err)
+					t.Fatalf("a %d-byte document is allowed: %v", tt.blobLen, err)
 				}
-				if line.Len() != tt.length {
-					t.Fatalf("Len() = %d, want %d", line.Len(), tt.length)
+				if update.Len() != 2*tt.blobLen {
+					t.Fatalf("Len() = %d, want %d", update.Len(), 2*tt.blobLen)
 				}
 				return
 			}
-			tooLong, ok := errors.AsType[*LineTooLongError](err)
+			tooLarge, ok := errors.AsType[*BlobTooLargeError](err)
 			if !ok {
-				t.Fatalf("want the over-long refusal, got %v", err)
+				t.Fatalf("want the over-ceiling refusal, got %v", err)
 			}
-			if tooLong.Len != tt.length {
-				t.Fatalf("the refusal must name the length %d, got %d", tt.length, tooLong.Len)
+			if tooLarge.Len != tt.blobLen {
+				t.Errorf("the refusal must name the length %d, got %d", tt.blobLen, tooLarge.Len)
 			}
-			// The refusal is the recorded cause scripts branch on: there
-			// is no argv fallback, so the only outcome is the dedicated
-			// exit status.
-			if code := errs.ExitCode(err); code != 12 {
-				t.Fatalf("ExitCode = %d, want 12", code)
+			if !errors.Is(err, ErrCredentialTooLarge) {
+				t.Errorf("the refusal must match ErrCredentialTooLarge: %v", err)
 			}
-			if !strings.Contains(err.Error(), "4032-byte `security -i` limit") {
-				t.Fatalf("the refusal must name the limit: %v", err)
+			for _, other := range []error{ErrKeychainNotStarted, ErrKeychainOutcomeUnknown, ErrKeychainWriteFailed} {
+				if errors.Is(err, other) {
+					t.Errorf("a constructor refusal is not a write failure, but matches %v", other)
+				}
+			}
+			refused, ok := errors.AsType[*errs.RefusedError](err)
+			if !ok || refused.Reason != errs.ReasonCredentialTooLarge || refused.Letter != "" {
+				t.Errorf("want the unlettered %q refusal, got %#v", errs.ReasonCredentialTooLarge, refused)
+			}
+			if code := errs.ExitCode(err); code != cli.SwapExitCredentialTooLarge {
+				t.Errorf("ExitCode = %d, want %d", code, cli.SwapExitCredentialTooLarge)
+			}
+			if !strings.Contains(err.Error(), "262144-byte keychain update ceiling") {
+				t.Errorf("the refusal must name the ceiling: %v", err)
 			}
 		})
 	}
 }
 
-func TestAnUnquotableNameIsRefusedBeforeAnythingIsBuilt(t *testing.T) {
+func TestCredentialTooLargeExitMatchesTheCLI(t *testing.T) {
+	t.Parallel()
+
+	if credentialTooLargeExit != cli.SwapExitCredentialTooLarge {
+		t.Fatalf("credentialTooLargeExit = %d, cli.SwapExitCredentialTooLarge = %d", credentialTooLargeExit, cli.SwapExitCredentialTooLarge)
+	}
+}
+
+func TestKeychainUpdateValidatesTheNamesFirst(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
 		account string
 		service string
 		field   string
+		// blobLen is the document's length; zero means a small one.
+		blobLen int
 	}{
-		"error: a quote in the account": {
-			account: `ex"ample`, service: lineService, field: "account",
-		},
-		"error: a backslash in the service": {
-			account: "example", service: `live\service`, field: "service",
-		},
-		"error: a newline in the account": {
-			account: "exam\nple", service: lineService, field: "account",
-		},
+		"error: empty account":                          {account: "", service: updateService, field: "account"},
+		"error: empty service":                          {account: "example", service: "", field: "service"},
+		"error: a control character in the account":     {account: "exam\nple", service: updateService, field: "account"},
+		"error: a control character in the service":     {account: "example", service: "live\x1bservice", field: "service"},
+		"error: a quote in the account":                 {account: `ex"ample`, service: updateService, field: "account"},
+		"error: a quote in the service":                 {account: "example", service: `live"service`, field: "service"},
+		"error: a backslash in the account":             {account: `ex\ample`, service: updateService, field: "account"},
+		"error: a backslash in the service":             {account: "example", service: `live\service`, field: "service"},
+		"error: a leading dash in the account":          {account: "-example", service: updateService, field: "account"},
+		"error: a leading dash in the service":          {account: "example", service: "-s", field: "service"},
+		"error: a space in the account":                 {account: "ex ample", service: updateService, field: "account"},
+		"error: a tab in the account":                   {account: "ex\tample", service: updateService, field: "account"},
+		"error: a non-breaking space in the account":    {account: "ex ample", service: updateService, field: "account"},
+		"error: the account is checked before the size": {account: "-x", service: updateService, field: "account", blobLen: KeychainBlobLimit + 1},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := NewKeychainStdinLine(tt.account, tt.service, blobOfLen(8))
+			update, err := NewKeychainUpdate(tt.account, tt.service, blobOfLen(max(tt.blobLen, 8)))
 			unquotable, ok := errors.AsType[*UnquotableError](err)
 			if !ok || unquotable.Field != tt.field {
-				t.Fatalf("want the unquotable %s refusal, got %v", tt.field, err)
+				t.Fatalf("want the %s refusal, got %v", tt.field, err)
+			}
+			if update != nil {
+				t.Fatalf("a refused name still built an update: %s", update)
 			}
 		})
 	}
 }
 
-func TestTheLineNeverPrintsItsPayload(t *testing.T) {
+func TestKeychainUpdateAcceptsNamesSecurityTakesAsOneArgument(t *testing.T) {
 	t.Parallel()
 
-	blob := []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-abc"}}`)
+	tests := map[string]struct {
+		account string
+		service string
+	}{
+		"success: the live service, with its space":    {account: "example", service: "Claude Code-credentials"},
+		"success: a namespace service":                 {account: "example", service: "Claude Code-credentials-0123abcd"},
+		"success: a dash inside the account":           {account: "first-last", service: updateService},
+		"success: a dot and an underscore in the name": {account: "first.last_2", service: updateService},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			update, err := NewKeychainUpdate(tt.account, tt.service, blobOfLen(8))
+			if err != nil {
+				t.Fatalf("NewKeychainUpdate(%q, %q) = %v", tt.account, tt.service, err)
+			}
+			if update.Account() != tt.account || update.Service() != tt.service {
+				t.Fatalf("the update names %q/%q, want %q/%q", update.Account(), update.Service(), tt.account, tt.service)
+			}
+		})
+	}
+}
+
+func TestKeychainUpdateRefusesAnEmptyDocument(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewKeychainUpdate("example", updateService, nil); err == nil {
+		t.Fatal("an empty document built an update")
+	}
+}
+
+func TestKeychainUpdateNeverPrintsItsPayload(t *testing.T) {
+	t.Parallel()
+
+	blob := []byte(`{"claudeAiOauth":{"accessToken":"synthetic-update-marker"}}`)
 	payload := hex.EncodeToString(blob)
-	line, err := NewKeychainStdinLine("example", lineService, blob)
+	update, err := NewKeychainUpdate("example", updateService, blob)
 	if err != nil {
-		t.Fatalf("well under the limit: %v", err)
+		t.Fatalf("well under the ceiling: %v", err)
 	}
 
 	renders := map[string]string{
-		"String()": line.String(),
-		"%v":       fmt.Sprintf("%v", line),
-		"%+v":      fmt.Sprintf("%+v", line),
-		"%#v":      fmt.Sprintf("%#v", line),
-		"%s":       fmt.Sprintf("%s", line),
+		"String()":    update.String(),
+		"GoString()":  update.GoString(),
+		"%v":          fmt.Sprintf("%v", update),
+		"%+v":         fmt.Sprintf("%+v", update),
+		"%#v":         fmt.Sprintf("%#v", update),
+		"%s":          fmt.Sprintf("%s", update),
+		"value %v":    fmt.Sprintf("%v", *update),
+		"value %#v":   fmt.Sprintf("%#v", *update),
+		"LogValue()":  update.LogValue().String(),
+		"nested %+v":  fmt.Sprintf("%+v", struct{ U *KeychainUpdate }{update}),
+		"nested val":  fmt.Sprintf("%+v", struct{ U KeychainUpdate }{*update}),
+		"length only": fmt.Sprint(update.Len()),
 	}
 	for name, rendered := range renders {
-		if strings.Contains(rendered, "sk-ant-") {
-			t.Errorf("%s leaked a token: %q", name, rendered)
+		if strings.Contains(rendered, "synthetic-update-marker") {
+			t.Errorf("%s leaked the document: %q", name, rendered)
 		}
 		if strings.Contains(rendered, payload) {
 			t.Errorf("%s leaked the payload: %q", name, rendered)
 		}
+		if name == "length only" {
+			continue
+		}
 		if !strings.Contains(rendered, "<redacted>") {
 			t.Errorf("%s must mark the redaction: %q", name, rendered)
 		}
-		if !strings.Contains(rendered, lineService) {
-			t.Errorf("%s: the item the line names is not a secret: %q", name, rendered)
+		if !strings.Contains(rendered, updateService) {
+			t.Errorf("%s: the item the update names is not a secret: %q", name, rendered)
 		}
 	}
 }

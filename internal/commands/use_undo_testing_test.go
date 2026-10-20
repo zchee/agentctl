@@ -162,7 +162,7 @@ func TestRunUndoSharedEngine(t *testing.T) {
 				} else {
 					writes := 0
 					for _, call := range fixture.SecurityLog()[len(beforeCalls):] {
-						if call == "-i" {
+						if strings.HasPrefix(call, "add-generic-password ") {
 							writes++
 						}
 					}

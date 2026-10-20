@@ -35,7 +35,7 @@ func watchHandlers(deps Dependencies, handlers *cli.Handlers) {
 		}
 		output, _ := deps.Stdout.(*os.File)
 		watch := commands.Watch{Input: os.Stdin, Output: output, NewStatus: func() *commands.Status {
-			return &commands.Status{Reader: secret.NewReader(), Client: claude.NewUsageClientFromEnv(cli.HTTPTimeoutDefault), Refresher: oauth, Profiles: oauth, Writer: secret.NewKeychainWriter(), Env: &env}
+			return &commands.Status{Reader: secret.NewReader(), Client: claude.NewUsageClientFromEnv(cli.HTTPTimeoutDefault), Refresher: oauth, Profiles: oauth, Writer: secret.NewKeychainWriter(deps.Signals), Env: &env}
 		}}
 		return watch.Run(ctx, globals, opts)
 	}

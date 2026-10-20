@@ -60,7 +60,8 @@ const (
 
 	// SwapExitRefusedD is refusal D: the encoded credential line,
 	// including its newline, does not fit the 4032-byte keychain stdin
-	// bound.
+	// bound. The code stays defined for scripts that branch on it after
+	// keychain updates stop using the stdin line.
 	SwapExitRefusedD = 12
 
 	// SwapExitRefusedE is refusal E: CLAUDE_SECURESTORAGE_CONFIG_DIR
@@ -153,6 +154,14 @@ const (
 	// again. The JSON report carries reason "remote_control_unsupported_platform"
 	// or "remote_control_unreachable". Nothing is written.
 	SwapExitRemoteControl = 30
+
+	// SwapExitCredentialTooLarge means the credential document, the
+	// incoming account's tokens together with the members carried over
+	// from the keychain item, is over the keychain update ceiling, or the
+	// host refused the argument list that carries it before security(1)
+	// started. Nothing was written to the keychain. The JSON report
+	// carries reason "credential_too_large" and no refusal member.
+	SwapExitCredentialTooLarge = 31
 )
 
 // SwapExitCodes pairs every swap exit name with its code, for the
@@ -180,4 +189,5 @@ var SwapExitCodes = [...]struct {
 	{Name: "live_undo_item_changed", Code: SwapExitLiveUndoItemChanged},
 	{Name: "identity_unavailable", Code: SwapExitIdentityUnavailable},
 	{Name: "remote_control_refused", Code: SwapExitRemoteControl},
+	{Name: "credential_too_large", Code: SwapExitCredentialTooLarge},
 }

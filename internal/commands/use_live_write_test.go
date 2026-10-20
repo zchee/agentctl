@@ -110,7 +110,7 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 			if test.unknown {
 				wrapper := fixture.Scratch("unknown-security.sh")
 				marker := fixture.Scratch("write-done")
-				script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = find-generic-password ] && [ -f %q ]; then\n printf '%%s\\n' \"$*\" >> \"$AGCTL_FAKE_SECURITY_LOG\"\n exit 36\nfi\n%q \"$@\"\nstatus=$?\nif [ \"$1\" = -i ]; then touch %q; fi\nexit $status\n", marker, fixture.SecurityBin(), marker)
+				script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = find-generic-password ] && [ -f %q ]; then\n printf '%%s\\n' \"$*\" >> \"$AGCTL_FAKE_SECURITY_LOG\"\n exit 36\nfi\n%q \"$@\"\nstatus=$?\nif [ \"$1\" = add-generic-password ]; then touch %q; fi\nexit $status\n", marker, fixture.SecurityBin(), marker)
 				if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
 					t.Fatal(err)
 				}

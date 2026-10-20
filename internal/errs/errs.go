@@ -70,7 +70,16 @@ const (
 	// KeychainNotFound means the keychain is readable and holds no item
 	// under that service name.
 	KeychainNotFound KeychainClass = "not found"
+	// KeychainCredentialTooLarge means the credential document does not fit
+	// the argument list a keychain update passes to security(1), so no
+	// update was issued.
+	KeychainCredentialTooLarge KeychainClass = "credential too large"
 )
+
+// ReasonCredentialTooLarge is the stable reason token an unlettered refusal
+// carries when the credential document is over the keychain update ceiling
+// or the host refused the argument list that would carry it.
+const ReasonCredentialTooLarge = "credential_too_large"
 
 // ConfigError reports a request that cannot be carried out as configured.
 // Fatal.

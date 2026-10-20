@@ -139,7 +139,7 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 	if injected.Is(fault.SwapWriteFail) {
 		writeErr = errors.New("the write was refused by the test fault switch")
 	} else {
-		writeErr = secret.NewKeychainWriter().Write(ctx, input.subject.service, line)
+		writeErr = secret.NewKeychainWriterWithoutSignals().Write(ctx, input.subject.service, line)
 	}
 	elapsed := hold.HoldElapsed()
 	report.lock.HoldMS = new(uint64(max(elapsed.Milliseconds(), 0)))

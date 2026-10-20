@@ -1,9 +1,10 @@
 #!/bin/sh
 # A stand-in for security(1): the read subcommands, plus the write as
-# `add-generic-password` with the payload in argv and as a `-i` command line
-# on stdin. See src/secret/fake_security.rs.
+# `add-generic-password` with the payload in argv. Nothing is read from
+# stdin; `-i` is refused like any other subcommand this stand-in lacks.
+# See src/secret/fake_security.rs.
 #
-# Write knobs, applied to both write forms:
+# Write knobs:
 #   AGCTL_FAKE_SECURITY_WRITE_EXIT    exit with this code before storing, after
 #                                     printing AGCTL_FAKE_SECURITY_STDERR.
 #   AGCTL_FAKE_WRITE_DELAY_MS         sleep this many milliseconds before storing.
@@ -83,8 +84,8 @@ delay_ms() {
     fi
 }
 
-# store_item is the one mutating path, shared by both write forms. It reads
-# account, service, hex and hexlen, and never returns.
+# store_item is the one mutating path. It reads account, service, hex and
+# hexlen, and never returns.
 store_item() {
     if [ -n "${AGCTL_FAKE_SECURITY_WRITE_EXIT:-}" ]; then
         if [ -n "${AGCTL_FAKE_SECURITY_STDERR:-}" ]; then
@@ -224,41 +225,6 @@ add-generic-password)
         printf 'security: add-generic-password expects exactly -U -a <account> -s <service> -X <hex>\n' >&2
         exit 1
     fi
-    store_item
-    ;;
--i)
-    # The stdin form stays until the writer passes the payload in argv.
-    # One command line on stdin, nothing secret in argv, parsed as strictly
-    # as the argv form: a line it does not recognise runs nothing.
-    input=$(cat)
-    if [ -z "$input" ]; then
-        printf 'security: -i expects one command line on standard input, and got none\n' >&2
-        exit 1
-    fi
-    lines=$(printf '%s\n' "$input" | wc -l | tr -d ' ')
-    if [ "$lines" != 1 ]; then
-        printf 'security: -i expects exactly one command line, and got %s\n' "$lines" >&2
-        exit 1
-    fi
-    case "$input" in
-    'add-generic-password -U -a "'*'" -s "'*'" -X "'*'"') ;;
-    *)
-        printf 'security: -i does not recognise that command line\n' >&2
-        exit 1
-        ;;
-    esac
-    rest=${input#'add-generic-password -U -a "'}
-    account=${rest%%'" -s "'*}
-    rest=${rest#*'" -s "'}
-    service=${rest%%'" -X "'*}
-    hex=${rest#*'" -X "'}
-    hex=${hex%'"'}
-    hexlen=$(printf '%s' "$hex" | wc -c | tr -d ' ')
-
-    # Logged redacted at the source, before anything else can go wrong with
-    # the line: the log is what the write-log tests read, and a stand-in that
-    # wrote the hex would put a credential in the test output.
-    log_line "add-generic-password -U -a \"$account\" -s \"$service\" -X <REDACTED:$hexlen>"
     store_item
     ;;
 delete-generic-password)
