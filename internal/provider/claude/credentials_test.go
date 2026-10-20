@@ -847,52 +847,87 @@ func TestKeychainBlobJSONSkipsASiblingThatNamesTheAccount(t *testing.T) {
 func TestKeychainBlobJSONReencodesASiblingValueWithoutChangingIt(t *testing.T) {
 	t.Parallel()
 
-	// A value with insignificant whitespace, a nested duplicate name and a
-	// non-ASCII escape: the default encoder refuses the duplicate, so the
-	// keychain serializer must use its own options, and what it preserves
-	// is the value, not the original bytes.
-	seedValue := jsontext.Value(`{ "srv" : { "a" : 1 , "a" : 2 } , "who" : "café" }`)
-	document := `{` + minimalAccount + `,"mcpOAuth":` + string(seedValue) + `}`
-	if !strings.Contains(document, `é`) {
-		t.Fatal("the seed must carry the escape literally")
+	// Each seed has insignificant whitespace and a nested duplicate name:
+	// the default encoder refuses the duplicate, so the keychain serializer
+	// must use its own options. What it preserves is the value, not the
+	// original bytes: a JSON escape of a non-ASCII character is written as
+	// the UTF-8 character it encodes, which is the encoder's canonical
+	// form, and the digest covers that form.
+	tests := map[string]struct {
+		seed string
+		// carries is a byte sequence the seed must contain, so the case
+		// keeps testing what its name says.
+		carries string
+		// wantMember is the member as the encoder writes it.
+		wantMember string
+		// rewritten is a byte sequence of the seed that must not survive.
+		rewritten string
+	}{
+		"success: non-ASCII escapes are written as the characters they encode": {
+			seed:       `{ "srv" : { "a" : 1 , "a" : 2 } , "who" : "caf\u00e9 \ud83d\ude00" }`,
+			carries:    `\u00e9`,
+			wantMember: "\"mcpOAuth\":{\"srv\":{\"a\":1,\"a\":2},\"who\":\"caf\u00e9 \U0001F600\"}",
+			rewritten:  `\u`,
+		},
+		"success: literal non-ASCII characters are written as they arrived": {
+			seed:       "{ \"srv\" : { \"a\" : 1 , \"a\" : 2 } , \"who\" : \"caf\u00e9 \U0001F600\" }",
+			carries:    "\u00e9",
+			wantMember: "\"mcpOAuth\":{\"srv\":{\"a\":1,\"a\":2},\"who\":\"caf\u00e9 \U0001F600\"}",
+		},
 	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			seedValue := jsontext.Value(tt.seed)
+			document := `{` + minimalAccount + `,"mcpOAuth":` + tt.seed + `}`
+			if !strings.Contains(document, tt.carries) {
+				t.Fatalf("the seed of %d bytes must carry the %d-byte sequence the case is about", len(document), len(tt.carries))
+			}
 
-	var strict bytes.Buffer
-	if err := jsontext.NewEncoder(&strict).WriteValue(seedValue); err == nil {
-		t.Fatal("the default encoder should refuse the nested duplicate name")
-	}
+			var strict bytes.Buffer
+			if err := jsontext.NewEncoder(&strict).WriteValue(seedValue); err == nil {
+				t.Fatal("the default encoder should refuse the nested duplicate name")
+			}
 
-	credentials := mustParse(t, document)
-	written := mustKeychainBlobJSON(t, credentials)
+			credentials := mustParse(t, document)
+			written := mustKeychainBlobJSON(t, credentials)
 
-	wantMember := canonicalMember(t, "mcpOAuth", seedValue)
-	if want := `"mcpOAuth":{"srv":{"a":1,"a":2},"who":"café"}`; !gocmp.Equal(want, string(wantMember)) {
-		t.Fatalf("canonical member mismatch: want %d bytes sha256 %s, got %d bytes sha256 %s",
-			len(want), sha256Hex(want), len(wantMember), sha256Hex(string(wantMember)))
-	}
-	if !bytes.Contains(written, wantMember) {
-		t.Fatalf("the document of %d bytes does not carry the canonical member (sha256 %s)", len(written), sha256Hex(string(wantMember)))
-	}
+			wantMember := canonicalMember(t, "mcpOAuth", seedValue)
+			if !gocmp.Equal(tt.wantMember, string(wantMember)) {
+				t.Fatalf("canonical member mismatch: want %d bytes sha256 %s, got %d bytes sha256 %s",
+					len(tt.wantMember), sha256Hex(tt.wantMember), len(wantMember), sha256Hex(string(wantMember)))
+			}
+			if !bytes.Contains(written, wantMember) {
+				t.Fatalf("the document of %d bytes does not carry the canonical member (sha256 %s)", len(written), sha256Hex(string(wantMember)))
+			}
+			if tt.rewritten != "" && bytes.Contains(written, []byte(tt.rewritten)) {
+				t.Fatalf("the document of %d bytes still carries an escape the encoder rewrites", len(written))
+			}
 
-	reparsed := mustParse(t, string(written))
-	if len(reparsed.Siblings) != 1 {
-		t.Fatalf("one sibling expected, got %d", len(reparsed.Siblings))
-	}
-	decode := func(value jsontext.Value) any {
-		var decoded any
-		if err := json.Unmarshal(value, &decoded, jsontext.AllowDuplicateNames(true)); err != nil {
-			t.Fatalf("decoding a value of %d bytes: %v", len(value), err)
-		}
-		return decoded
-	}
-	if !gocmp.Equal(decode(seedValue), decode(reparsed.Siblings[0].Value)) {
-		t.Fatalf("the value changed: seed %d bytes sha256 %s, written %d bytes sha256 %s",
-			len(seedValue), sha256Hex(string(seedValue)), len(reparsed.Siblings[0].Value), sha256Hex(string(reparsed.Siblings[0].Value)))
-	}
+			reparsed := mustParse(t, string(written))
+			if len(reparsed.Siblings) != 1 {
+				t.Fatalf("one sibling expected, got %d", len(reparsed.Siblings))
+			}
+			decode := func(value jsontext.Value) any {
+				var decoded any
+				if err := json.Unmarshal(value, &decoded, jsontext.AllowDuplicateNames(true)); err != nil {
+					t.Fatalf("decoding a value of %d bytes: %v", len(value), err)
+				}
+				return decoded
+			}
+			if !gocmp.Equal(decode(seedValue), decode(reparsed.Siblings[0].Value)) {
+				t.Fatalf("the value changed: seed %d bytes sha256 %s, written %d bytes sha256 %s",
+					len(seedValue), sha256Hex(string(seedValue)), len(reparsed.Siblings[0].Value), sha256Hex(string(reparsed.Siblings[0].Value)))
+			}
 
-	summary := mustSiblingSummary(t, credentials)
-	if diff := gocmp.Diff(sha256Hex(string(wantMember)), summary[0].SHA256); diff != "" {
-		t.Fatalf("the digest is not over the encoder's bytes (-want +got):\n%s", diff)
+			want := sha256Hex(string(wantMember))
+			if got := mustSiblingSummary(t, credentials)[0].SHA256; got != want {
+				t.Fatalf("the digest is not over the encoder's bytes: got %s, want %s", got, want)
+			}
+			if got := mustSiblingSummary(t, reparsed)[0].SHA256; got != want {
+				t.Fatalf("the digest changed across the write: got %s, want %s", got, want)
+			}
+		})
 	}
 }
 
@@ -1027,6 +1062,75 @@ func TestWipeZeroesEverySiblingAndUnrecognisedValue(t *testing.T) {
 
 	var absent *Credentials
 	absent.Wipe()
+}
+
+func TestParseBlobWipesItsCopiesWhenARequiredFieldIsMissing(t *testing.T) {
+	t.Parallel()
+
+	// A refused blob still carried tokens, and ParseBlob copied them while
+	// reading: the whole document, every member and every unrecognised
+	// value. None of those copies reaches the caller, so each must be
+	// zeroed before the error returns.
+	const accountCanary, siblingCanary = "ACCOUNT-CANARY-51c2", "SIBLING-CANARY-9f31"
+	sibling := `,"mcpOAuth":{"a":{"accessToken":"` + siblingCanary + `"}}}`
+	tests := map[string]struct {
+		document  string
+		wantField string
+	}{
+		"error: no access token": {
+			document:  `{"claudeAiOauth":{"refreshToken":"` + accountCanary + `","expiresAt":5,"profile":{"k":"` + accountCanary + `"}}` + sibling,
+			wantField: "accessToken",
+		},
+		"error: an access token of the wrong type": {
+			document:  `{"claudeAiOauth":{"accessToken":["` + accountCanary + `"],"expiresAt":5,"profile":{"k":"` + accountCanary + `"}}` + sibling,
+			wantField: "accessToken",
+		},
+		"error: no expiry": {
+			document:  `{"claudeAiOauth":{"accessToken":"` + accountCanary + `","profile":{"k":"` + accountCanary + `"}}` + sibling,
+			wantField: "expiresAt",
+		},
+		"error: an expiry of the wrong type": {
+			document:  `{"claudeAiOauth":{"accessToken":"` + accountCanary + `","expiresAt":"soon","profile":{"k":"` + accountCanary + `"}}` + sibling,
+			wantField: "expiresAt",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var copies [][]byte
+			carried := map[string]int{}
+			observe := func(value jsontext.Value) {
+				copies = append(copies, value)
+				for _, canary := range []string{accountCanary, siblingCanary} {
+					if bytes.Contains(value, []byte(canary)) {
+						carried[canary]++
+					}
+				}
+			}
+
+			credentials, err := parseBlob([]byte(tt.document), observe)
+
+			var missing *MissingFieldError
+			if !errors.As(err, &missing) || missing.Field != tt.wantField {
+				t.Fatalf("want a missing %s error, got %v", tt.wantField, err)
+			}
+			if credentials != nil {
+				t.Fatal("a refused blob should yield no credentials")
+			}
+			// The probe saw the plaintext: the account and the sibling
+			// canaries each sat in at least the document copy and the
+			// copy of their own member.
+			for _, canary := range []string{accountCanary, siblingCanary} {
+				if carried[canary] < 2 {
+					t.Fatalf("the parse should have copied the %d-byte canary at least twice, saw %d copies of it in %d buffers",
+						len(canary), carried[canary], len(copies))
+				}
+			}
+			if n := nonZeroBytes(copies...); n != 0 {
+				t.Fatalf("%d non-zero bytes left across the %d buffers the parse copied into", n, len(copies))
+			}
+		})
+	}
 }
 
 func TestCarrySiblingsFromReplacesTheSiblings(t *testing.T) {

@@ -222,10 +222,19 @@ type SiblingMeta struct {
 // with [Credentials.Wipe]; on an error nothing copied from blob is left
 // behind.
 func ParseBlob(blob []byte) (*Credentials, error) {
+	return parseBlob(blob, func(jsontext.Value) {})
+}
+
+// parseBlob is [ParseBlob], calling observe with every buffer it copies
+// part of blob into, at the moment of the copy. The copies are wiped on
+// every error path and none is reachable from outside, so this is the
+// only way a test can hold them and check that each was zeroed.
+func parseBlob(blob []byte, observe func(jsontext.Value)) (*Credentials, error) {
 	root, err := readWholeValue(blob)
 	if err != nil {
 		return nil, fmt.Errorf("the credentials blob is not valid JSON: %w", err)
 	}
+	observe(root)
 	defer memguard.WipeBytes(root)
 
 	if root.Kind() != '{' {
@@ -236,6 +245,9 @@ func ParseBlob(blob []byte) (*Credentials, error) {
 		return nil, fmt.Errorf("the credentials blob is not valid JSON: %w", err)
 	}
 	defer wipeMembers(rootMembers)
+	for _, m := range rootMembers {
+		observe(m.value)
+	}
 	inner := memberValue(rootMembers, BlobRoot)
 	if inner == nil || inner.Kind() != '{' {
 		return nil, ErrMissingRoot
@@ -246,6 +258,14 @@ func ParseBlob(blob []byte) (*Credentials, error) {
 		return nil, fmt.Errorf("the credentials blob is not valid JSON: %w", err)
 	}
 	defer wipeMembers(members)
+	for _, m := range members {
+		observe(m.value)
+	}
+	keep := func(value jsontext.Value) jsontext.Value {
+		kept := jsontext.Value(bytes.Clone(value))
+		observe(kept)
+		return kept
+	}
 
 	credentials := &Credentials{}
 	for _, m := range members {
@@ -301,12 +321,12 @@ func ParseBlob(blob []byte) (*Credentials, error) {
 			}
 			continue
 		default:
-			credentials.Extra = append(credentials.Extra, ExtraMember{Name: m.name, Value: bytes.Clone(m.value)})
+			credentials.Extra = append(credentials.Extra, ExtraMember{Name: m.name, Value: keep(m.value)})
 			continue
 		}
 		// A recognised key of the wrong type keeps its place among the
 		// unknown members, so writing the blob back does not move it.
-		credentials.Extra = append(credentials.Extra, ExtraMember{Name: m.name, Value: bytes.Clone(m.value)})
+		credentials.Extra = append(credentials.Extra, ExtraMember{Name: m.name, Value: keep(m.value)})
 	}
 
 	if credentials.AccessToken == nil {
@@ -324,7 +344,7 @@ func ParseBlob(blob []byte) (*Credentials, error) {
 		if m.name == BlobRoot {
 			continue
 		}
-		credentials.Siblings = append(credentials.Siblings, ExtraMember{Name: m.name, Value: bytes.Clone(m.value)})
+		credentials.Siblings = append(credentials.Siblings, ExtraMember{Name: m.name, Value: keep(m.value)})
 	}
 	return credentials, nil
 }
