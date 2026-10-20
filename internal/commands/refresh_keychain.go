@@ -293,6 +293,7 @@ func (s *Status) readRefreshItem(ctx context.Context, service string) (*claude.C
 		credentials, parseErr = claude.ParseBlob(blob)
 		return parseErr
 	})
+	useObserveParsed(credentials)
 	return credentials, err
 }
 

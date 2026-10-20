@@ -352,3 +352,48 @@ func TestMigratedRefreshTargetRefusesAmbiguousOrUnownedItems(t *testing.T) {
 		})
 	}
 }
+
+// TestMigratedRefreshWipesTheReadsItReplaces checks that a refresh wipes
+// its early read of the item once the read under the hold replaces it, and
+// that read too, on the path that writes and on the one that discards.
+func TestMigratedRefreshWipesTheReadsItReplaces(t *testing.T) {
+	tests := map[string]struct {
+		// changed rewrites the item while the token request is in flight,
+		// after the early read and before the hold.
+		changed         bool
+		wantLock        string
+		wantNote        string
+		wantCredentials int
+	}{
+		"success: the early read and the held read are wiped after the write": {
+			// The early read, the held re-read and the readback.
+			wantLock: "migrated_refreshed", wantCredentials: 3,
+		},
+		"error: an item changed before the hold discards and wipes both reads": {
+			changed: true, wantLock: "none", wantNote: "the item changed under us", wantCredentials: 2,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			world, item, current := migratedWorld(t)
+			paths, _ := refreshRecord(t, world.fixture)
+			// The item now carries members beside the same tokens, so the
+			// reads the refresh makes of it have values to wipe.
+			world.fixture.KeychainItem(item.service, withMembers(t, world.fixture.Blob("old-access", "old-refresh", testutil.ExpiredAt()), wipeMembers))
+			world.status.Refresher = refreshOAuth(t, func(w http.ResponseWriter, _ *http.Request) {
+				if tt.changed {
+					world.fixture.KeychainItem(item.service, withMembers(t, world.fixture.Blob("peer-access", "peer-refresh", testutil.FreshAt()), wipeMembers))
+				}
+				_, _ = w.Write([]byte(`{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}`))
+			})
+			tracked := trackParsed(t)
+
+			result := world.status.refreshMigrated(t.Context(), paths, item, current)
+
+			if result.lockState != tt.wantLock || !strings.Contains(result.note, tt.wantNote) {
+				t.Fatalf("result = %+v, want lock %q and a note with %q", result, tt.wantLock, tt.wantNote)
+			}
+			tracked.requireWiped(t, tt.wantCredentials)
+		})
+	}
+}

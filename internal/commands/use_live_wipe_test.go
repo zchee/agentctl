@@ -29,10 +29,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/runtime/fault"
 	"github.com/zchee/agentctl/internal/secret"
 	"github.com/zchee/agentctl/internal/testutil"
 )
@@ -570,6 +572,177 @@ func TestUseAdoptionWipesTheSnapshotsItInspects(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tracked := trackParsed(t)
 			tt.run(t)
+			tracked.requireWiped(t, tt.wantCredentials)
+		})
+	}
+}
+
+// hookRefresher delegates a refresh, keeps aliases of the member values of
+// the credential it was handed and of the one it returns, and then runs
+// after, so a test can change the world between the early reads and the
+// write.
+type hookRefresher struct {
+	next   claude.TokenRefresher
+	after  func()
+	values [][]byte
+}
+
+func (r *hookRefresher) RefreshAccess(ctx context.Context, credentials *claude.Credentials) (*claude.Credentials, error) {
+	r.keep(credentials)
+	refreshed, err := r.next.RefreshAccess(ctx, credentials)
+	r.keep(refreshed)
+	if r.after != nil {
+		r.after()
+	}
+	return refreshed, err
+}
+
+func (r *hookRefresher) keep(credentials *claude.Credentials) {
+	if credentials == nil {
+		return
+	}
+	for _, members := range [][]claude.ExtraMember{credentials.Siblings, credentials.Extra} {
+		for _, member := range members {
+			r.values = append(r.values, member.Value)
+		}
+	}
+}
+
+// TestUseSwapWipesEverySnapshotOnAnEarlyExit ends a namespace swap at each
+// exit before the write and checks that every snapshot it parsed, and every
+// member value the incoming credential carried, is zero afterwards.
+func TestUseSwapWipesEverySnapshotOnAnEarlyExit(t *testing.T) {
+	type hook struct {
+		world  *wipeSwapWorld
+		cancel context.CancelFunc
+	}
+	tests := map[string]struct {
+		// expired sends the swap through the refresher, whose return is
+		// where after runs.
+		expired bool
+		// before runs before the swap starts.
+		before func(t *testing.T, h *hook)
+		// after runs once the incoming credential is refreshed, after the
+		// early reads and before the hold.
+		after func(t *testing.T, h *hook)
+		// cancelAtWrite holds the swap at its pause point just before the
+		// write phase, cancels the run there, and lets it go on.
+		cancelAtWrite   bool
+		wantKind        claude.SwapOutcomeKind
+		wantNote        string
+		wantCredentials int
+	}{
+		"error: a busy peer lock": {
+			before: func(t *testing.T, h *hook) {
+				if err := os.Mkdir(filepath.Join(h.world.fixture.NamespaceDir("owner", "org"), secret.RefreshLockName), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantKind:        claude.SwapBusy,
+			wantCredentials: 2,
+		},
+		"error: the run is cancelled before the hold": {
+			cancelAtWrite:   true,
+			wantKind:        claude.SwapRefused,
+			wantNote:        "the Claude Code locks could not be taken",
+			wantCredentials: 2,
+		},
+		"error: the item changed account under the hold": {
+			expired: true,
+			after: func(t *testing.T, h *hook) {
+				other := h.world.fixture.IdentifiedBlob("other-access", "other-refresh", testutil.FreshAt(), "other", "org")
+				h.world.fixture.KeychainItem(h.world.service, withMembers(t, other, wipeMembers))
+			},
+			wantKind:        claude.SwapDiscarded,
+			wantNote:        "the item changed under the hold",
+			wantCredentials: 3,
+		},
+		"error: the update cannot be built under the hold": {
+			expired: true,
+			after: func(t *testing.T, h *hook) {
+				// The same tokens, so the digests still agree, with a member
+				// that puts the document over the update ceiling.
+				outgoing := h.world.fixture.IdentifiedBlob("outgoing-access", "outgoing-refresh", testutil.FreshAt(), "owner", "org")
+				grown := `"grown":"` + strings.Repeat(siblingCanary, secret.KeychainBlobLimit/len(siblingCanary)+1) + `"`
+				h.world.fixture.KeychainItem(h.world.service, withMembers(t, outgoing, wipeMembers+","+grown))
+			},
+			wantKind:        claude.SwapDiscarded,
+			wantNote:        "credential_too_large: the keychain item grew under the hold",
+			wantCredentials: 3,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			world := newWipeSwapWorld(t, false, tt.expired, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"access_token":"rotated-access","refresh_token":"rotated-refresh","token_type":"Bearer","expires_in":28800,"scope":"user:inference user:profile"}`))
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			h := &hook{world: world, cancel: cancel}
+			client, err := claude.NewOAuthClientFromEnv()
+			if err != nil {
+				t.Fatal(err)
+			}
+			refresher := &hookRefresher{next: client}
+			if tt.after != nil {
+				refresher.after = func() { tt.after(t, h) }
+			}
+			world.swap.refresher = refresher
+			if tt.before != nil {
+				tt.before(t, h)
+			}
+			resume := filepath.Join(t.TempDir(), "resume")
+			if tt.cancelAtWrite {
+				t.Setenv("AGENTCTL_FAULT", "pause_"+fault.BeforeSwapWrite)
+				t.Setenv("AGENTCTL_FAULT_RESUME", resume)
+			}
+			tracked := trackParsed(t)
+
+			done := make(chan *useReport, 1)
+			go func() {
+				done <- world.swap.swapIn(ctx, useIncoming{record: world.incoming, direction: secret.DirectionForward, source: useSource{kind: useSourceOwn}}, world.store, cli.ClaudeUseOptions{Yes: true})
+			}()
+			if tt.cancelAtWrite {
+				// The marker proves the swap is held at the pause, past every
+				// early read and the adoption, and not yet at the locks.
+				reached := false
+				for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+					if _, err := os.Stat(resume + ".reached"); err == nil {
+						reached = true
+						break
+					}
+				}
+				cancel()
+				if err := os.WriteFile(resume, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if !reached {
+					<-done
+					t.Fatal("the swap never reached the pause before its write phase")
+				}
+			}
+			report := <-done
+
+			note := ""
+			if report.note != nil {
+				note = *report.note
+			}
+			if report.outcome.Kind != tt.wantKind || !strings.Contains(note, tt.wantNote) {
+				t.Fatalf("outcome = %+v, note = %q; want %v with %q", report.outcome, note, tt.wantKind, tt.wantNote)
+			}
+			for _, call := range world.fixture.SecurityLog() {
+				if strings.HasPrefix(call, "add-generic-password ") {
+					t.Fatalf("an exit before the write wrote the item: %s", call)
+				}
+			}
+			if tt.expired && len(refresher.values) == 0 {
+				t.Fatal("the refresher saw no member values: the test proves nothing about the incoming credential")
+			}
+			for i, value := range refresher.values {
+				if nonZero := countNonZero(value); nonZero != 0 {
+					t.Errorf("incoming member value %d keeps %d non-zero bytes of %d", i, nonZero, len(value))
+				}
+			}
 			tracked.requireWiped(t, tt.wantCredentials)
 		})
 	}

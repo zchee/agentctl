@@ -23,8 +23,8 @@ import (
 )
 
 // useParsedObserver, when a test installs one, sees every credential the
-// swap and undo read helpers parse, before it is returned to its owner, so
-// the test can check that the owner wiped it.
+// swap, undo and migrated-refresh read helpers parse, before it is returned
+// to its owner, so the test can check that the owner wiped it.
 var useParsedObserver atomic.Pointer[func(*claude.Credentials)]
 
 func useObserveParsed(credentials *claude.Credentials) {
