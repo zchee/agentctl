@@ -27,6 +27,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/awnumar/memguard"
 
@@ -402,21 +403,11 @@ func (c *Credentials) SiblingSummary() ([]SiblingMeta, error) {
 // The output carries the tokens in plaintext. It exists only to be handed
 // to a credential store, and the caller must wipe it after that I/O.
 func (c *Credentials) BlobJSON() ([]byte, error) {
-	var buffer bytes.Buffer
-	enc := jsontext.NewEncoder(&buffer)
-	if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(BlobRoot)); err != nil {
+	bound, err := c.documentBound(false)
+	if err != nil {
 		return nil, err
 	}
-	if err := c.writeAccountObject(enc); err != nil {
-		return nil, err
-	}
-	if err := enc.WriteToken(jsontext.EndObject); err != nil {
-		return nil, err
-	}
-
-	// The encoder appends a newline after the top-level value; the blob is
-	// a single line in both its stores.
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+	return c.encodeDocument(encoderBacking(bound), false)
 }
 
 // KeychainBlobJSON serializes the whole keychain document: claudeAiOauth
@@ -433,50 +424,175 @@ func (c *Credentials) BlobJSON() ([]byte, error) {
 // plaintext. It exists only to be handed to the keychain, and the caller
 // must wipe it after that I/O.
 func (c *Credentials) KeychainBlobJSON() ([]byte, error) {
-	var buffer bytes.Buffer
-	// A buffer that grows leaves the plaintext it outgrew behind in memory
-	// no one can wipe, so it is sized for the whole document up front.
-	size := 4096
-	for _, m := range c.Siblings {
-		size += len(m.Name) + len(m.Value) + 8
-	}
-	for _, m := range c.Extra {
-		size += len(m.Name) + len(m.Value) + 8
-	}
-	buffer.Grow(size)
-	enc := jsontext.NewEncoder(&buffer, keychainValueOptions...)
-	if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(BlobRoot)); err != nil {
-		memguard.WipeBytes(buffer.Bytes())
+	bound, err := c.documentBound(true)
+	if err != nil {
 		return nil, err
 	}
-	if err := c.writeAccountObject(enc); err != nil {
-		memguard.WipeBytes(buffer.Bytes())
-		return nil, err
+	return c.encodeDocument(encoderBacking(bound), true)
+}
+
+// encodeDocument writes the credential document into backing: the
+// account object, then, when siblings is set, every sibling under the
+// keychain options.
+func (c *Credentials) encodeDocument(backing []byte, siblings bool) ([]byte, error) {
+	var opts []jsontext.Options
+	if siblings {
+		opts = keychainValueOptions
 	}
-	emitted := map[string]bool{BlobRoot: true}
-	for _, m := range c.Siblings {
-		// A second member under a name already written would leave the
-		// meaning of the document to whichever reader parses it; the
-		// account credential and the first sibling of a name are the ones
-		// written.
-		if emitted[m.Name] {
+	return encodeInto(backing, opts, func(enc *jsontext.Encoder) error {
+		if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(BlobRoot)); err != nil {
+			return err
+		}
+		if err := c.writeAccountObject(enc); err != nil {
+			return err
+		}
+		if siblings {
+			emitted := map[string]bool{BlobRoot: true}
+			for _, m := range c.Siblings {
+				// A second member under a name already written would leave
+				// the meaning of the document to whichever reader parses
+				// it; the account credential and the first sibling of a
+				// name are the ones written.
+				if emitted[m.Name] {
+					continue
+				}
+				emitted[m.Name] = true
+				if err := enc.WriteToken(jsontext.String(m.Name)); err != nil {
+					return err
+				}
+				if err := enc.WriteValue(m.Value); err != nil {
+					return fmt.Errorf("the credentials blob member `%s` is not valid JSON: %w", m.Name, err)
+				}
+			}
+		}
+		return enc.WriteToken(jsontext.EndObject)
+	})
+}
+
+// documentBound is an upper bound on the length of the credential
+// document, trailing newline included, computed from what every field
+// encodes to rather than from its decoded length: an escaped name or a
+// token full of characters that need escaping is several times longer
+// written than read.
+func (c *Credentials) documentBound(siblings bool) (int, error) {
+	// The root name, the account object's member names, punctuation, two
+	// integers of at most 20 digits and an all-null tokenAccount fit well
+	// within this; everything of variable length is added below.
+	const skeleton = 512
+	n := skeleton
+	for _, token := range []*secret.Secret{c.AccessToken, c.RefreshToken} {
+		if token == nil {
 			continue
 		}
-		emitted[m.Name] = true
-		if err := enc.WriteToken(jsontext.String(m.Name)); err != nil {
-			memguard.WipeBytes(buffer.Bytes())
-			return nil, err
-		}
-		if err := enc.WriteValue(m.Value); err != nil {
-			memguard.WipeBytes(buffer.Bytes())
-			return nil, fmt.Errorf("the credentials blob member `%s` is not valid JSON: %w", m.Name, err)
+		if err := token.WithPlaintext(func(b []byte) error {
+			n += quotedBound(b)
+			return nil
+		}); err != nil {
+			return 0, err
 		}
 	}
-	if err := enc.WriteToken(jsontext.EndObject); err != nil {
-		memguard.WipeBytes(buffer.Bytes())
+	for _, scope := range c.Scopes {
+		n += quotedBound(scope) + len(",")
+	}
+	for _, optional := range []*string{c.SubscriptionType, c.RateLimitTier, c.ClientID} {
+		if optional != nil {
+			n += quotedBound(*optional)
+		}
+	}
+	if account := c.TokenAccount; account != nil {
+		for _, field := range []*string{
+			account.UUID, account.EmailAddress, account.OrganizationUUID,
+			account.OrganizationName, account.WorkspaceID, account.WorkspaceName,
+		} {
+			if field != nil {
+				n += quotedBound(*field)
+			}
+		}
+	}
+	for _, m := range c.Extra {
+		n += memberBound(m)
+	}
+	if siblings {
+		for _, m := range c.Siblings {
+			n += memberBound(m)
+		}
+	}
+	return n, nil
+}
+
+// memberBound is an upper bound on the bytes one member occupies once
+// written: its quoted name, a colon, the re-encoded value and a comma,
+// plus the braces and newline of a one-member document.
+func memberBound(m ExtraMember) int {
+	return len("{") + quotedBound(m.Name) + len(":") + encodedBound(m.Value) + len(",}\n")
+}
+
+// quotedBound is an upper bound on the length of s written as a JSON
+// string, quotes included.
+func quotedBound[T ~string | ~[]byte](s T) int {
+	return len(`""`) + encodedBound(s)
+}
+
+// encodedBound is an upper bound on what the encoder emits for b, whether
+// b is quoted as a string or is a JSON value being re-encoded.
+//
+// No input byte becomes more output than its cost here: a control
+// character or an HTML-sensitive one may become a six-byte \u escape, a
+// quote or backslash a two-byte escape, and a byte of a multi-byte
+// sequence either itself or, when invalid, the three-byte replacement
+// character (U+2028 and U+2029 escape to six bytes from three). When b is
+// a value, an escape sequence it already carries is never written longer
+// than it arrived, whitespace between tokens is dropped, and numbers and
+// literals are copied as they arrived: no serializer here enables the
+// options that canonicalize numbers, which could lengthen them.
+func encodedBound[T ~string | ~[]byte](b T) int {
+	n := 0
+	for i := range len(b) {
+		switch c := b[i]; {
+		case c < 0x20, c == '<', c == '>', c == '&':
+			n += len(`\u0000`)
+		case c == '"', c == '\\':
+			n += len(`\"`)
+		case c >= utf8.RuneSelf:
+			n += len("\ufffd")
+		default:
+			n++
+		}
+	}
+	return n
+}
+
+// encoderBacking returns the array an encoder bounded by bound writes
+// into without ever reallocating it.
+//
+// A reallocation copies the plaintext written so far and leaves the old
+// array where nothing can wipe it. Within bound no append outgrows the
+// array, and the extra quarter covers the encoder's own flush, which grows
+// a bytes.Buffer whenever less than a quarter of its length is free.
+func encoderBacking(bound int) []byte {
+	return make([]byte, 0, bound+bound/4+1)
+}
+
+// encodeInto runs write against an encoder that appends directly into
+// backing, and returns the value it wrote without the trailing newline.
+//
+// The newline is cleared from the array as well, so wiping the result
+// wipes everything the encoder wrote. On error everything written is
+// wiped before returning.
+func encodeInto(backing []byte, opts []jsontext.Options, write func(*jsontext.Encoder) error) ([]byte, error) {
+	buffer := bytes.NewBuffer(backing)
+	if err := write(jsontext.NewEncoder(buffer, opts...)); err != nil {
+		// The encoder writes past the buffer's length before it flushes,
+		// so the whole capacity is wiped, not only what was flushed.
+		written := buffer.Bytes()
+		memguard.WipeBytes(written[:cap(written)])
+		memguard.WipeBytes(backing[:cap(backing)])
 		return nil, err
 	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+	full := buffer.Bytes()
+	out := bytes.TrimSuffix(full, []byte("\n"))
+	clear(full[len(out):])
+	return out, nil
 }
 
 // keychainValueOptions are the options sibling values are written and read
@@ -517,8 +633,10 @@ func (c *Credentials) writeAccountObject(enc *jsontext.Encoder) error {
 		emitted[name] = true
 		var quoted []byte
 		err := token.WithPlaintext(func(b []byte) error {
+			// Sized for the escaped token, so quoting never reallocates
+			// and leaves a copy behind that the wipe below cannot reach.
 			var quoteErr error
-			if quoted, quoteErr = jsontext.AppendQuote(nil, b); quoteErr != nil {
+			if quoted, quoteErr = jsontext.AppendQuote(make([]byte, 0, quotedBound(b)), b); quoteErr != nil {
 				return quoteErr
 			}
 			return enc.WriteValue(quoted)
@@ -964,25 +1082,31 @@ func wipeExtraMembers(members []ExtraMember) {
 // serializer writes it inside the document: the quoted name, a colon and
 // the re-encoded value.
 func siblingDigest(m ExtraMember) (string, error) {
-	var buffer bytes.Buffer
-	buffer.Grow(len(m.Name) + len(m.Value) + 16)
+	backing := encoderBacking(memberBound(m))
 	// The scratch encoding carries the value's secrets.
-	defer func() { memguard.WipeBytes(buffer.Bytes()) }()
-	enc := jsontext.NewEncoder(&buffer, keychainValueOptions...)
-	if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(m.Name)); err != nil {
-		return "", err
-	}
-	if err := enc.WriteValue(m.Value); err != nil {
-		return "", err
-	}
-	if err := enc.WriteToken(jsontext.EndObject); err != nil {
+	defer memguard.WipeBytes(backing[:cap(backing)])
+	object, err := encodeMember(backing, m)
+	if err != nil {
 		return "", err
 	}
 	// A one-member object holds, between its braces, exactly the bytes the
 	// member occupies in the full document.
-	object := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
 	sum := sha256.Sum256(object[1 : len(object)-1])
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// encodeMember writes m into backing as a one-member object under the
+// keychain options.
+func encodeMember(backing []byte, m ExtraMember) ([]byte, error) {
+	return encodeInto(backing, keychainValueOptions, func(enc *jsontext.Encoder) error {
+		if err := writeTokens(enc, jsontext.BeginObject, jsontext.String(m.Name)); err != nil {
+			return err
+		}
+		if err := enc.WriteValue(m.Value); err != nil {
+			return err
+		}
+		return enc.WriteToken(jsontext.EndObject)
+	})
 }
 
 // objectEntries counts the distinct member names of an object value, so a

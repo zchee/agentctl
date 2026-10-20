@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/awnumar/memguard"
 	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/internal/secret"
@@ -261,7 +262,7 @@ func TestBlobJSONWritesTheFixtureInItsAuthorsShape(t *testing.T) {
 	t.Parallel()
 
 	credentials := parseFixture(t, "credentials-new-blob.json")
-	if diff := gocmp.Diff(newBlobGolden, string(mustBlobJSON(t, credentials))); diff != "" {
+	if diff := documentDiff(t, []byte(newBlobGolden), mustBlobJSON(t, credentials)); diff != "" {
 		t.Fatalf("blob mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -577,7 +578,7 @@ func mustParse(t *testing.T, document string) *Credentials {
 	t.Helper()
 	credentials, err := ParseBlob([]byte(document))
 	if err != nil {
-		t.Fatalf("the document should parse: %v\n%s", err, document)
+		t.Fatalf("the document should parse (%d bytes, sha256 %s): %v", len(document), sha256Hex(document), err)
 	}
 	return credentials
 }
@@ -638,6 +639,77 @@ func nonZeroBytes(buffers ...[]byte) int {
 	return count
 }
 
+// memberShape is what a failure message may say about one member: its
+// name, length and digest, and the same for the members of an object
+// value. The fixtures carry token-shaped canaries, and a diagnostic that
+// printed them would copy them into the test log.
+type memberShape struct {
+	Name    string
+	Len     int
+	SHA256  string
+	Members []memberShape
+}
+
+// shapeOf describes one member without its value.
+func shapeOf(t *testing.T, name string, value []byte) memberShape {
+	t.Helper()
+	shape := memberShape{Name: name, Len: len(value), SHA256: sha256Hex(string(value))}
+	if jsontext.Value(value).Kind() == '{' {
+		shape.Members = objectShape(t, value)
+	}
+	return shape
+}
+
+// objectShape describes every member of an object in order.
+func objectShape(t *testing.T, object []byte) []memberShape {
+	t.Helper()
+	dec := jsontext.NewDecoder(bytes.NewReader(object), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	if token, err := dec.ReadToken(); err != nil || token.Kind() != '{' {
+		t.Fatalf("not an object (%d bytes, sha256 %s): %v", len(object), sha256Hex(string(object)), err)
+	}
+	var shapes []memberShape
+	for dec.PeekKind() != '}' {
+		token, err := dec.ReadToken()
+		if err != nil {
+			t.Fatalf("reading a member name of an object of %d bytes: %v", len(object), err)
+		}
+		// The token is only valid until the next read.
+		name := token.String()
+		value, err := dec.ReadValue()
+		if err != nil {
+			t.Fatalf("reading member %q of an object of %d bytes: %v", name, len(object), err)
+		}
+		shapes = append(shapes, shapeOf(t, name, bytes.Clone(value)))
+	}
+	return shapes
+}
+
+// memberShapes describes each member of a list in order.
+func memberShapes(t *testing.T, members []ExtraMember) []memberShape {
+	t.Helper()
+	shapes := make([]memberShape, 0, len(members))
+	for _, m := range members {
+		shapes = append(shapes, shapeOf(t, m.Name, m.Value))
+	}
+	return shapes
+}
+
+// documentDiff reports, member by member and without values, how got
+// differs from want, or nothing when they are byte-identical.
+func documentDiff(t *testing.T, want, got []byte) string {
+	t.Helper()
+	if bytes.Equal(want, got) {
+		return ""
+	}
+	if diff := gocmp.Diff(objectShape(t, want), objectShape(t, got)); diff != "" {
+		return diff
+	}
+	// Equal members, different bytes between them: only the whitespace or
+	// the order of the punctuation differs.
+	return fmt.Sprintf("the members match but the documents differ: want %d bytes sha256 %s, got %d bytes sha256 %s",
+		len(want), sha256Hex(string(want)), len(got), sha256Hex(string(got)))
+}
+
 // memberValues returns the value buffers of members, aliased rather than
 // copied, so a test can inspect them after the owner wipes them.
 func memberValues(members []ExtraMember) [][]byte {
@@ -692,7 +764,7 @@ func TestParseBlobKeepsTheTopLevelSiblings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			credentials := mustParse(t, tt.document)
-			if diff := gocmp.Diff(tt.want, credentials.Siblings); diff != "" {
+			if diff := gocmp.Diff(memberShapes(t, tt.want), memberShapes(t, credentials.Siblings)); diff != "" {
 				t.Fatalf("siblings mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -709,10 +781,10 @@ func TestBlobJSONNeverWritesSiblings(t *testing.T) {
 		`,"mcpOAuth":{"srv|0123456789abcdef":{"accessToken":"SIBLING-CANARY-9f31"}},"pluginSecrets":{"p":"SIBLING-CANARY-9f31"}}`
 	credentials := mustParse(t, withSiblings)
 	if len(credentials.Siblings) != 2 {
-		t.Fatalf("the siblings should be read, got %v", credentials.Siblings)
+		t.Fatalf("the siblings should be read, got %d", len(credentials.Siblings))
 	}
 	got := mustBlobJSON(t, credentials)
-	if diff := gocmp.Diff(newBlobGolden, string(got)); diff != "" {
+	if diff := documentDiff(t, []byte(newBlobGolden), got); diff != "" {
 		t.Fatalf("the file document changed (-want +got):\n%s", diff)
 	}
 	if bytes.Contains(got, []byte("SIBLING-CANARY-9f31")) {
@@ -748,7 +820,7 @@ func TestKeychainBlobJSONWritesTheAccountThenTheSiblings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			credentials := mustParse(t, tt.document)
-			if diff := gocmp.Diff(tt.want, string(mustKeychainBlobJSON(t, credentials))); diff != "" {
+			if diff := documentDiff(t, []byte(tt.want), mustKeychainBlobJSON(t, credentials)); diff != "" {
 				t.Fatalf("keychain document mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -767,7 +839,7 @@ func TestKeychainBlobJSONSkipsASiblingThatNamesTheAccount(t *testing.T) {
 		{Name: "pluginSecrets", Value: jsontext.Value(`{"p":"second"}`)},
 	}
 	want := `{` + minimalAccount + `,"pluginSecrets":{"p":"v"}}`
-	if diff := gocmp.Diff(want, string(mustKeychainBlobJSON(t, credentials))); diff != "" {
+	if diff := documentDiff(t, []byte(want), mustKeychainBlobJSON(t, credentials)); diff != "" {
 		t.Fatalf("keychain document mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -794,26 +866,28 @@ func TestKeychainBlobJSONReencodesASiblingValueWithoutChangingIt(t *testing.T) {
 	written := mustKeychainBlobJSON(t, credentials)
 
 	wantMember := canonicalMember(t, "mcpOAuth", seedValue)
-	if diff := gocmp.Diff(`"mcpOAuth":{"srv":{"a":1,"a":2},"who":"café"}`, string(wantMember)); diff != "" {
-		t.Fatalf("canonical member mismatch (-want +got):\n%s", diff)
+	if want := `"mcpOAuth":{"srv":{"a":1,"a":2},"who":"café"}`; !gocmp.Equal(want, string(wantMember)) {
+		t.Fatalf("canonical member mismatch: want %d bytes sha256 %s, got %d bytes sha256 %s",
+			len(want), sha256Hex(want), len(wantMember), sha256Hex(string(wantMember)))
 	}
 	if !bytes.Contains(written, wantMember) {
-		t.Fatalf("the document does not carry the canonical member:\n%s", written)
+		t.Fatalf("the document of %d bytes does not carry the canonical member (sha256 %s)", len(written), sha256Hex(string(wantMember)))
 	}
 
 	reparsed := mustParse(t, string(written))
 	if len(reparsed.Siblings) != 1 {
-		t.Fatalf("one sibling expected, got %v", reparsed.Siblings)
+		t.Fatalf("one sibling expected, got %d", len(reparsed.Siblings))
 	}
 	decode := func(value jsontext.Value) any {
 		var decoded any
 		if err := json.Unmarshal(value, &decoded, jsontext.AllowDuplicateNames(true)); err != nil {
-			t.Fatalf("decoding %s: %v", value, err)
+			t.Fatalf("decoding a value of %d bytes: %v", len(value), err)
 		}
 		return decoded
 	}
-	if diff := gocmp.Diff(decode(seedValue), decode(reparsed.Siblings[0].Value)); diff != "" {
-		t.Fatalf("the value changed (-seed +written):\n%s", diff)
+	if !gocmp.Equal(decode(seedValue), decode(reparsed.Siblings[0].Value)) {
+		t.Fatalf("the value changed: seed %d bytes sha256 %s, written %d bytes sha256 %s",
+			len(seedValue), sha256Hex(string(seedValue)), len(reparsed.Siblings[0].Value), sha256Hex(string(reparsed.Siblings[0].Value)))
 	}
 
 	summary := mustSiblingSummary(t, credentials)
@@ -870,7 +944,7 @@ func TestSiblingSummaryDescribesEachSiblingWithoutItsValue(t *testing.T) {
 				t.Fatalf("entries mismatch (-want +got):\n%s", diff)
 			}
 			if rendered := fmt.Sprintf("%+v %#v", summary, summary); strings.Contains(rendered, "SIBLING-CANARY-9f31") {
-				t.Fatalf("the summary carries a value: %s", rendered)
+				t.Fatalf("the summary carries a value (rendered %d bytes)", len(rendered))
 			}
 		})
 	}
@@ -909,7 +983,7 @@ func TestSiblingSummaryIsStableAcrossAReparse(t *testing.T) {
 			if diff := gocmp.Diff(mustDigests(t, first), mustDigests(t, second)); diff != "" {
 				t.Fatalf("account digests changed (-first +second):\n%s", diff)
 			}
-			if diff := gocmp.Diff(mustKeychainBlobJSON(t, second), mustKeychainBlobJSON(t, third)); diff != "" {
+			if diff := documentDiff(t, mustKeychainBlobJSON(t, second), mustKeychainBlobJSON(t, third)); diff != "" {
 				t.Fatalf("the re-encoded document is not a fixed point (-second +third):\n%s", diff)
 			}
 		})
@@ -1007,7 +1081,7 @@ func TestCarrySiblingsFromReplacesTheSiblings(t *testing.T) {
 			}
 			receiver.CarrySiblingsFrom(src)
 
-			if diff := gocmp.Diff(tt.want, receiver.Siblings); diff != "" {
+			if diff := gocmp.Diff(memberShapes(t, tt.want), memberShapes(t, receiver.Siblings)); diff != "" {
 				t.Fatalf("siblings mismatch (-want +got):\n%s", diff)
 			}
 			if tt.self {
@@ -1022,7 +1096,7 @@ func TestCarrySiblingsFromReplacesTheSiblings(t *testing.T) {
 			// The carried values are copies: wiping the source must not
 			// reach into the receiver.
 			src.Wipe()
-			if diff := gocmp.Diff(tt.want, receiver.Siblings); diff != "" {
+			if diff := gocmp.Diff(memberShapes(t, tt.want), memberShapes(t, receiver.Siblings)); diff != "" {
 				t.Fatalf("the carry aliased the source (-want +got):\n%s", diff)
 			}
 		})
@@ -1066,7 +1140,228 @@ func TestKeychainBlobJSONRoundTripsAOneMebibyteDocument(t *testing.T) {
 	if summary[0].Entries == nil || *summary[0].Entries != entries {
 		t.Fatalf("mcpOAuth should count %d entries, got %v", entries, summary[0].Entries)
 	}
-	if diff := gocmp.Diff(newBlobGolden, string(mustBlobJSON(t, parseFixture(t, "credentials-new-blob.json")))); diff != "" {
+	if diff := documentDiff(t, []byte(newBlobGolden), mustBlobJSON(t, parseFixture(t, "credentials-new-blob.json"))); diff != "" {
 		t.Fatalf("the file document changed (-want +got):\n%s", diff)
 	}
+}
+
+func TestSerializersNeverOutgrowTheArrayTheyWipe(t *testing.T) {
+	t.Parallel()
+
+	// A serializer whose buffer reallocates leaves the plaintext it had
+	// already written in the outgrown array, where no wipe reaches it.
+	// Every case here is far longer encoded than decoded: a name of
+	// control characters escapes each byte to six, and a token of quotes,
+	// backslashes and control characters to two or six.
+	escapes := strings.Repeat(`\"\\\u0002`, 8<<10)
+	controlName := strings.Repeat(`\u0001`, 2000)
+	tests := map[string]struct {
+		document string
+		siblings []ExtraMember
+	}{
+		"success: a sibling name of control characters": {
+			document: `{` + minimalAccount + `,"` + controlName + `":{"accessToken":"SIBLING-CANARY-9f31"}}`,
+		},
+		"success: an access token that is mostly escapes": {
+			document: `{"claudeAiOauth":{"accessToken":"` + escapes + `","refreshToken":"` + escapes + `","expiresAt":5,"scopes":[]}}`,
+		},
+		"success: a large tokenAccount field": {
+			document: `{"claudeAiOauth":{"accessToken":"a","expiresAt":5,"scopes":[],` +
+				`"tokenAccount":{"uuid":"u","emailAddress":"` + escapes + `","organizationUuid":"` + escapes + `"}}}`,
+		},
+		"success: a large unrecognised account member": {
+			document: `{"claudeAiOauth":{"accessToken":"a","expiresAt":5,"scopes":[],"` + controlName + `":{"k":"` + escapes + `"}}}`,
+		},
+		"success: scopes and optional strings that need escaping": {
+			document: `{"claudeAiOauth":{"accessToken":"a","expiresAt":5,` +
+				`"scopes":["` + strings.Repeat(`\u0003","`, 4000) + `"],` +
+				`"subscriptionType":"` + escapes + `","rateLimitTier":"` + escapes + `","clientId":"` + escapes + `"}}`,
+		},
+		"success: a sibling value of invalid UTF-8 set by hand": {
+			document: `{` + minimalAccount + `}`,
+			// Each invalid byte is written as a three-byte replacement
+			// character; the parser never produces this, but the field is
+			// exported.
+			siblings: []ExtraMember{{Name: "pluginSecrets", Value: jsontext.Value(`"` + strings.Repeat("\xff", 8<<10) + `"`)}},
+		},
+	}
+	for name, tt := range tests {
+		for _, siblings := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/siblings=%t", name, siblings), func(t *testing.T) {
+				t.Parallel()
+				credentials := mustParse(t, tt.document)
+				if tt.siblings != nil {
+					credentials.Siblings = tt.siblings
+				}
+				bound, err := credentials.documentBound(siblings)
+				if err != nil {
+					t.Fatalf("document bound: %v", err)
+				}
+
+				// The array handed to the encoder holds every byte it
+				// wrote: once the result is wiped, nothing is left in it.
+				backing := encoderBacking(bound)
+				written, err := credentials.encodeDocument(backing, siblings)
+				if err != nil {
+					t.Fatalf("encode: %v", err)
+				}
+				if cap(written) != cap(backing) || len(written) > bound {
+					t.Fatalf("the encoder reallocated: %d bytes written into a capacity of %d, bound %d, first capacity %d",
+						len(written), cap(written), bound, cap(backing))
+				}
+				want := sha256Hex(string(written))
+				memguard.WipeBytes(written)
+				if n := nonZeroBytes(backing[:cap(backing)]); n != 0 {
+					t.Fatalf("%d non-zero bytes left in the encoder's array after the result was wiped", n)
+				}
+
+				// The same probe sees the outgrown array when the array is
+				// too small, so a zero above is not a probe that sees
+				// nothing.
+				small := make([]byte, 0, bound/8)
+				grown, err := credentials.encodeDocument(small, siblings)
+				if err != nil {
+					t.Fatalf("encode into a small array: %v", err)
+				}
+				if got := sha256Hex(string(grown)); got != want {
+					t.Fatalf("the output depends on the array: sha256 %s, want %s", got, want)
+				}
+				memguard.WipeBytes(grown)
+				if nonZeroBytes(small[:cap(small)]) == 0 {
+					t.Fatal("an outgrown array should still hold what was written before the growth")
+				}
+
+				// Through the public API: one allocation of the planned
+				// capacity, and wiping the result leaves it all zero.
+				serialize := credentials.BlobJSON
+				if siblings {
+					serialize = credentials.KeychainBlobJSON
+				}
+				public, err := serialize()
+				if err != nil {
+					t.Fatalf("serialize: %v", err)
+				}
+				if got := sha256Hex(string(public)); got != want {
+					t.Fatalf("the public output differs: sha256 %s, want %s", got, want)
+				}
+				if cap(public) != cap(encoderBacking(bound)) {
+					t.Fatalf("the public serializer reallocated: capacity %d, planned %d", cap(public), cap(encoderBacking(bound)))
+				}
+				memguard.WipeBytes(public)
+				if n := nonZeroBytes(public[:cap(public)]); n != 0 {
+					t.Fatalf("%d non-zero bytes left after the public output was wiped", n)
+				}
+
+				// Each sibling digest encodes its member the same way.
+				if !siblings {
+					return
+				}
+				for _, m := range credentials.Siblings {
+					memberBacking := encoderBacking(memberBound(m))
+					object, err := encodeMember(memberBacking, m)
+					if err != nil {
+						t.Fatalf("encode member %q: %v", m.Name, err)
+					}
+					if cap(object) != cap(memberBacking) {
+						t.Fatalf("the member encoder reallocated: capacity %d, planned %d", cap(object), cap(memberBacking))
+					}
+					memguard.WipeBytes(object)
+					if n := nonZeroBytes(memberBacking[:cap(memberBacking)]); n != 0 {
+						t.Fatalf("%d non-zero bytes left in the member encoder's array", n)
+					}
+				}
+				summary := mustSiblingSummary(t, credentials)
+				for i, meta := range summary {
+					m := credentials.Siblings[i]
+					if want := sha256Hex(string(canonicalMember(t, m.Name, m.Value))); meta.SHA256 != want {
+						t.Errorf("sibling %d: digest %s, want %s", i, meta.SHA256, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestEncodedBoundCoversTheEncoder(t *testing.T) {
+	t.Parallel()
+
+	// The bound is the whole defence against a reallocation, so it is
+	// checked against the encoder itself on inputs chosen to expand, under
+	// every escaping option, not only on the fixtures above.
+	tests := map[string]struct {
+		input string
+		// value marks an input that is itself a JSON value, which the
+		// keychain serializer re-encodes.
+		value bool
+	}{
+		"success: every control character":            {input: "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"},
+		"success: quotes and backslashes":             {input: `"\"\\\\"`},
+		"success: HTML-sensitive characters":          {input: "<script>&</script>"},
+		"success: invalid UTF-8":                      {input: "\xff\xfe\x80\xc0"},
+		"success: a truncated multi-byte sequence":    {input: "\xe6\x97"},
+		"success: line and paragraph separators":      {input: "\u2028\u2029"},
+		"success: multi-byte runes":                   {input: "café 日本 😀"},
+		"success: a value with a lone surrogate":      {input: `"\ud800"`, value: true},
+		"success: a value with redundant escapes":     {input: `"\u00e9\/\u0022\u0041"`, value: true},
+		"success: a value with whitespace":            {input: "{ \"a\" : [ 1 , 2 ] ,\n \"b\" : \"\\u0001\" }", value: true},
+		"success: a value with raw invalid UTF-8":     {input: "\"\xff\xff\"", value: true},
+		"success: a value with raw separators":        {input: "\"\u2028<&>\u2029\"", value: true},
+		"success: a value with a number and literals": {input: `[-1.5e+10,true,false,null]`, value: true},
+	}
+	optionSets := map[string][]jsontext.Options{
+		"default":  nil,
+		"keychain": keychainValueOptions,
+		"for HTML": {jsontext.AllowInvalidUTF8(true), jsontext.EscapeForHTML(true)},
+		"for JS":   {jsontext.AllowInvalidUTF8(true), jsontext.EscapeForJS(true)},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for optionsName, opts := range optionSets {
+				var quoted bytes.Buffer
+				if err := jsontext.NewEncoder(&quoted, opts...).WriteToken(jsontext.String(tt.input)); err == nil {
+					if got, bound := len(bytes.TrimSuffix(quoted.Bytes(), []byte("\n"))), quotedBound(tt.input); got > bound {
+						t.Errorf("%s: quoting wrote %d bytes, bound %d", optionsName, got, bound)
+					}
+				}
+				if !tt.value {
+					continue
+				}
+				var reencoded bytes.Buffer
+				err := jsontext.NewEncoder(&reencoded, opts...).WriteValue(jsontext.Value(tt.input))
+				if err != nil {
+					if optionsName == "keychain" {
+						t.Fatalf("the keychain options should accept the value: %v", err)
+					}
+					continue
+				}
+				if got, bound := len(bytes.TrimSuffix(reencoded.Bytes(), []byte("\n"))), encodedBound(tt.input); got > bound {
+					t.Errorf("%s: re-encoding wrote %d bytes, bound %d", optionsName, got, bound)
+				}
+			}
+		})
+	}
+}
+
+func FuzzEncodedBoundCoversTheEncoder(f *testing.F) {
+	for _, seed := range []string{"", "\x00\x1f", `"\\`, "<&>", "\xff\xe6\x97", "\u2028", `"\ud800\u00e9\/"`, `{"a":[1,"\u0001"]}`} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		opts := []jsontext.Options{jsontext.AllowInvalidUTF8(true), jsontext.AllowDuplicateNames(true), jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true)}
+		var quoted bytes.Buffer
+		if err := jsontext.NewEncoder(&quoted, opts...).WriteToken(jsontext.String(input)); err != nil {
+			t.Fatalf("quoting an input of %d bytes: %v", len(input), err)
+		}
+		if got, bound := len(bytes.TrimSuffix(quoted.Bytes(), []byte("\n"))), quotedBound(input); got > bound {
+			t.Fatalf("quoting an input of %d bytes wrote %d bytes, bound %d", len(input), got, bound)
+		}
+		var reencoded bytes.Buffer
+		if err := jsontext.NewEncoder(&reencoded, opts...).WriteValue(jsontext.Value(input)); err != nil {
+			return
+		}
+		if got, bound := len(bytes.TrimSuffix(reencoded.Bytes(), []byte("\n"))), encodedBound(input); got > bound {
+			t.Fatalf("re-encoding a value of %d bytes wrote %d bytes, bound %d", len(input), got, bound)
+		}
+	})
 }
