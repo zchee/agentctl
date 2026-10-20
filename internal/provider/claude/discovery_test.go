@@ -16,6 +16,9 @@ package claude
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json/jsontext"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -368,5 +371,244 @@ func TestClaudeJSONIdentityMemo(t *testing.T) {
 	}
 	if got := claudeJSONIdentity(path); got == nil || got.AccountUUID != "77777777-7777-4777-8777-777777777777" {
 		t.Fatalf("identity = %+v, want the rewritten account", got)
+	}
+}
+
+// ownedSiblingBlob is otherBlob with a top-level mcpOAuth member beside the
+// account object, the shape Claude Code's plaintext fallback writes.
+const ownedSiblingBlob = `{"claudeAiOauth":{"accessToken":"other-access","refreshToken":"other-refresh","expiresAt":9999999999999,"tokenAccount":{"uuid":"33333333-3333-4333-8333-333333333333","emailAddress":"other@example.com","organizationUuid":"44444444-4444-4444-8444-444444444444"}},"mcpOAuth":{"srv|0123456789abcdef":{"accessToken":"mcp-token"}}}`
+
+func TestReadOwnedCredentialsParsesTheFileAndDigestsItsBytes(t *testing.T) {
+	type summary struct {
+		Present      bool
+		AccountUUID  string
+		ExpiresAt    int64
+		Siblings     []memberShape
+		Digest       [sha256.Size]byte
+		NamespaceDir string
+	}
+	tests := map[string]struct {
+		// blob is the file's content; empty writes no file.
+		blob string
+		// noDir leaves the namespace directory itself absent.
+		noDir bool
+		want  func(t *testing.T) summary
+	}{
+		"success: a present file is parsed and digested as read": {
+			blob: otherBlob,
+			want: func(t *testing.T) summary {
+				t.Helper()
+				return summary{Present: true, AccountUUID: "33333333-3333-4333-8333-333333333333", ExpiresAt: 9999999999999, Siblings: []memberShape{}, Digest: sha256.Sum256([]byte(otherBlob))}
+			},
+		},
+		"success: a top-level mcpOAuth member is kept in Siblings": {
+			blob: ownedSiblingBlob,
+			want: func(t *testing.T) summary {
+				t.Helper()
+				siblings := memberShapes(t, []ExtraMember{{Name: "mcpOAuth", Value: jsontext.Value(`{"srv|0123456789abcdef":{"accessToken":"mcp-token"}}`)}})
+				return summary{Present: true, AccountUUID: "33333333-3333-4333-8333-333333333333", ExpiresAt: 9999999999999, Siblings: siblings, Digest: sha256.Sum256([]byte(ownedSiblingBlob))}
+			},
+		},
+		"success: an absent file is nothing, with a zero digest": {
+			want: func(t *testing.T) summary {
+				t.Helper()
+				return summary{}
+			},
+		},
+		"success: an absent namespace directory is nothing, with a zero digest": {
+			noDir: true,
+			want: func(t *testing.T) summary {
+				t.Helper()
+				return summary{}
+			},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths, _ := testStore(t)
+			if err := paths.EnsureDirs(t.Context()); err != nil {
+				t.Fatalf("create the store: %v", err)
+			}
+			nsDir := paths.NamespaceDir("account", "organization")
+			switch {
+			case tt.blob != "":
+				writeCredentialsFile(t, paths, "account", "organization", tt.blob)
+			case !tt.noDir:
+				if err := os.MkdirAll(nsDir, 0o700); err != nil {
+					t.Fatalf("create the namespace: %v", err)
+				}
+			}
+
+			credentials, digest, err := ReadOwnedCredentials(paths, nsDir)
+			if err != nil {
+				t.Fatalf("ReadOwnedCredentials(%s) = %v, want no error", nsDir, err)
+			}
+			got := summary{Digest: digest}
+			if credentials != nil {
+				t.Cleanup(credentials.Wipe)
+				got.Present = true
+				got.ExpiresAt = credentials.ExpiresAtMillis
+				if identity := credentials.TokenAccount; identity != nil && identity.UUID != nil {
+					got.AccountUUID = *identity.UUID
+				}
+				got.Siblings = memberShapes(t, credentials.Siblings)
+			}
+			if diff := gocmp.Diff(tt.want(t), got); diff != "" {
+				t.Fatalf("read of %s (-want +got):\n%s", nsDir, diff)
+			}
+		})
+	}
+}
+
+func TestReadOwnedCredentialsDigestCoversTheWholeDocument(t *testing.T) {
+	// The digest is what tells a later read that the file changed. A
+	// change confined to a sibling or to the expiry leaves the account's
+	// tokens equal, so a digest over the tokens alone would miss it.
+	expiryChanged := strings.Replace(otherBlob, `"expiresAt":9999999999999`, `"expiresAt":9999999999998`, 1)
+	siblingChanged := strings.Replace(ownedSiblingBlob, `"mcp-token"`, `"mcp-tokeN"`, 1)
+	tests := map[string]struct {
+		first, second string
+		wantEqual     bool
+	}{
+		"success: the same bytes give the same digest":      {first: ownedSiblingBlob, second: ownedSiblingBlob, wantEqual: true},
+		"success: files differing only in a sibling member": {first: ownedSiblingBlob, second: siblingChanged},
+		"success: files differing only in expiresAt":        {first: otherBlob, second: expiryChanged},
+		"success: files differing only by an added sibling": {first: otherBlob, second: ownedSiblingBlob},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			read := func(blob string) [sha256.Size]byte {
+				t.Helper()
+				paths, _ := testStore(t)
+				path := writeCredentialsFile(t, paths, "account", "organization", blob)
+				credentials, digest, err := ReadOwnedCredentials(paths, filepath.Dir(path))
+				if err != nil || credentials == nil {
+					t.Fatalf("ReadOwnedCredentials = (present %t, %v), want a credential", credentials != nil, err)
+				}
+				credentials.Wipe()
+				if want := sha256.Sum256([]byte(blob)); digest != want {
+					t.Fatalf("digest = %x, want the sha256 of the file's bytes %x", digest, want)
+				}
+				return digest
+			}
+			first, second := read(tt.first), read(tt.second)
+			if got := first == second; got != tt.wantEqual {
+				t.Fatalf("digests equal = %t, want %t (%x vs %x)", got, tt.wantEqual, first, second)
+			}
+		})
+	}
+}
+
+func TestReadOwnedCredentialsRefusesWhatDiscoveryRefuses(t *testing.T) {
+	const canary = "OWNED-FILE-CANARY-7d3e"
+	tests := map[string]struct {
+		// prepare plants the case and returns the directory to read.
+		prepare func(t *testing.T, paths *config.Paths) string
+		// wantRead says whether the file's bytes were read before the
+		// refusal, so the wipe of that buffer can be checked.
+		wantRead    bool
+		wantOutside bool
+	}{
+		"error: a symbolic link at the file is not followed": {
+			prepare: func(t *testing.T, paths *config.Paths) string {
+				t.Helper()
+				path := writeCredentialsFile(t, paths, "account", "organization", otherBlob)
+				if err := os.Rename(path, path+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(path+".saved", path); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Dir(path)
+			},
+		},
+		"error: a symbolic link at the directory is not followed": {
+			prepare: func(t *testing.T, paths *config.Paths) string {
+				t.Helper()
+				dir := filepath.Dir(writeCredentialsFile(t, paths, "account", "organization", otherBlob))
+				if err := os.Rename(dir, dir+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(dir+".saved", dir); err != nil {
+					t.Fatal(err)
+				}
+				return dir
+			},
+		},
+		"error: a directory outside the namespace root is refused": {
+			prepare: func(t *testing.T, paths *config.Paths) string {
+				t.Helper()
+				writeCredentialsFile(t, paths, "account", "organization", otherBlob)
+				outside := filepath.Join(t.TempDir(), "elsewhere")
+				if err := os.MkdirAll(outside, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(outside, CredentialsFileName), []byte(otherBlob), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return outside
+			},
+			wantOutside: true,
+		},
+		"error: a file that is not JSON is refused and its bytes wiped": {
+			prepare: func(t *testing.T, paths *config.Paths) string {
+				t.Helper()
+				return filepath.Dir(writeCredentialsFile(t, paths, "account", "organization", `{"claudeAiOauth":{"accessToken":"`+canary+`"`))
+			},
+			wantRead: true,
+		},
+		"error: a file without an access token is refused and its bytes wiped": {
+			prepare: func(t *testing.T, paths *config.Paths) string {
+				t.Helper()
+				return filepath.Dir(writeCredentialsFile(t, paths, "account", "organization", `{"claudeAiOauth":{"refreshToken":"`+canary+`","expiresAt":5},"mcpOAuth":{"a":{"accessToken":"`+canary+`"}}}`))
+			},
+			wantRead: true,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths, _ := testStore(t)
+			nsDir := tt.prepare(t, paths)
+			var buffers [][]byte
+			observe := func(read []byte) { buffers = append(buffers, read) }
+
+			credentials, digest, err := readOwnedCredentials(paths, nsDir, observe)
+			if err == nil || credentials != nil {
+				t.Fatalf("readOwnedCredentials(%s) = (present %t, %v), want a refusal", nsDir, credentials != nil, err)
+			}
+			if digest != ([sha256.Size]byte{}) {
+				t.Errorf("a refused read returned the digest %x, want zero", digest)
+			}
+			var outside *secret.OutsideRootError
+			if got := errors.As(err, &outside); got != tt.wantOutside {
+				t.Errorf("refusal %v is an outside-root refusal: %t, want %t", err, got, tt.wantOutside)
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Errorf("the refusal repeats the file's content: %v", err)
+			}
+			if got := len(buffers) == 1 && len(buffers[0]) > 0; got != tt.wantRead {
+				t.Fatalf("the file's bytes were read: %t (%d buffers), want %t", got, len(buffers), tt.wantRead)
+			}
+			if n := nonZeroBytes(buffers...); n != 0 {
+				t.Fatalf("%d non-zero bytes left in the read buffer after the refusal", n)
+			}
+		})
+	}
+}
+
+func TestReadOwnedCredentialsWipesTheReadBufferOnSuccess(t *testing.T) {
+	paths, _ := testStore(t)
+	path := writeCredentialsFile(t, paths, "account", "organization", ownedSiblingBlob)
+	var buffers [][]byte
+	credentials, _, err := readOwnedCredentials(paths, filepath.Dir(path), func(read []byte) { buffers = append(buffers, read) })
+	if err != nil || credentials == nil {
+		t.Fatalf("readOwnedCredentials = (present %t, %v), want a credential", credentials != nil, err)
+	}
+	credentials.Wipe()
+	if len(buffers) != 1 || len(buffers[0]) != len(ownedSiblingBlob) {
+		t.Fatalf("the read should hand over one %d-byte buffer, got %d buffers", len(ownedSiblingBlob), len(buffers))
+	}
+	if n := nonZeroBytes(buffers...); n != 0 {
+		t.Fatalf("%d non-zero bytes left in the read buffer once the credential was returned", n)
 	}
 }

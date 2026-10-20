@@ -45,6 +45,7 @@ package claude
 
 import (
 	"context"
+	"crypto/sha256"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -217,28 +218,67 @@ func resolveKeychain(ctx context.Context, reader secret.Reader, service string) 
 // The leaf is refused when it is not a plain file: a symbolic link planted
 // at the credential path must not be followed to wherever it points.
 func resolveFile(paths *config.Paths, nsDir string) resolved {
+	credentials, _, err := ReadOwnedCredentials(paths, nsDir)
+	switch {
+	case err != nil:
+		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
+	case credentials == nil:
+		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeAbsent}}
+	default:
+		return resolved{credentials: credentials, outcome: secret.Outcome{Kind: secret.OutcomeCredential}}
+	}
+}
+
+// ReadOwnedCredentials reads a namespace's credential file the way
+// discovery does: through the namespace root without following a symbolic
+// link at the directory or at the file, bounded by
+// [secret.MaxCredentialsBytes], and parsed by [ParseBlob], so every
+// top-level member beside the account object is kept in Siblings.
+//
+// The digest is the sha256 of the file's bytes exactly as read, taken
+// before the read buffer is wiped. It covers the whole document — the
+// account object, its expiry and every sibling — so two reads compare equal
+// only when nothing in the file changed, and it stays fixed whatever the
+// caller later does to the returned credential.
+//
+// An absent directory or file is (nil, zero digest, nil). A file that
+// cannot be read or parsed is an error, with a zero digest and its bytes
+// wiped. The caller owns the credential and wipes it.
+func ReadOwnedCredentials(paths *config.Paths, nsDir string) (*Credentials, [sha256.Size]byte, error) {
+	return readOwnedCredentials(paths, nsDir, nil)
+}
+
+// readOwnedCredentials is [ReadOwnedCredentials] with observe, when not nil,
+// handed the read buffer before it is parsed, so a test can check that the
+// buffer is zero once the read returns.
+func readOwnedCredentials(paths *config.Paths, nsDir string, observe func([]byte)) (*Credentials, [sha256.Size]byte, error) {
+	var none [sha256.Size]byte
 	dir, err := secret.OpenDirUnder(paths.NamespaceRoot(), nsDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeAbsent}}
+		return nil, none, nil
 	}
 	if err != nil {
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
+		return nil, none, err
 	}
 	defer func() { _ = unix.Close(dir) }()
 	file := secret.NewSecretFile(paths.NamespaceRoot(), dir, CredentialsFileName, filepath.Join(nsDir, CredentialsFileName))
 	read, err := file.ReadStrict(secret.MaxCredentialsBytes)
 	if err != nil {
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
+		return nil, none, err
 	}
 	if !read.Present {
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeAbsent}}
+		return nil, none, nil
 	}
+	if observe != nil {
+		observe(read.Bytes)
+	}
+	digest := sha256.Sum256(read.Bytes)
 	credentials, err := ParseBlob(read.Bytes)
 	memguard.WipeBytes(read.Bytes)
 	if err != nil {
-		return resolved{outcome: secret.Outcome{Kind: secret.OutcomeTransient, Reason: err.Error()}}
+		return nil, none, err
 	}
-	return resolved{credentials: credentials, outcome: secret.Outcome{Kind: secret.OutcomeCredential}}
+	return credentials, digest, nil
 }
 
 // liveRow builds the row for whatever Claude Code is using right now.
