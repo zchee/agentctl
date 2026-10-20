@@ -139,12 +139,12 @@ func TestFlockholdMain(t *testing.T) {
 		}
 	})
 
-	t.Run("error: four arguments are a usage error", func(t *testing.T) {
+	t.Run("error: five arguments are a usage error", func(t *testing.T) {
 		t.Parallel()
 
-		code, _, _ := runHelper(flockholdMain, filepath.Join(t.TempDir(), "l"), "1ms", "r", "extra")
+		code, _, _ := runHelper(flockholdMain, filepath.Join(t.TempDir(), "l"), "1ms", "r", "release", "extra")
 		if code != 2 {
-			t.Fatalf("flockhold with four arguments = %d, want 2", code)
+			t.Fatalf("flockhold with five arguments = %d, want 2", code)
 		}
 	})
 
@@ -169,6 +169,61 @@ func TestFlockholdMain(t *testing.T) {
 			t.Fatalf("flockhold with a bad duration = %d, want 2", code)
 		}
 	})
+}
+
+func TestFlockholdReleaseFile(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		ceiling string
+		release bool
+		want    int
+	}{
+		"success: the release file ends the hold":            {ceiling: "10s", release: true},
+		"error: a missing release file exhausts the ceiling": {ceiling: "100ms", want: 1},
+		"error: an unbounded ceiling is refused":             {ceiling: "-1s", want: 2},
+		"error: a zero ceiling is refused":                   {ceiling: "0s", want: 2},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path, ready, release := filepath.Join(dir, "lock"), filepath.Join(dir, "ready"), filepath.Join(dir, "release")
+			done := make(chan int, 1)
+			go func() {
+				code, _, _ := runHelper(flockholdMain, path, tt.ceiling, ready, release)
+				done <- code
+			}()
+			if tt.release {
+				defer func() { _ = os.WriteFile(release, nil, 0o600) }()
+				if !WaitUntil(5*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }) {
+					t.Fatal("the holder never created its ready file")
+				}
+				if !LockIsHeld(path) {
+					t.Fatal("the lock was released before the release file existed")
+				}
+				select {
+				case code := <-done:
+					t.Fatalf("the holder exited %d before its release", code)
+				default:
+				}
+				if err := os.WriteFile(release, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case code := <-done:
+				if code != tt.want {
+					t.Errorf("flockhold exited %d, want %d", code, tt.want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the holder did not exit after release or ceiling")
+			}
+			if !WaitUntil(5*time.Second, func() bool { return !LockIsHeld(path) }) {
+				t.Fatal("the holder left its lock held")
+			}
+		})
+	}
 }
 
 func TestSigtermMain(t *testing.T) {

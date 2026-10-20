@@ -23,10 +23,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
 	"github.com/rogpeppe/go-internal/testscript"
@@ -199,9 +202,10 @@ func seedFixture(ts *testscript.TestScript, neg bool, args []string) {
 	// expectedFile is the owned file's expected bytes: the fixture's, or the
 	// ones a seed-action wrote.
 	expectedFile := slices.Clone(ownedFile)
+	var terminated *exec.Cmd
 	ts.SetCmd("seed-action", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 1 {
-			ts.Fatalf("usage: seed-action <wait-pause|resume|create-item|change-account|add-file-members|change-sibling|fallback|storage-lock|find-fails>")
+			ts.Fatalf("usage: seed-action <wait-pause|resume|create-item|change-account|add-file-members|change-sibling|fallback|storage-lock|find-fails|terminate|signal-exit>")
 		}
 		switch args[0] {
 		case "wait-pause":
@@ -233,6 +237,26 @@ func seedFixture(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Check(os.Mkdir(filepath.Join(nsDir, ".storage-write.lock"), 0o700))
 		case "find-fails":
 			write(filepath.Join(root, "find-fails"), nil)
+		case "terminate":
+			background := ts.BackgroundCmds()
+			if len(background) != 1 {
+				ts.Fatalf("observed %d background commands; want 1", len(background))
+			}
+			lock := filepath.Join(nsDir, ".oauth_refresh.lock")
+			if _, err := os.Lstat(lock); err != nil {
+				ts.Fatalf("the paused removal does not hold its lock: %v", err)
+			}
+			terminated = background[0]
+			ts.Check(terminated.Process.Signal(syscall.SIGTERM))
+			// Cleanup releases this hold only after the controller cancels the
+			// run, so resuming cannot race ahead of cancellation delivery.
+			if !WaitUntil(10*time.Second, func() bool { _, err := os.Lstat(lock); return errors.Is(err, os.ErrNotExist) }) {
+				ts.Fatalf("signal cleanup did not release the paused removal's lock")
+			}
+		case "signal-exit":
+			if terminated == nil || terminated.ProcessState == nil || terminated.ProcessState.ExitCode() != 143 {
+				ts.Fatalf("the interrupted use did not exit with status 143 after SIGTERM")
+			}
 		default:
 			ts.Fatalf("unknown seed action %q", args[0])
 		}

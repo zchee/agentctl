@@ -156,10 +156,12 @@ func expectexitMain(args []string, stdout, stderr io.Writer) int {
 // sleeping, and refuses a lock somebody already holds. A third argument
 // names a file created once the lock is taken: a backgrounded holder's
 // output cannot be read until it exits, so a script waits for that file
-// with waitfor before it runs the command the lock must refuse.
+// with waitfor before it runs the command the lock must refuse. A fourth
+// argument names a release file: the lock stays held until that file exists,
+// and the duration becomes a ceiling whose expiry fails the helper.
 func flockholdMain(args []string, stdout, stderr io.Writer) int {
-	if len(args) < 1 || len(args) > 3 {
-		say(stderr, "usage: flockhold <path> [duration [ready-file]]\n")
+	if len(args) < 1 || len(args) > 4 {
+		say(stderr, "usage: flockhold <path> [duration [ready-file [release-file]]]\n")
 		return 2
 	}
 	hold := time.Duration(-1)
@@ -170,6 +172,10 @@ func flockholdMain(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		hold = parsed
+	}
+	if len(args) == 4 && hold <= 0 {
+		say(stderr, "flockhold: a release file requires a positive duration ceiling\n")
+		return 2
 	}
 	if err := os.MkdirAll(filepath.Dir(args[0]), 0o755); err != nil {
 		say(stderr, "flockhold: %v\n", err)
@@ -186,11 +192,18 @@ func flockholdMain(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	say(stdout, "held\n")
-	if len(args) == 3 {
+	if len(args) >= 3 {
 		if err := os.WriteFile(args[2], nil, 0o600); err != nil {
 			say(stderr, "flockhold: %v\n", err)
 			return 1
 		}
+	}
+	if len(args) == 4 {
+		if !WaitUntil(hold, func() bool { _, err := os.Stat(args[3]); return err == nil }) {
+			say(stderr, "flockhold: release file %s did not appear within %s\n", args[3], hold)
+			return 1
+		}
+		return 0
 	}
 	if hold < 0 {
 		select {}

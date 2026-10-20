@@ -228,9 +228,10 @@ seed-clean
 # a_busy_namespace_guard_keeps_the_owned_file_with_a_warning
 # The holder excludes removal through flock; no process observation is needed.
 seedfixture guard
-exec flockhold $SEED_GUARD 4s $SEED_ROOT/guard-ready &guard&
+exec flockhold $SEED_GUARD 1m $SEED_ROOT/guard-ready $SEED_ROOT/guard-release &guard&
 exec waitfor $SEED_ROOT/guard-ready
 exec agentctl claude use account --json
+cp $SEED_ROOT/guard-ready $SEED_ROOT/guard-release
 seed-report stdout seeded absent equal argv kept 'was kept: its namespace is busy' '`agentctl claude use --live account` reads this file until it is removed' $SEED_FILE
 stderr -count=1 '^.+$'
 stderr 'was kept: its namespace is busy; `agentctl claude use --live account` reads this file until it is removed$'
@@ -269,6 +270,26 @@ seed-file same
 seed-item created
 seed-locks .storage-write.lock
 seed-launched
+seed-clean
+
+# a_signal_before_removal_keeps_the_owned_file_and_refuses_the_launch
+seedfixture interrupted
+env AGENTCTL_FAULT=pause_seed_before_file_remove
+! exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action terminate
+seed-action resume
+wait run
+seed-action signal-exit
+env AGENTCTL_FAULT=
+seed-report stdout seeded absent equal argv kept 'was kept: the run was interrupted before it was removed' '`agentctl claude use --live account` reads this file until it is removed' $SEED_FILE
+stderr 'was kept: the run was interrupted before it was removed; `agentctl claude use --live account` reads this file until it is removed$'
+seed-file same
+seed-item created
+seed-writes 1
+seed-audit 1 applied kept
+seed-locks
+! seed-launched
 seed-clean
 
 # an_owned_file_with_mcp_state_of_its_own_is_left_as_it_is

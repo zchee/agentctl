@@ -34,6 +34,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/config"
+	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/fault"
 	"github.com/zchee/agentctl/internal/runtime/signals"
@@ -895,6 +896,73 @@ func TestRunUseSeedFlagsSkipTheKeychain(t *testing.T) {
 			}
 			if got := strings.Contains(string(argv), "--mcp-config"); got != !tt.opts.NoMCP {
 				t.Errorf("argv %q: --mcp-config present %v", argv, got)
+			}
+		})
+	}
+}
+
+func TestRunUseSeedCancellationKeepsTheFileAndRefusesLaunch(t *testing.T) {
+	tests := map[string]struct {
+		json bool
+	}{
+		"error: cancellation after readback refuses the human session": {},
+		"error: cancellation after readback refuses the JSON session":  {json: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			w := newSeedWorld(t)
+			f := w.fixture
+			w.write(t, filepath.Join(f.Home(), ".claude.json"), "{}")
+			if err := os.WriteFile(filepath.Join(f.BinDir(), "claude"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARG_LOG\"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", f.Home())
+			t.Setenv("PATH", f.BinDir()+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "")
+			t.Setenv("ARG_LOG", f.Scratch("argv"))
+			before, err := os.ReadFile(w.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx, controller := signals.Install(parent)
+			defer controller.Stop()
+			reader := &seedRecorder{next: secret.NewReader(), cancelOn: w.service, cancelAt: 3, cancel: cancel}
+			var out, stderr bytes.Buffer
+			process := SessionProcess{Out: &out, Err: &stderr, Signals: controller, Keychain: func() secret.Reader { return reader }}
+			err = process.RunUse(ctx, cli.Globals{ConfigDir: f.ConfigDir()}, cli.ClaudeUseOptions{ID: testutil.Acct, JSON: tt.json})
+			refused, ok := errors.AsType[*errs.RefusedError](err)
+			if !ok || refused.Reason != "cancelled before the command could start" {
+				t.Fatalf("RunUse returned %v, want the pre-spawn cancellation refusal", err)
+			}
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("the readback did not cancel the run: %v", ctx.Err())
+			}
+			after, err := os.ReadFile(w.file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := gocmp.Diff(before, after); diff != "" {
+				t.Error("the cancellation changed the owned credential file")
+			}
+			warning := "the owned credential file `" + w.file + "` was kept: the run was interrupted before it was removed; "
+			if !strings.Contains(stderr.String(), warning) || !strings.Contains(stderr.String(), "reads this file until it is removed") {
+				t.Errorf("stderr %q does not carry the interrupted-file warning", stderr.String())
+			}
+			if got := w.writes(); got != 1 {
+				t.Errorf("keychain writes = %d, want 1", got)
+			}
+			seeds := w.seedEntries(t)
+			if len(seeds) != 1 {
+				t.Fatalf("seed audit entries = %d, want 1", len(seeds))
+			}
+			if diff := gocmp.Diff([]string{"applied", "kept", "equal"}, []string{string(seeds[0].Outcome), string(seeds[0].OwnedFile), string(seeds[0].SiblingsReadback)}); diff != "" {
+				t.Errorf("seed audit outcome/file/readback (-want +got):\n%s", diff)
+			}
+			if _, err := os.Lstat(f.Scratch("argv")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the fake claude was launched: argv marker error %v", err)
 			}
 		})
 	}
