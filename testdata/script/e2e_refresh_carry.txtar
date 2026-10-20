@@ -1,0 +1,47 @@
+# A refresh of a migrated namespace item rewrites the whole item, so the
+# members Claude Code keeps beside the account object are carried from the
+# item as re-read under the hold, and none of their values leaves the item.
+
+# a_refresh_of_a_migrated_item_keeps_its_mcp_logins_and_plugin_secrets
+refreshfixture migrated-siblings
+exec agentctl claude status --json --refresh --account owner@example.com
+! stdout 'SIBLING-CANARY|sk-ant'
+! stderr 'SIBLING-CANARY|sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout lock_state migrated_refreshed
+stdout '"mcp_oauth_entries": 2'
+refresh-calls 1 1 0
+refresh-check stored rotated
+refresh-check siblings seeded
+refresh-check carry seeded equal argv 1
+
+# a_refresh_loses_a_sibling_change_made_after_its_held_read_and_cannot_tell
+# The accepted residual race on the refresh path: the change lands after the
+# re-read under the hold, the write puts back what was read, and the
+# readback compares against what was written.
+refreshfixture migrated-siblings-held
+env AGENTCTL_FAULT=pause_migrated_after_held_read
+exec agentctl claude status --json --refresh --account owner@example.com &held&
+refresh-action wait-pause
+refresh-action sibling-changed
+refresh-action resume
+wait held
+! stdout 'SIBLING-CANARY|sk-ant'
+refresh-check row stdout state ok
+refresh-check stored rotated
+refresh-check siblings seeded
+refresh-check carry seeded equal argv 1
+
+# a_refresh_reports_a_sibling_change_made_after_its_write_as_differs
+refreshfixture migrated-siblings-after
+env AGENTCTL_FAULT=pause_migrated_after_write
+exec agentctl claude status --json --refresh --account owner@example.com &after&
+refresh-action wait-pause
+refresh-action sibling-changed
+refresh-action resume
+wait after
+! stdout 'SIBLING-CANARY|sk-ant'
+refresh-check row stdout state ok
+refresh-check stored rotated
+refresh-check siblings changed
+refresh-check carry seeded differs argv 1

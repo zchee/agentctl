@@ -149,20 +149,6 @@ func waitInBackground(cmd *exec.Cmd) <-chan error {
 	return done
 }
 
-// readCount reads the decimal number one of the fake's pid or heartbeat
-// files holds. It reports false while the file is absent or mid-write.
-func readCount(path string) (int, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, false
-	}
-	return n, true
-}
-
 // itemHolds reports whether the fixture's own item for service holds want.
 func itemHolds(f *Fixture, service, want string) bool {
 	data, err := os.ReadFile(f.KeychainItemPath(service))

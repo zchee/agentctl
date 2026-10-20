@@ -15,11 +15,17 @@
 package testutil
 
 import (
+	"bytes"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/zchee/agentctl/fixtures"
@@ -295,3 +301,177 @@ func ItemFileName(service string) string {
 // the payload reduced to its length, and sleeps, so the writer's timeout
 // ends the wrapper before the fake stores anything.
 const slowWriteClause = "if [ \"$1\" = add-generic-password ]; then printf 'add-generic-password -U -a \"%s\" -s \"%s\" -X <REDACTED:%s>\\n' \"$4\" \"$6\" \"${#8}\" >> \"$AGCTL_FAKE_SECURITY_LOG\"; sleep 5; fi\n"
+
+// KeychainBlobCeiling is the largest credential document, in plaintext
+// bytes, the production writer hands to security(1): 256 KiB. The fixtures
+// size their over-ceiling items against it.
+const KeychainBlobCeiling = 256 << 10
+
+// SiblingCanary is the marker the carry fixtures put inside a sibling value.
+// It may appear only in the keychain item files themselves.
+const SiblingCanary = "SIBLING-CANARY-9f31"
+
+// itemMember is one top-level member of a keychain document: its name and
+// its value as compact JSON.
+type itemMember struct {
+	Name  string
+	Value jsontext.Value
+}
+
+// siblingPad returns n bytes of filler that is not hexadecimal, so a padded
+// document never contains the long hex run the leak sweep looks for.
+func siblingPad(n int) string {
+	return strings.Repeat("z", max(n, 0))
+}
+
+// siblingSet returns the members a carry fixture seeds beside the account
+// object, in the order Claude Code writes them. "seeded" is the live-sized
+// set (two MCP logins of about 8 KB and 700 B, one client config, one plugin
+// secret holding the canary); "changed" differs from it in mcpOAuth only, as
+// a refresh of one MCP login by another process would; "grown" adds an MCP
+// login big enough to put the document past the ceiling, with the account
+// object untouched; "duplicated" is the seeded set with a second mcpOAuth
+// member, holding the changed value, after the others.
+func siblingSet(kind string) ([]itemMember, error) {
+	if kind == "duplicated" {
+		seeded, err := siblingSet("seeded")
+		if err != nil {
+			return nil, err
+		}
+		changed, err := siblingSet("changed")
+		if err != nil {
+			return nil, err
+		}
+		return append(seeded, changed[0]), nil
+	}
+	betaToken := "mcp-beta-" + siblingPad(600)
+	if kind == "changed" {
+		betaToken = "mcp-beta-rotated-" + siblingPad(600)
+	}
+	mcp := map[string]any{
+		"plugin:alpha|0a1b2c3d": map[string]any{"serverName": "alpha", "serverUrl": "https://alpha.example.invalid/mcp", "accessToken": "mcp-alpha-" + siblingPad(8000), "refreshToken": "mcp-alpha-refresh", "expiresAt": 1893456000000},
+		"plugin:beta|4e5f6a7b":  map[string]any{"serverName": "beta", "serverUrl": "https://beta.example.invalid/mcp", "accessToken": betaToken, "expiresAt": 1893456000000},
+	}
+	switch kind {
+	case "seeded", "changed":
+	case "grown":
+		mcp["plugin:gamma|8c9d0e1f"] = map[string]any{"serverName": "gamma", "accessToken": "mcp-gamma-" + siblingPad(KeychainBlobCeiling)}
+	default:
+		return nil, fmt.Errorf("unknown sibling set %q", kind)
+	}
+	values := []struct {
+		name  string
+		value any
+	}{
+		{"mcpOAuth", mcp},
+		{"mcpOAuthClientConfig", map[string]any{"plugin:alpha|0a1b2c3d": map[string]any{"clientId": "client-alpha", "clientSecret": "client-secret-" + siblingPad(1500)}}},
+		{"pluginSecrets", map[string]any{"plugin-one": map[string]any{"apiKey": SiblingCanary + "-" + siblingPad(800)}}},
+	}
+	members := make([]itemMember, 0, len(values))
+	for _, v := range values {
+		value, err := compactJSON(v.value)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, itemMember{Name: v.name, Value: value})
+	}
+	return members, nil
+}
+
+// paddedSiblings returns one member, pluginSecrets, sized so that a document
+// holding an account object of oauthLen bytes and this member is exactly
+// total bytes long.
+func paddedSiblings(oauthLen, total int) ([]itemMember, error) {
+	const overhead = len(`{"claudeAiOauth":,"pluginSecrets":{"padding":""}}`)
+	value, err := compactJSON(map[string]any{"padding": siblingPad(total - oauthLen - overhead)})
+	if err != nil {
+		return nil, err
+	}
+	return []itemMember{{Name: "pluginSecrets", Value: value}}, nil
+}
+
+// compactJSON marshals value as compact JSON with its object names in a
+// fixed order, the way JSON.stringify writes a value it built itself.
+func compactJSON(value any) (jsontext.Value, error) {
+	body, err := json.Marshal(value, json.Deterministic(true))
+	return jsontext.Value(body), err
+}
+
+// keychainDocument returns the item bytes Claude Code would store: the
+// account object first, then the siblings in order, compact.
+func keychainDocument(oauth jsontext.Value, siblings []itemMember) []byte {
+	var out bytes.Buffer
+	out.WriteString(`{"claudeAiOauth":`)
+	out.Write(oauth)
+	for _, member := range siblings {
+		out.WriteByte(',')
+		name, _ := jsontext.AppendQuote(nil, member.Name)
+		out.Write(name)
+		out.WriteByte(':')
+		out.Write(member.Value)
+	}
+	out.WriteByte('}')
+	return out.Bytes()
+}
+
+// itemMembers returns every top-level member of a keychain document in
+// order, each value in the form the production encoder emits: compact, with
+// duplicate names and invalid UTF-8 tolerated. Two documents preserve a
+// member exactly when these forms are equal.
+func itemMembers(document []byte) ([]itemMember, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(document), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '{' {
+		return nil, errors.New("the keychain document is not a JSON object")
+	}
+	var members []itemMember
+	for dec.PeekKind() != '}' {
+		token, err := dec.ReadToken()
+		if err != nil {
+			return nil, err
+		}
+		// A token is valid only until the next read.
+		name := token.String()
+		raw, err := dec.ReadValue()
+		if err != nil {
+			return nil, err
+		}
+		var out bytes.Buffer
+		enc := jsontext.NewEncoder(&out, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+		if err := enc.WriteValue(raw); err != nil {
+			return nil, err
+		}
+		members = append(members, itemMember{Name: name, Value: jsontext.Value(bytes.TrimSuffix(out.Bytes(), []byte("\n")))})
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, err
+	}
+	if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the keychain document has trailing data")
+	}
+	return members, nil
+}
+
+// canonicalMembers returns members with every value re-emitted in the
+// production encoder's form, so seeded and read members compare equal
+// exactly when the encoder would treat them as the same bytes.
+func canonicalMembers(members []itemMember) ([]itemMember, error) {
+	canonical, err := itemMembers(keychainDocument(jsontext.Value(`null`), members))
+	if err != nil {
+		return nil, err
+	}
+	return canonical[1:], nil
+}
+
+// readCount reads the decimal number one of the fake's pid or heartbeat
+// files holds. It reports false while the file is absent or mid-write.
+func readCount(path string) (int, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}

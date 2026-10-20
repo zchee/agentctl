@@ -1,0 +1,175 @@
+# The production writer runs security(1) through the fake, which is slowed,
+# made to hold its output open, signalled or made to fail. A write that may
+# have committed is settled by the readback, never reported as stored or as
+# failed on the child's word alone, and no process of the fake's group is
+# left once the swap returns.
+#
+# The undo cases run in staged mode: a namespace undo stages the displaced
+# credential and commits it only when the readback says the write applied.
+
+# a_write_that_outlasts_its_timeout_before_storing_is_unknown_and_leaves_no_process
+swapfixture carry-namespace delay-before
+env AGCTL_FAKE_WRITE_DELAY_MS=5000
+env AGCTL_FAKE_SECURITY_PIDFILE=$SWAP_ROOT/security.pid
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "unknown"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout delay-before.json
+swap-report delay-before.json seeded equal argv
+swap-item seeded owner
+swap-argv 1
+swap-group-gone $SWAP_ROOT/security.pid
+swap-audit-carry seeded equal argv
+swap-audit unknown 0
+swap-clean
+
+# staged_mode_a_write_that_stores_and_then_outlasts_its_timeout_commits_on_the_readback
+swapfixture carry-namespace delay-after
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+env AGCTL_FAKE_WRITE_DELAY_AFTER_MS=5000
+env AGCTL_FAKE_SECURITY_PIDFILE=$SWAP_ROOT/security.pid
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout 'could not be stored'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout delay-after.json
+swap-report delay-after.json seeded equal argv
+swap-item seeded owner
+swap-argv 2 sized
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
+swap-group-gone $SWAP_ROOT/security.pid
+swap-audit-carry seeded equal argv
+swap-clean
+
+# staged_mode_an_exit_zero_that_keeps_its_output_open_is_settled_by_the_readback
+swapfixture carry-namespace hold-pipes
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+env AGCTL_FAKE_SECURITY_HOLD_PIPES=30
+env AGCTL_FAKE_SECURITY_PIDFILE=$SWAP_ROOT/security.pid
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout 'could not be stored'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout hold-pipes.json
+swap-report hold-pipes.json seeded equal argv
+swap-item seeded owner
+swap-argv 2 sized
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
+swap-group-gone $SWAP_ROOT/security.pid
+swap-audit-carry seeded equal argv
+swap-clean
+
+# a_failed_write_names_its_exit_code_and_stderr_class_and_never_the_stderr_text
+swapfixture carry-namespace write-exit
+env AGCTL_FAKE_SECURITY_WRITE_EXIT=1
+env AGCTL_FAKE_SECURITY_STDERR=STDERR-CANARY-4d2e
+env AGENTCTL_LOG=debug
+exec expectexit 19 agentctl claude use $INCOMING --live --yes --json
+stdout 'security exited 1 \(stderr class '
+! stdout 'STDERR-CANARY|SIBLING-CANARY|SENTINEL'
+! stderr 'STDERR-CANARY|SIBLING-CANARY|SENTINEL'
+cp stdout write-exit.json
+swap-report write-exit.json seeded - argv
+swap-item seeded owner
+swap-argv 1
+swap-audit failed 0
+swap-audit-carry seeded - argv
+swap-absent STDERR-CANARY
+swap-clean
+
+# staged_mode_sigint_during_a_write_ends_the_fake_before_the_hold_is_released
+# The audit has no field for the signal; the exit status records it, and the
+# write is unknown with its readback unverified because it runs after the
+# run's context was cancelled. Nothing applied, so nothing staged is kept.
+swapfixture carry-namespace signal-int
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source-int
+env AGCTL_FAKE_WRITE_DELAY_MS=5000
+env AGCTL_FAKE_SECURITY_PIDFILE=$SWAP_ROOT/security.pid
+! exec agentctl claude use --undo --yes --json &signalled&
+swap-signal INT $SWAP_ROOT/security.pid
+wait signalled
+swap-signal-exit 130
+stdout '"outcome": "unknown"'
+! stdout 'could not be stored'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout signal-int.json
+swap-report signal-int.json seeded unverified argv
+swap-item seeded incoming
+swap-argv 2
+swap-group-gone $SWAP_ROOT/security.pid
+swap-audit-carry seeded unverified argv
+grep '"outcome":"unknown","direction":"undo"' $SWAP_AUDIT
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source-int
+swap-store-entries .credentials.adopted.json
+swap-clean
+
+# staged_mode_sigterm_during_a_write_ends_the_fake_before_the_hold_is_released
+# The audit has no field for the signal; the exit status records it, and the
+# write is unknown with its readback unverified because it runs after the
+# run's context was cancelled. Nothing applied, so nothing staged is kept.
+swapfixture carry-namespace signal-term
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source-term
+env AGCTL_FAKE_WRITE_DELAY_MS=5000
+env AGCTL_FAKE_SECURITY_PIDFILE=$SWAP_ROOT/security.pid
+! exec agentctl claude use --undo --yes --json &signalled&
+swap-signal TERM $SWAP_ROOT/security.pid
+wait signalled
+swap-signal-exit 143
+stdout '"outcome": "unknown"'
+! stdout 'could not be stored'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout signal-term.json
+swap-report signal-term.json seeded unverified argv
+swap-item seeded incoming
+swap-argv 2
+swap-group-gone $SWAP_ROOT/security.pid
+swap-audit-carry seeded unverified argv
+grep '"outcome":"unknown","direction":"undo"' $SWAP_AUDIT
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source-term
+swap-store-entries .credentials.adopted.json
+swap-clean
+
+# staged_mode_sighup_during_a_write_ends_the_fake_before_the_hold_is_released
+# The audit has no field for the signal; the exit status records it, and the
+# write is unknown with its readback unverified because it runs after the
+# run's context was cancelled. Nothing applied, so nothing staged is kept.
+swapfixture carry-namespace signal-hup
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source-hup
+env AGCTL_FAKE_WRITE_DELAY_MS=5000
+env AGCTL_FAKE_SECURITY_PIDFILE=$SWAP_ROOT/security.pid
+! exec agentctl claude use --undo --yes --json &signalled&
+swap-signal HUP $SWAP_ROOT/security.pid
+wait signalled
+swap-signal-exit 129
+stdout '"outcome": "unknown"'
+! stdout 'could not be stored'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout signal-hup.json
+swap-report signal-hup.json seeded unverified argv
+swap-item seeded incoming
+swap-argv 2
+swap-group-gone $SWAP_ROOT/security.pid
+swap-audit-carry seeded unverified argv
+grep '"outcome":"unknown","direction":"undo"' $SWAP_AUDIT
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source-hup
+swap-store-entries .credentials.adopted.json
+swap-clean

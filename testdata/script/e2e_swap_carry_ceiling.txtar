@@ -1,0 +1,96 @@
+# The destination item can grow past the update ceiling after the admissions
+# and before the hold: the swap re-reads it under the hold, finds the
+# document no longer fits, and discards without starting security(1). Each
+# adoption mode keeps what it did before the hold, and the same command,
+# retried once the item is back to its live size, applies.
+
+# an_item_grown_before_the_hold_is_discarded_and_a_copy_adoption_stays
+swapfixture carry-namespace grown-copy
+env AGENTCTL_FAULT=pause_before_swap_write
+exec expectexit 17 agentctl claude use $INCOMING --live --yes --json &grown&
+swap-pause
+swap-sibling grown
+swap-action resume
+wait grown
+stdout '"outcome": "discarded"'
+stdout 'credential_too_large: the keychain item grew under the hold; no keychain update was issued'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+swap-argv 0
+swap-audit none 0
+exists $SWAP_STORE/.credentials.adopted.json
+cp $SWAP_STORE/.credentials.adopted.json adopted-after-discard
+
+# the_same_copy_swap_applies_once_the_item_is_back_to_its_live_size
+swap-sibling seeded
+env AGENTCTL_FAULT=
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp stdout copy-retry.json
+swap-report copy-retry.json seeded equal argv
+swap-item seeded incoming
+swap-argv 1 sized
+swap-check 1 0 0
+cmp $SWAP_STORE/.credentials.adopted.json adopted-after-discard
+swap-clean
+
+# an_item_grown_before_the_hold_is_discarded_and_a_staged_adoption_is_dropped
+swapfixture carry-namespace grown-staged
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source
+env AGENTCTL_FAULT=pause_before_swap_write
+exec expectexit 17 agentctl claude use --undo --yes --json &grown&
+swap-pause
+swap-sibling grown
+swap-action resume
+wait grown
+stdout '"outcome": "discarded"'
+stdout 'credential_too_large: the keychain item grew under the hold; no keychain update was issued'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+swap-argv 1
+cmp $UNDO_OWNER_DIR/.credentials.adopted.json restore-source
+swap-store-entries .credentials.adopted.json
+
+# the_same_undo_applies_and_commits_its_staged_adoption_once_the_item_is_back
+swap-sibling seeded
+env AGENTCTL_FAULT=
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+cp stdout staged-retry.json
+swap-report staged-retry.json seeded equal argv
+swap-item seeded owner
+swap-argv 2 sized
+undo-credential $UNDO_OWNER_DIR/.credentials.adopted.json incoming
+swap-clean
+
+# an_item_grown_before_the_hold_is_discarded_and_the_third_store_keeps_the_displaced_credential
+swapfixture carry-third grown-third
+env AGENTCTL_FAULT=pause_before_swap_write
+exec expectexit 17 agentctl claude use $INCOMING --live --yes --json &grown&
+swap-pause
+swap-sibling grown
+swap-action resume
+wait grown
+stdout '"outcome": "discarded"'
+stdout 'credential_too_large: the keychain item grew under the hold; no keychain update was issued'
+! stdout 'SIBLING-CANARY|SENTINEL'
+swap-argv 0
+swap-audit none 0
+exists $SWAP_THIRD_STORE
+grep SENTINEL-access-third $SWAP_THIRD_STORE
+cp $SWAP_THIRD_STORE third-after-discard
+
+# the_same_third_store_swap_applies_once_the_item_is_back_to_its_live_size
+swap-sibling seeded
+env AGENTCTL_FAULT=
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+cp stdout third-retry.json
+swap-report third-retry.json seeded equal argv
+swap-item seeded incoming
+swap-argv 1 sized
+cmp $SWAP_THIRD_STORE third-after-discard
+swap-clean

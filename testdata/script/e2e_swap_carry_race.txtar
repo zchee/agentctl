@@ -1,0 +1,87 @@
+# Another process can rewrite an MCP login while a swap runs. Each case
+# pauses the swap at an acknowledged pause point, changes only the members
+# beside the account object, and resumes.
+
+# a_sibling_change_before_the_hold_is_carried_into_the_write
+swapfixture carry-namespace before-hold
+env AGENTCTL_FAULT=pause_before_swap_write
+exec agentctl claude use $INCOMING --live --yes --json &before&
+swap-pause
+swap-sibling changed
+swap-action resume
+wait before
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout before.json
+swap-report before.json seeded equal argv
+swap-item changed incoming
+swap-argv 1 sized
+swap-audit-carry seeded equal argv
+swap-check 1 0 0
+swap-clean
+
+# a_sibling_change_after_the_held_read_is_lost_and_cannot_be_detected
+# This is the accepted residual race: the change lands between the re-read
+# under the hold and the write, the write puts back the members it read,
+# and the readback compares against what was written, so it says "equal".
+# The case fails if a later change makes that loss detectable or claims so.
+swapfixture carry-namespace after-held-read
+env AGENTCTL_FAULT=pause_swap_after_held_read
+exec agentctl claude use $INCOMING --live --yes --json &held&
+swap-pause
+swap-sibling changed
+swap-action resume
+wait held
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+cp stdout held.json
+swap-report held.json seeded equal argv
+swap-item seeded incoming
+swap-argv 1 sized
+swap-audit-carry seeded equal argv
+swap-check 1 0 0
+swap-clean
+
+# a_sibling_change_after_the_write_is_reported_as_differs
+swapfixture carry-namespace after-write
+env AGENTCTL_FAULT=pause_swap_after_write
+exec agentctl claude use $INCOMING --live --yes --json &after&
+swap-pause
+swap-sibling changed
+swap-action resume
+wait after
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout after.json
+swap-report after.json seeded differs argv mcpOAuth
+swap-item changed incoming
+swap-argv 1
+swap-audit-carry seeded differs argv
+swap-audit applied 0
+swap-check 1 0 0
+swap-clean
+
+# a_readback_that_fails_leaves_the_siblings_unverified_and_the_outcome_unknown
+swapfixture carry-namespace readback-fails
+env AGENTCTL_FAULT=pause_swap_after_write
+env AGCTL_FAKE_SECURITY_FIND_EXIT_IF=$SWAP_ROOT/read-fails
+exec expectexit 18 agentctl claude use $INCOMING --live --yes --json &unverified&
+swap-pause
+cp marker $SWAP_ROOT/read-fails
+swap-action resume
+wait unverified
+stdout '"outcome": "unknown"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout unverified.json
+swap-report unverified.json seeded unverified argv
+swap-item seeded incoming
+swap-argv 1 sized
+swap-audit-carry seeded unverified argv
+swap-audit unknown 0
+swap-clean
+
+-- marker --
+present

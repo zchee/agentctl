@@ -1,0 +1,86 @@
+# A swap rewrites the whole keychain item. Every member beside the account
+# object (MCP logins, their client configuration, plugin secrets) is carried
+# from the item as re-read under the hold, never from a file, and no value
+# of one ever reaches a file, a log, a report or the audit.
+
+# a_live_swap_keeps_the_items_mcp_logins_and_plugin_secrets
+swapfixture carry-live live-forward
+undo-setup
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout forward.json
+swap-report forward.json seeded equal argv
+swap-item seeded incoming
+swap-argv 1 sized
+swap-audit-carry seeded equal argv
+swap-clean
+
+# the_live_items_mcp_login_count_is_on_the_status_row
+# (status exits 2 only because the fixture closes the usage endpoint)
+exec expectexit 2 agentctl claude status --json
+stdout '"mcp_oauth_entries": 2'
+! stdout 'SIBLING-CANARY|SENTINEL'
+
+# a_live_undo_keeps_the_items_mcp_logins_and_plugin_secrets
+exec agentctl claude use --undo --yes --json
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout undo.json
+swap-report undo.json seeded equal argv
+swap-item seeded owner
+swap-argv 2 sized
+swap-audit-carry seeded equal argv
+swap-clean
+
+# a_namespace_swap_keeps_the_namespace_items_own_members
+swapfixture carry-namespace namespace-forward
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+cp stdout namespace.json
+swap-report namespace.json seeded equal argv
+swap-item seeded incoming
+swap-argv 1 sized
+swap-audit-carry seeded equal argv
+swap-check 1 0 0
+swap-clean
+
+# a_file_never_supplies_siblings_to_a_namespace_item_written_for_the_first_time
+swapfixture carry-first-write-file
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'FILE-SIBLING|SENTINEL'
+cp stdout first-write.json
+swap-report first-write.json none equal argv
+swap-item none incoming
+swap-argv 1 sized
+swap-audit-carry none equal argv
+swap-clean
+
+# a_file_never_supplies_siblings_beside_the_items_own
+swapfixture carry-namespace-file
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'FILE-SIBLING|SENTINEL'
+cp stdout present.json
+swap-report present.json seeded equal argv
+swap-item seeded incoming
+swap-argv 1 sized
+swap-audit-carry seeded equal argv
+swap-clean
+
+# a_member_named_twice_is_written_once_at_its_first_position_with_its_last_value
+swapfixture carry-namespace duplicated
+swap-sibling duplicated
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout 'SIBLING-CANARY|SENTINEL'
+cp stdout duplicated.json
+swap-report duplicated.json seeded equal argv
+swap-item changed incoming
+swap-argv 1 sized
+swap-clean

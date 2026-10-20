@@ -16,14 +16,19 @@ package testutil
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +37,9 @@ import (
 	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/rogpeppe/go-internal/testscript"
+	"golang.org/x/sys/unix"
 )
 
 func init() { registerScriptCmd("swapfixture", swapFixture) }
@@ -50,11 +57,12 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		}
 	}
 	scenarios := map[string]struct {
-		live, absent, duplicate, expired, migrated, incomingAbsent, envToken, auditRefused, declined, failed, mismatch, profileUnavailable, newer, compact, busy                bool
-		lineLong, documentLarge, rotateLong, timeout, peerChange, outgoingUnavailable, outgoingMalformed, missingClaim, sessions, configBusy, configStale, configLink, saveRace bool
-		unowned, unreadable, outgoingMismatch, dangling, outgoingExpired                                                                                                        bool
-		third                                                                                                                                                                   bool
-		storageBusy, independent, ownerMissing, configAbsent, auditSymlink, ownAudit, alternateSpelling                                                                         bool
+		live, absent, duplicate, expired, migrated, incomingAbsent, envToken, auditRefused, declined, failed, mismatch, profileUnavailable, newer, compact, busy bool
+		lineLong, rotateLong, timeout, peerChange, outgoingUnavailable, outgoingMalformed, missingClaim, sessions, configBusy, configStale, configLink, saveRace bool
+		unowned, unreadable, outgoingMismatch, dangling, outgoingExpired                                                                                         bool
+		third                                                                                                                                                    bool
+		siblings, fileSiblings, siblingsNear, siblingsGap                                                                                                        bool
+		storageBusy, independent, ownerMissing, configAbsent, auditSymlink, ownAudit, alternateSpelling                                                          bool
 	}{
 		"namespace-storage-busy":       {storageBusy: true},
 		"live-independent":             {live: true, independent: true},
@@ -93,8 +101,13 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		"live-compact-config":          {live: true, compact: true},
 		"live-busy":                    {live: true, busy: true},
 		"line-too-long":                {lineLong: true},
-		"credential-too-large":         {documentLarge: true},
-		"refresh-too-long":             {expired: true, rotateLong: true, alternateSpelling: true},
+		"credential-too-large":         {expired: true, siblingsNear: true},
+		"refresh-too-long":             {expired: true, siblingsGap: true, rotateLong: true, alternateSpelling: true},
+		"carry-live":                   {live: true, siblings: true},
+		"carry-namespace":              {siblings: true},
+		"carry-third":                  {third: true, siblings: true},
+		"carry-first-write-file":       {absent: true, fileSiblings: true},
+		"carry-namespace-file":         {siblings: true, fileSiblings: true},
 		"namespace-timeout":            {timeout: true},
 		"first-write-timeout":          {absent: true, timeout: true},
 		"live-timeout":                 {live: true, timeout: true},
@@ -139,12 +152,18 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	if test.lineLong {
 		incomingName += strings.Repeat("x", 2500)
 	}
-	// Past the keychain update ceiling, so the constructor refuses the
-	// document before any security(1) child could be handed it.
-	if test.documentLarge {
-		incomingName += strings.Repeat("x", 300<<10)
-	}
 	incomingBlob := blob(incomingName, incoming, expires)
+	// An owned file that carries members beside the account object, which
+	// must never reach the keychain item: a file is not a sibling source.
+	incomingFile := incomingBlob
+	if test.fileSiblings {
+		members, err := itemMembers(incomingBlob)
+		ts.Check(err)
+		incomingFile = keychainDocument(members[0].Value, []itemMember{
+			{Name: "mcpOAuth", Value: document(map[string]any{"file-server|00ff00ff": map[string]any{"accessToken": "FILE-SIBLING-mcp"}})},
+			{Name: "pluginSecrets", Value: document(map[string]any{"file-plugin": map[string]any{"apiKey": "FILE-SIBLING-plugin"}})},
+		})
+	}
 	outgoingBlob := blob("outgoing", owner, FreshAt())
 	if test.outgoingExpired {
 		outgoingBlob = blob("outgoing", owner, ExpiredAt())
@@ -171,7 +190,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Check(os.Remove(ownerDir))
 	}
 	if !test.incomingAbsent {
-		write(filepath.Join(incomingDir, ".credentials.json"), incomingBlob)
+		write(filepath.Join(incomingDir, ".credentials.json"), incomingFile)
 	}
 	livePlaintext := filepath.Join(liveDir, ".credentials.json")
 	write(livePlaintext, outgoingBlob)
@@ -206,8 +225,31 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	if test.live {
 		service = LiveService
 	}
+	itemPath := filepath.Join(items, KeychainAccount, ItemFileName(service))
+	itemDocument := outgoingBlob
+	if test.siblings || test.siblingsNear || test.siblingsGap {
+		members, err := itemMembers(outgoingBlob)
+		ts.Check(err)
+		var siblings []itemMember
+		switch {
+		case test.siblingsNear:
+			// The siblings alone fill the ceiling, so any account object
+			// beside them puts the document past it.
+			siblings, err = paddedSiblings(0, KeychainBlobCeiling)
+		case test.siblingsGap:
+			// The incoming account object fits beside the siblings with
+			// 2 KiB to spare; the rotated one, 8 KiB longer, does not.
+			incomingMembers, merr := itemMembers(incomingBlob)
+			ts.Check(merr)
+			siblings, err = paddedSiblings(len(incomingMembers[0].Value), KeychainBlobCeiling-2048)
+		default:
+			siblings, err = siblingSet("seeded")
+		}
+		ts.Check(err)
+		itemDocument = keychainDocument(members[0].Value, siblings)
+	}
 	if !test.absent {
-		write(filepath.Join(items, KeychainAccount, ItemFileName(service)), outgoingBlob)
+		write(itemPath, itemDocument)
 	}
 	if test.migrated {
 		write(filepath.Join(items, KeychainAccount, ItemFileName(MigrationService(incomingDir))), incomingBlob)
@@ -268,7 +310,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		"AGENTCTL_KEYCHAIN_BACKEND": "", "AGCTL_FAKE_SECURITY_ITEMS": items, "AGCTL_FAKE_SECURITY_DUMP": filepath.Join(root, "dump"), "AGCTL_FAKE_SECURITY_LOG": filepath.Join(root, "security.log"),
 		"AGCTL_FAKE_SECURITY_WRITE_EXIT": "", "AGCTL_FAKE_SECURITY_FIND_EXIT": "", "AGCTL_FAKE_SECURITY_SLEEP": "", "AGCTL_FAKE_SECURITY_STDERR": "",
 		"AGCTL_FAKE_WRITE_DELAY_MS": "", "AGCTL_FAKE_WRITE_DELAY_AFTER_MS": "", "AGCTL_FAKE_SECURITY_HOLD_PIPES": "", "AGCTL_FAKE_SECURITY_PIDFILE": "", "AGCTL_FAKE_SECURITY_FIND_EXIT_IF": "", "AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE": "", "CLAUDE_CODE_OAUTH_TOKEN": "", "CLAUDE_CONFIG_DIR": "", "AGENTCTL_FAULT": "", "AGENTCTL_FAULT_RESUME": filepath.Join(root, "resume"),
-		"CLAUDE_SECURESTORAGE_CONFIG_DIR": ExportSpelling(ownerDir), "INCOMING": incoming, "OWNER": owner, "SWAP_ROOT": root, "SWAP_STORE": ownerDir, "SWAP_AUDIT": auditPath,
+		"CLAUDE_SECURESTORAGE_CONFIG_DIR": ExportSpelling(ownerDir), "INCOMING": incoming, "OWNER": owner, "SWAP_ROOT": root, "SWAP_STORE": ownerDir, "SWAP_INCOMING_STORE": incomingDir, "SWAP_AUDIT": auditPath,
 	} {
 		ts.Setenv(key, value)
 	}
@@ -314,7 +356,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 			}
 			access := "SENTINEL-rotated-access"
 			if test.rotateLong {
-				access += strings.Repeat("x", 300<<10)
+				access += strings.Repeat("x", 8<<10)
 			}
 			say(w, `{"access_token":%q,"refresh_token":"SENTINEL-rotated-refresh","token_type":"Bearer","expires_in":28800,"scope":"user:inference user:profile"}`, access)
 			return
@@ -353,7 +395,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	ts.Defer(server.Close)
 	ts.Setenv("AGENTCTL_CLAUDE_TOKEN_URL", server.URL+"/token")
 	ts.Setenv("AGENTCTL_CLAUDE_PROFILE_URL", server.URL+"/profile")
-	var terminated *exec.Cmd
+	var terminated, signalled *exec.Cmd
 	ts.SetCmd("swap-action", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 1 {
 			ts.Fatalf("usage: swap-action <wait-held|held|release-leak|drift|resume|terminate|signal-exit>")
@@ -727,7 +769,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Fatalf("already-active namespace swap changed registry bytes")
 		}
 		if test.declined || test.envToken || test.unowned || test.unreadable {
-			if !bytes.Equal([]byte(ts.ReadFile(filepath.Join(ownerDir, ".credentials.json"))), ownerBlob) || !bytes.Equal([]byte(ts.ReadFile(filepath.Join(incomingDir, ".credentials.json"))), incomingBlob) {
+			if !bytes.Equal([]byte(ts.ReadFile(filepath.Join(ownerDir, ".credentials.json"))), ownerBlob) || !bytes.Equal([]byte(ts.ReadFile(filepath.Join(incomingDir, ".credentials.json"))), incomingFile) {
 				ts.Fatalf("refusal or inspection changed namespace credential bytes")
 			}
 		}
@@ -738,4 +780,417 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Fatalf("compact config was rewritten")
 		}
 	})
+	accounts := map[string]string{"incoming": incoming, "owner": owner, "third": "55555555-5555-4555-8555-555555555555"}
+	ts.SetCmd("swap-item", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 2 || accounts[args[1]] == "" {
+			ts.Fatalf("usage: swap-item <seeded|changed|none> <incoming|owner|third>")
+		}
+		assertCarriedItem(ts, ts.ReadFile(itemPath), args[0], accounts[args[1]])
+	})
+	ts.SetCmd("swap-sibling", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 1 {
+			ts.Fatalf("usage: swap-sibling <seeded|changed|grown|duplicated>")
+		}
+		rewriteSiblings(ts, itemPath, args[0])
+	})
+	ts.SetCmd("swap-report", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) < 4 || len(args) > 5 {
+			ts.Fatalf("usage: swap-report <stdout-file> <seeded|none|-> <equal|differs|unverified|-> <argv|-> [note-member]")
+		}
+		assertCarryReport(ts, ts.ReadFile(args[0]), args[1:])
+	})
+	ts.SetCmd("swap-argv", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) < 1 || len(args) > 2 || len(args) == 2 && args[1] != "sized" {
+			ts.Fatalf("usage: swap-argv <writes> [sized]")
+		}
+		want, err := strconv.Atoi(args[0])
+		ts.Check(err)
+		sizes := assertArgvWrites(ts, ts.ReadFile(filepath.Join(root, "security.log")), service, want)
+		if len(args) == 2 {
+			if got := len(ts.ReadFile(itemPath)); len(sizes) == 0 || sizes[len(sizes)-1] != 2*got {
+				ts.Fatalf("the last write's hex length %v is not twice the stored document's %d bytes", sizes, got)
+			}
+		}
+	})
+	ts.SetCmd("swap-clean", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 0 {
+			ts.Fatalf("usage: swap-clean")
+		}
+		var seeded []string
+		if test.fileSiblings {
+			seeded = append(seeded, filepath.Join(incomingDir, ".credentials.json"))
+		}
+		assertNoSiblingLeak(ts, root, filepath.Join(items, KeychainAccount), seeded...)
+	})
+	ts.SetCmd("swap-audit-carry", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 3 {
+			ts.Fatalf("usage: swap-audit-carry <seeded|none> <equal|differs|unverified|-> <argv|->")
+		}
+		assertAuditCarry(ts, auditPath, args)
+	})
+	ts.SetCmd("swap-pause", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 0 {
+			ts.Fatalf("usage: swap-pause")
+		}
+		awaitPause(ts, filepath.Join(root, "resume"))
+	})
+	ts.SetCmd("swap-group-gone", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 1 {
+			ts.Fatalf("usage: swap-group-gone <pidfile>")
+		}
+		assertGroupGone(ts, ts.MkAbs(args[0]))
+	})
+	ts.SetCmd("swap-signal", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 2 {
+			ts.Fatalf("usage: swap-signal <INT|TERM|HUP> <pidfile>")
+		}
+		signalled = signalDuringWrite(ts, args[0], ts.MkAbs(args[1]), filepath.Join(ts.Getenv("SWAP_STORE"), ".oauth_refresh.lock"))
+	})
+	ts.SetCmd("swap-absent", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 1 {
+			ts.Fatalf("usage: swap-absent <text>")
+		}
+		ts.Check(filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || !entry.Type().IsRegular() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err == nil && bytes.Contains(data, []byte(args[0])) {
+				relative, _ := filepath.Rel(root, path)
+				ts.Fatalf("%s holds the marker", relative)
+			}
+			return err
+		}))
+	})
+	ts.SetCmd("swap-store-entries", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg {
+			ts.Fatalf("usage: swap-store-entries [name...]")
+		}
+		entries, err := os.ReadDir(ts.Getenv("SWAP_STORE"))
+		ts.Check(err)
+		got := []string{}
+		for _, entry := range entries {
+			got = append(got, entry.Name())
+		}
+		if diff := gocmp.Diff(append([]string{}, args...), got); diff != "" {
+			ts.Fatalf("the namespace store holds other entries (-want +got):\n%s", diff)
+		}
+	})
+	ts.SetCmd("swap-signal-exit", func(ts *testscript.TestScript, neg bool, args []string) {
+		if neg || len(args) != 1 {
+			ts.Fatalf("usage: swap-signal-exit <status>")
+		}
+		want, err := strconv.Atoi(args[0])
+		ts.Check(err)
+		if signalled == nil || signalled.ProcessState == nil || signalled.ProcessState.ExitCode() != want {
+			ts.Fatalf("the signalled swap did not exit with status %d", want)
+		}
+	})
+}
+
+// memberDigests describes members by name, length and digest only, so a
+// mismatch can be reported without printing a value.
+func memberDigests(members []itemMember) []string {
+	out := make([]string, 0, len(members))
+	for _, member := range members {
+		sum := sha256.Sum256(member.Value)
+		out = append(out, fmt.Sprintf("%s %dB %x", member.Name, len(member.Value), sum[:6]))
+	}
+	return out
+}
+
+// assertCarriedItem checks a keychain document after a carry: its account
+// object belongs to account, and beside it are exactly the sibling set kind
+// ("none" for no siblings), member for member in the production encoder's
+// form and in the seeded order.
+func assertCarriedItem(ts *testscript.TestScript, document, kind, account string) {
+	members, err := itemMembers([]byte(document))
+	ts.Check(err)
+	if len(members) == 0 || members[0].Name != "claudeAiOauth" {
+		ts.Fatalf("the keychain document does not start with its account object: %v", memberDigests(members))
+	}
+	var oauth struct {
+		TokenAccount struct {
+			UUID string `json:"uuid"`
+		} `json:"tokenAccount"`
+	}
+	ts.Check(json.Unmarshal(members[0].Value, &oauth))
+	if oauth.TokenAccount.UUID != account {
+		ts.Fatalf("the keychain item holds account %q, want %q", oauth.TokenAccount.UUID, account)
+	}
+	var want []itemMember
+	if kind != "none" {
+		seeded, err := siblingSet(kind)
+		ts.Check(err)
+		want, err = canonicalMembers(seeded)
+		ts.Check(err)
+	}
+	if diff := gocmp.Diff(memberDigests(want), memberDigests(members[1:])); diff != "" {
+		ts.Fatalf("the keychain item's siblings are not the %s set (-want +got):\n%s", kind, diff)
+	}
+}
+
+// rewriteSiblings replaces the siblings of the keychain item at path with
+// the set kind and keeps its account object byte for byte, the way another
+// process refreshing one MCP login would.
+func rewriteSiblings(ts *testscript.TestScript, path, kind string) {
+	members, err := itemMembers([]byte(ts.ReadFile(path)))
+	ts.Check(err)
+	siblings, err := siblingSet(kind)
+	ts.Check(err)
+	temporary := path + ".rewrite"
+	ts.Check(os.WriteFile(temporary, keychainDocument(members[0].Value, siblings), 0o600))
+	ts.Check(os.Rename(temporary, path))
+}
+
+// carryOutcome is the part of a swap's JSON outcome the carry reports on.
+type carryOutcome struct {
+	Kind           string `json:"kind"`
+	CarriedMembers *[]struct {
+		Name    string         `json:"name"`
+		Entries jsontext.Value `json:"entries"`
+	} `json:"carried_members"`
+	SiblingsReadback *string `json:"siblings_readback"`
+	Transport        *string `json:"transport"`
+	Note             *string `json:"note"`
+	Lock             struct {
+		HoldMS *int64 `json:"hold_ms"`
+	} `json:"lock"`
+}
+
+// holdBudgetMS is the production hold budget a write's hold must stay
+// under, timeouts and the writer's wait delay included.
+const holdBudgetMS = 3000
+
+// seededCarry is what carried_members says for the seeded sibling set.
+var seededCarry = []string{"mcpOAuth=2", "mcpOAuthClientConfig=1", "pluginSecrets=1"}
+
+// assertCarryReport checks the outcome document in a swap's JSON output:
+// carried_members ("seeded", "none" for an empty list, "-" for absent), the
+// siblings_readback and transport values ("-" for absent), and, when given,
+// that the note names a member.
+func assertCarryReport(ts *testscript.TestScript, stdout string, args []string) {
+	var outcome *carryOutcome
+	dec := jsontext.NewDecoder(strings.NewReader(stdout))
+	for {
+		value, err := dec.ReadValue()
+		if err == io.EOF {
+			break
+		}
+		ts.Check(err)
+		var doc carryOutcome
+		ts.Check(json.Unmarshal(value, &doc))
+		if doc.Kind == "outcome" || outcome == nil {
+			outcome = &doc
+		}
+	}
+	if outcome == nil {
+		ts.Fatalf("the output holds no JSON outcome")
+	}
+	if hold := outcome.Lock.HoldMS; hold != nil && *hold >= holdBudgetMS {
+		ts.Fatalf("the hold lasted %d ms, not under the %d ms budget", *hold, holdBudgetMS)
+	}
+	var carried []string
+	if outcome.CarriedMembers != nil {
+		carried = []string{}
+		for _, member := range *outcome.CarriedMembers {
+			carried = append(carried, member.Name+"="+string(member.Entries))
+		}
+	}
+	var wantCarried []string
+	switch args[0] {
+	case "seeded":
+		wantCarried = seededCarry
+	case "none":
+		wantCarried = []string{}
+	}
+	if diff := gocmp.Diff(wantCarried, carried); diff != "" {
+		ts.Fatalf("carried_members (-want +got):\n%s", diff)
+	}
+	for i, field := range []*string{outcome.SiblingsReadback, outcome.Transport} {
+		want, name := args[1+i], []string{"siblings_readback", "transport"}[i]
+		got := "-"
+		if field != nil {
+			got = *field
+		}
+		if got != want {
+			ts.Fatalf("%s = %s, want %s", name, got, want)
+		}
+	}
+	if len(args) == 4 && (outcome.Note == nil || !strings.Contains(*outcome.Note, args[3])) {
+		ts.Fatalf("the outcome's note does not name %s", args[3])
+	}
+}
+
+// linuxArgvBudget is the largest document a write the battery lets reach
+// the fake may carry. Linux caps one argv element at 128 KiB, and the hex
+// payload is twice the document, so every case that reaches the fake stays
+// under 60 KiB of document.
+const linuxArgvBudget = 60 << 10
+
+// assertArgvWrites checks every keychain write the fake logged: exactly the
+// redacted argv form for this fixture's account and service, an even hex
+// length within the Linux argv budget, want of them in all. It returns the
+// hex lengths in order.
+func assertArgvWrites(ts *testscript.TestScript, log, service string, want int) []int {
+	form := regexp.MustCompile(`^add-generic-password -U -a "` + regexp.QuoteMeta(KeychainAccount) + `" -s "` + regexp.QuoteMeta(service) + `" -X <REDACTED:([0-9]+)>$`)
+	var sizes []int
+	for line := range strings.SplitSeq(log, "\n") {
+		if !strings.HasPrefix(line, "add-generic-password") {
+			continue
+		}
+		match := form.FindStringSubmatch(line)
+		if match == nil {
+			ts.Fatalf("a keychain write was not logged in the redacted argv form (%d bytes)", len(line))
+		}
+		n, err := strconv.Atoi(match[1])
+		ts.Check(err)
+		if n%2 != 0 || n/2 > linuxArgvBudget {
+			ts.Fatalf("a keychain write carried %d hex digits: odd, or a document over the %d-byte Linux argv budget", n, linuxArgvBudget)
+		}
+		sizes = append(sizes, n)
+	}
+	if len(sizes) != want {
+		ts.Fatalf("observed %d keychain writes, want %d", len(sizes), want)
+	}
+	if len(sizes) != 0 {
+		ts.Logf("largest keychain document a write handed the fake: %d bytes", slices.Max(sizes)/2)
+	}
+	return sizes
+}
+
+// hexRun is a run of hexadecimal digits longer than a SHA-256 digest: a
+// payload, never a fingerprint.
+var hexRun = regexp.MustCompile(`[0-9A-Fa-f]{65,}`)
+
+// assertNoSiblingLeak walks every file under root except the keychain item
+// files directly in itemDir: none may hold the sibling canary, the seeded
+// MCP token filler or a run of hex digits longer than a digest, and no
+// credentials file may name a sibling member, except the files listed in
+// seeded, which the fixture itself wrote that way.
+func assertNoSiblingLeak(ts *testscript.TestScript, root, itemDir string, seeded ...string) {
+	ts.Check(filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !entry.Type().IsRegular() || filepath.Dir(path) == itemDir {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relative, _ := filepath.Rel(root, path)
+		if bytes.Contains(data, []byte(SiblingCanary)) || bytes.Contains(data, []byte("mcp-alpha-")) {
+			ts.Fatalf("%s holds a sibling value", relative)
+		}
+		if hexRun.Match(data) {
+			ts.Fatalf("%s holds a run of more than 64 hexadecimal digits", relative)
+		}
+		if strings.HasPrefix(entry.Name(), ".credentials") && !slices.Contains(seeded, path) && (bytes.Contains(data, []byte("mcpOAuth")) || bytes.Contains(data, []byte("pluginSecrets"))) {
+			ts.Fatalf("%s names a sibling member", relative)
+		}
+		return nil
+	}))
+}
+
+// assertAuditCarry checks the last write entry of the audit log: the
+// member names it carried ("seeded" or "none"), siblings_readback and
+// transport ("-" for absent).
+func assertAuditCarry(ts *testscript.TestScript, auditPath string, args []string) {
+	type writeCarry struct {
+		Event            string   `json:"event"`
+		Carried          []string `json:"carried"`
+		SiblingsReadback *string  `json:"siblings_readback"`
+		Transport        *string  `json:"transport"`
+	}
+	var last *writeCarry
+	for line := range strings.SplitSeq(ts.ReadFile(auditPath), "\n") {
+		if line == "" {
+			continue
+		}
+		var row writeCarry
+		ts.Check(json.Unmarshal([]byte(line), &row))
+		if row.Event == "write" {
+			last = &row
+		}
+	}
+	if last == nil {
+		ts.Fatalf("the audit log holds no write entry")
+	}
+	var want []string
+	if args[0] == "seeded" {
+		want = []string{"mcpOAuth", "mcpOAuthClientConfig", "pluginSecrets"}
+	}
+	if diff := gocmp.Diff(want, last.Carried, cmpopts.EquateEmpty()); diff != "" {
+		ts.Fatalf("the audit's carried names (-want +got):\n%s", diff)
+	}
+	for i, field := range []*string{last.SiblingsReadback, last.Transport} {
+		want, name := args[1+i], []string{"siblings_readback", "transport"}[i]
+		got := "-"
+		if field != nil {
+			got = *field
+		}
+		if got != want {
+			ts.Fatalf("the audit's %s = %s, want %s", name, got, want)
+		}
+	}
+}
+
+// awaitPause waits for the acknowledged pause point behind resume to report
+// that the run is held there, then clears the marker.
+func awaitPause(ts *testscript.TestScript, resume string) {
+	reached := resume + ".reached"
+	if !WaitUntil(10*time.Second, func() bool { _, err := os.Stat(reached); return err == nil }) {
+		ts.Fatalf("the run never reached its pause point")
+	}
+	ts.Check(os.Remove(reached))
+}
+
+// assertGroupGone checks that no member of the fake's process group, whose
+// leader wrote pidfile, is left once the command under test has returned.
+func assertGroupGone(ts *testscript.TestScript, pidfile string) {
+	pid, ok := readCount(pidfile)
+	if !ok || pid <= 1 {
+		ts.Fatalf("the fake wrote no usable pidfile")
+	}
+	if !WaitUntil(2*time.Second, func() bool { return errors.Is(unix.Kill(-pid, 0), unix.ESRCH) }) {
+		ts.Fatalf("the fake's process group %d outlived the write", pid)
+	}
+}
+
+// signalDuringWrite sends sig to the one background command while the
+// fake's leader is beating in its delay under the hold, then checks the
+// order the teardown promises: the leader's last heartbeat comes before the
+// hold directory is removed, and no beat follows. It returns the command.
+func signalDuringWrite(ts *testscript.TestScript, name, pidfile, holdDir string) *exec.Cmd {
+	sig, ok := map[string]os.Signal{"INT": unix.SIGINT, "TERM": unix.SIGTERM, "HUP": unix.SIGHUP}[name]
+	if !ok {
+		ts.Fatalf("unknown signal %q", name)
+	}
+	background := ts.BackgroundCmds()
+	if len(background) != 1 {
+		ts.Fatalf("observed %d background commands; want 1", len(background))
+	}
+	heartbeat := pidfile + ".heartbeat"
+	if !WaitUntil(10*time.Second, func() bool { beats, ok := readCount(heartbeat); return ok && beats >= 2 }) {
+		ts.Fatalf("the fake never beat twice in its write delay")
+	}
+	if _, err := os.Stat(holdDir); err != nil {
+		ts.Fatalf("the write is not running under the hold: %v", err)
+	}
+	ts.Check(background[0].Process.Signal(sig))
+	var lastBeat []byte
+	if !WaitUntil(10*time.Second, func() bool {
+		if _, err := os.Lstat(holdDir); !errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		data, err := os.ReadFile(heartbeat)
+		lastBeat = data
+		return err == nil
+	}) {
+		ts.Fatalf("the hold directory was never removed after %s", name)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if data, err := os.ReadFile(heartbeat); err != nil || !bytes.Equal(data, lastBeat) {
+		ts.Fatalf("the fake's leader beat after the hold directory was removed")
+	}
+	return background[0]
 }

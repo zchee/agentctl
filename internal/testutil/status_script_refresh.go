@@ -99,6 +99,11 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Check(os.WriteFile(filepath.Join(root, "items", ".allowed-services"), []byte(service+"\n"), 0o600))
 	}
 	write(target, value)
+	if strings.HasPrefix(kind, "migrated-siblings") {
+		// The migrated item also holds the members Claude Code keeps beside
+		// the account object, which a refresh must put back.
+		rewriteSiblings(ts, item, "seeded")
+	}
 	if kind == "migrated-with-file" {
 		write(credential, blob("file", ExpiredAt()))
 	}
@@ -327,6 +332,8 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Check(terminated.Process.Signal(syscall.SIGTERM))
 		case "peer":
 			write(item, blob("peer", FreshAt()))
+		case "sibling-changed":
+			rewriteSiblings(ts, item, "changed")
 		default:
 			ts.Fatalf("unknown refresh action %q", args[0])
 		}
@@ -336,6 +343,23 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Fatalf("usage: refresh-check <stored|plan|no-pending|read-only|write|audit|lock-body|unlocked|row> [arguments]")
 		}
 		switch args[0] {
+		case "siblings":
+			if len(args) != 2 {
+				ts.Fatalf("siblings requires a sibling set")
+			}
+			assertCarriedItem(ts, ts.ReadFile(item), args[1], Acct)
+		case "carry":
+			if len(args) != 5 {
+				ts.Fatalf("carry requires a sibling set, a readback, a transport and a write count")
+			}
+			assertAuditCarry(ts, filepath.Join(root, "config", "claude", "keychain-writes.jsonl"), args[1:4])
+			want, err := strconv.Atoi(args[4])
+			ts.Check(err)
+			sizes := assertArgvWrites(ts, ts.ReadFile(filepath.Join(root, "security.log")), service, want)
+			if want != 0 && args[2] != "differs" && sizes[len(sizes)-1] != 2*len(ts.ReadFile(item)) {
+				ts.Fatalf("the last write's hex length is not twice the stored document")
+			}
+			assertNoSiblingLeak(ts, root, filepath.Dir(item))
 		case "plan-cell":
 			if len(args) != 3 {
 				ts.Fatalf("plan-cell requires a report and value")

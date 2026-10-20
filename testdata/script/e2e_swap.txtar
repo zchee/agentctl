@@ -499,8 +499,13 @@ stdout '"outcome": "applied"'
 swap-check 1 0 0
 swap-audit applied 0
 
-# a_document_over_the_update_ceiling_is_refused_before_any_child_exists
+# an_item_whose_members_fill_the_ceiling_is_refused_before_any_token_request_or_child
+# The destination's own members are just under the ceiling and the incoming
+# credential is expired: the size is decided from the first snapshot, so no
+# token is requested, no file is touched and only the one read is made.
 swapfixture credential-too-large
+exec mtime $SWAP_INCOMING_STORE/.credentials.json
+cp stdout incoming-before.mtime
 exec expectexit 31 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "credential_too_large"'
 stdout '"refusal": null'
@@ -508,10 +513,16 @@ stdout '"refusal": null'
 ! stderr SENTINEL
 swap-check 0 0 0
 swap-io 1 0 0
+swap-argv 0
 swap-audit none 0
 ! exists $SWAP_STORE/.credentials.adopted.json
+exec mtime $SWAP_INCOMING_STORE/.credentials.json
+cmp stdout incoming-before.mtime
 
-# a_refreshed_document_over_the_update_ceiling_is_refused_before_any_child_exists
+# a_refreshed_credential_that_no_longer_fits_beside_the_items_members_is_refused_before_any_child
+# The expired incoming credential fits beside the destination's members; the
+# rotated one, longer by a few kilobytes, does not. The rotated pair is
+# still saved back to its own store before the refusal.
 swapfixture refresh-too-long
 exec expectexit 31 agentctl claude use $INCOMING --live --yes --json
 stdout '"reason": "credential_too_large"'
@@ -519,6 +530,7 @@ stdout '"reason": "credential_too_large"'
 ! stderr SENTINEL
 swap-check 0 1 0
 swap-io 4 0 0
+swap-argv 0
 swap-audit none 0
 ! exists $SWAP_STORE/.credentials.adopted.json
 
