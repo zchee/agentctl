@@ -1,0 +1,421 @@
+# The first `use <id>` of a namespace whose keychain item is absent creates
+# that item from the owned credential file's account object and the members
+# the live item keeps beside its own, so the isolated session finds the
+# user's MCP logins, and then removes the owned file. An item that exists, or
+# an owned file holding MCP state of its own, is never read for a merge and
+# never written. Nothing seeding does blocks the launch.
+
+# an_absent_item_is_created_from_the_owned_file_and_the_live_members
+seedfixture absent
+exec agentctl claude use account --json
+cp stdout absent.json
+! stdout 'SIBLING-CANARY|SENTINEL'
+! stderr 'SIBLING-CANARY|SENTINEL'
+seed-report absent.json seeded absent equal argv removed
+stderr -count=1 '^.+$'
+stderr '^seeded mcpOAuth \(2 entries\), mcpOAuthClientConfig \(1 entry\), pluginSecrets \(1 entry\) into Claude Code-credentials-[0-9a-f]{8}; removed the owned credential file$'
+seed-item created
+seed-file gone
+seed-writes 1
+seed-audit 1 applied removed
+seed-locks
+seed-launched
+seed-clean
+
+# the_created_item_is_the_namespace_row_status_reads_from_the_keychain
+# (status exits 2 only because the fixture closes the usage endpoint)
+seed-list
+exec expectexit 2 agentctl claude status --json
+seed-status stdout
+! stdout 'SIBLING-CANARY|SENTINEL'
+seed-clean
+
+# a_second_use_finds_the_item_listed_and_writes_nothing
+exec agentctl claude use account --json
+seed-report stdout unchanged present - - -
+! stderr .
+seed-writes 1
+seed-audit 1 applied removed
+seed-launched
+seed-clean
+
+# a_present_item_with_mcp_state_of_its_own_is_neither_read_nor_written
+seedfixture present present
+exec agentctl claude use account --json
+seed-report stdout unchanged present - - -
+! stderr .
+seed-item unchanged
+seed-writes 0
+seed-calls 1 1 0 0
+seed-audit 0 - -
+seed-locks
+seed-launched
+seed-clean
+
+# a_present_item_of_another_identity_is_neither_read_nor_written
+seedfixture taken-over taken-over
+exec agentctl claude use account --json
+seed-report stdout unchanged present - - -
+! stderr .
+seed-item unchanged
+seed-writes 0
+seed-calls 1 1 0 0
+seed-audit 0 - -
+seed-launched
+seed-clean
+
+# no_mcp_seed_keeps_the_servers_and_makes_no_keychain_call
+seedfixture no-seed
+exec agentctl claude use account --json --no-mcp-seed
+seed-report stdout null
+! stderr .
+seed-quiet
+seed-item absent
+seed-file same
+exists $SEED_SESSION/mcp.json
+seed-launched
+seed-clean
+
+# no_mcp_drops_the_servers_and_makes_no_keychain_call
+seedfixture no-mcp
+exec agentctl claude use account --json --no-mcp
+seed-report stdout null
+! stderr .
+seed-quiet
+seed-item absent
+seed-file same
+! exists $SEED_SESSION/mcp.json
+seed-launched --no-mcp
+seed-clean
+
+# a_failing_write_names_the_exit_class_only_and_still_launches_the_session
+seedfixture failing
+env AGCTL_FAKE_SECURITY_WRITE_EXIT=1
+env AGCTL_FAKE_SECURITY_STDERR='private stderr detail'
+exec agentctl claude use account --json
+seed-report stdout failed absent - argv kept 'the keychain write failed ('
+stderr -count=1 '^.+$'
+stderr '^MCP credentials not seeded: the keychain write failed \(Other\); nothing seeded$'
+! stderr 'private stderr detail'
+! stdout 'private stderr detail'
+seed-file same
+seed-writes 1
+seed-audit 1 failed kept
+seed-locks
+seed-launched
+env SEED_CHILD_CODE=37
+exec expectexit 37 agentctl claude use account
+stderr -count=1 '^.+$'
+stderr '^MCP credentials not seeded: the keychain write failed \(Other\); nothing seeded$'
+! stderr 'private stderr detail'
+seed-file same
+seed-writes 2
+seed-audit 2 failed kept
+seed-locks
+seed-launched
+env SEED_CHILD_CODE=0
+env AGCTL_FAKE_SECURITY_WRITE_EXIT=
+env AGCTL_FAKE_SECURITY_STDERR=
+seed-clean
+
+# an_oversize_document_is_skipped_before_any_lock
+seedfixture padded padded
+env AGENTCTL_FAULT=swap_lock_leak
+exec agentctl claude use account --json
+env AGENTCTL_FAULT=
+seed-report stdout skipped absent - - - 'credential_too_large: the seeded document would be over the keychain update ceiling'
+stderr -count=1 '^.+$'
+seed-writes 0
+seed-audit 0 - -
+seed-locks
+seed-file same
+seed-launched
+seed-clean
+
+# a_missing_live_item_is_a_skip_with_its_note
+seedfixture no-live no-live
+exec agentctl claude use account --json
+seed-report stdout skipped absent - - - 'the live keychain item could not be read; nothing seeded'
+stderr -count=1 '^MCP credentials not seeded: the live keychain item could not be read; nothing seeded$'
+seed-writes 0
+seed-launched
+seed-clean
+
+# a_live_item_without_members_has_nothing_to_seed
+seedfixture bare-live bare-live
+exec agentctl claude use account --json
+seed-report stdout unchanged absent - - -
+! stderr .
+seed-writes 0
+seed-file same
+seed-launched
+seed-clean
+
+# a_namespace_without_an_owned_file_is_a_skip_with_the_login_note
+seedfixture no-file no-file
+exec agentctl claude use account --json
+seed-report stdout skipped absent - - - 'run `agentctl claude login`'
+stderr -count=1 '^.+$'
+stderr 'run `agentctl claude login`'
+seed-writes 0
+seed-item absent
+seed-launched
+seed-clean
+
+# a_keychain_that_does_not_answer_ends_seeding_at_its_deadline
+seedfixture deadline
+env AGCTL_FAKE_SECURITY_DUMP_DELAY_MS=4000
+exec agentctl claude use account --json
+seed-report stdout skipped - - - - 'the keychain did not answer within the seeding deadline (3000 ms); nothing seeded'
+stderr -count=1 '^.+$'
+seed-writes 0
+seed-file same
+seed-launched
+env AGCTL_FAKE_SECURITY_DUMP_DELAY_MS=
+seed-clean
+
+# a_listed_item_refuses_relocate_and_the_live_swap_reads_no_file
+seedfixture relocate unknown-org
+exec agentctl claude use account --json
+seed-report stdout seeded absent equal argv removed
+seed-launched
+seed-list
+cp $AGENTCTL_CONFIG_DIR/config.json registry-before.json
+exec cp -R $SEED_NS namespace-before
+! exec agentctl claude accounts relocate account --yes
+stderr 'credential lives in its keychain item `Claude Code-credentials-[0-9a-f]{8}`, which is keyed to this directory and which agentctl cannot move yet; nothing was moved'
+stderr '`agentctl claude use account`, where `/login` replaces its credential'
+cmp $AGENTCTL_CONFIG_DIR/config.json registry-before.json
+exec diff -r namespace-before $SEED_NS
+exists $SEED_NS
+seed-file gone
+seed-item created
+seed-writes 1
+! exec agentctl claude use --live account --yes
+stdout 'lives in its keychain item; swapping it in is not supported yet'
+seed-live unchanged
+seed-writes 1
+! seed-launched
+seed-clean
+
+# an_adopted_copy_is_kept_while_the_owned_file_is_removed
+seedfixture adopted adopted
+exec agentctl claude use account --json
+seed-report stdout seeded absent equal argv removed
+seed-file gone
+seed-item created
+seed-writes 1
+seed-audit 1 applied removed
+seed-launched
+seed-clean
+
+# an_unconfirmed_seed_keeps_the_owned_file
+seedfixture unverified
+env AGENTCTL_FAULT=pause_seed_after_write
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action find-fails
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout unknown absent unverified argv kept 'could not be confirmed'
+! stderr 'reads this file until it is removed'
+seed-file same
+seed-audit 1 unknown kept
+seed-launched
+seed-clean
+
+# a_busy_namespace_guard_keeps_the_owned_file_with_a_warning
+# The holder excludes removal through flock; no process observation is needed.
+seedfixture guard
+exec flockhold $SEED_GUARD 4s $SEED_ROOT/guard-ready &guard&
+exec waitfor $SEED_ROOT/guard-ready
+exec agentctl claude use account --json
+seed-report stdout seeded absent equal argv kept 'was kept: its namespace is busy' '`agentctl claude use --live account` reads this file until it is removed' $SEED_FILE
+stderr -count=1 '^.+$'
+stderr 'was kept: its namespace is busy; `agentctl claude use --live account` reads this file until it is removed$'
+seed-contains stderr $SEED_FILE
+seed-file same
+seed-item created
+seed-audit 1 applied kept
+seed-launched
+wait guard
+seed-clean
+
+# a_parked_pending_write_stops_the_seed_before_any_write
+seedfixture pending pending
+exec agentctl claude use account --json
+seed-report stdout skipped absent - - - 'an unresolved pending write is parked in that namespace'
+seed-writes 0
+seed-file same
+seed-launched
+seed-clean
+
+# a_storage_lock_taken_after_the_write_keeps_the_owned_file_with_a_warning
+# A fresh storage mutex makes the nonblocking takes exhaust their restarts;
+# no stale-holder sampling or process observation is needed on any platform.
+seedfixture storage-busy
+env AGENTCTL_FAULT=pause_seed_after_write
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action storage-lock
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout seeded absent equal argv kept 'was kept: its namespace is busy' '`agentctl claude use --live account` reads this file until it is removed'
+stderr -count=1 '^.+$'
+stderr 'was kept: its namespace is busy; `agentctl claude use --live account` reads this file until it is removed$'
+seed-file same
+seed-item created
+seed-locks .storage-write.lock
+seed-launched
+seed-clean
+
+# an_owned_file_with_mcp_state_of_its_own_is_left_as_it_is
+seedfixture file-state file-state
+env AGENTCTL_FAULT=swap_lock_leak
+exec agentctl claude use account --json
+env AGENTCTL_FAULT=
+seed-report stdout own_state absent - - - 'holds MCP state of its own (`mcpOAuth`, `FILE-SIBLING`); it was left as it is and nothing was seeded' $SEED_FILE
+stderr -count=1 '^MCP credentials not seeded: '
+! stderr 'FILE-SIBLING-'
+seed-writes 0
+seed-audit 0 - -
+seed-locks
+seed-file same
+seed-item absent
+seed-launched
+seed-clean
+
+# mcp_state_written_into_the_owned_file_before_the_hold_is_left_as_it_is
+seedfixture file-state-late
+env AGENTCTL_FAULT=pause_before_seed_hold
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action add-file-members
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout own_state absent - - - 'holds MCP state of its own (`mcpOAuth`, `FILE-SIBLING`)'
+seed-writes 0
+seed-audit 1 own_state -
+seed-file changed
+seed-item absent
+seed-locks
+seed-launched
+seed-clean
+
+# an_item_created_before_the_hold_is_left_as_it_is
+seedfixture created-early
+env AGENTCTL_FAULT=pause_before_seed_hold
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action create-item
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout discarded absent - - - 'Claude Code created the namespace item meanwhile; nothing seeded'
+seed-writes 0
+seed-item unchanged
+seed-audit 1 discarded -
+seed-file same
+seed-locks
+seed-launched
+seed-clean
+
+# the_accepted_race_an_item_created_by_a_writer_that_takes_no_lock
+# A writer that bypasses the namespace's storage lock and creates the item
+# after the re-read under the hold is overwritten and cannot be detected;
+# the created item then holds the owned file's account and the live members.
+seedfixture created-late
+env AGENTCTL_FAULT=pause_seed_after_held_read
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action create-item
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout seeded absent equal argv removed
+seed-item created
+seed-writes 1
+seed-launched
+seed-clean
+
+# a_member_rewritten_after_the_write_reads_back_as_differs
+seedfixture sibling-changed
+env AGENTCTL_FAULT=pause_seed_after_write
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action change-sibling
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout seeded absent differs argv kept 'members mcpOAuth did not read back as written'
+seed-file same
+seed-audit 1 applied kept
+seed-launched
+seed-clean
+
+# a_login_before_the_hold_discards_the_seed
+seedfixture relogged-early
+env AGENTCTL_FAULT=pause_before_seed_hold
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action change-account
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout discarded absent - - - 'the namespace''s credential file changed under the hold; nothing seeded'
+seed-writes 0
+seed-file changed
+seed-item absent
+seed-audit 1 discarded -
+seed-launched
+seed-clean
+
+# a_login_before_the_removal_keeps_the_new_file_with_a_warning
+seedfixture relogged-late
+env AGENTCTL_FAULT=pause_seed_before_file_remove
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action change-account
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout seeded absent equal argv kept 'was kept: it changed after the seed' '`agentctl claude use --live account` reads this file until it is removed' $SEED_FILE
+stderr -count=1 '^.+$'
+stderr 'was kept: it changed after the seed; `agentctl claude use --live account` reads this file until it is removed$'
+seed-contains stderr $SEED_FILE
+seed-file changed
+seed-item created
+seed-audit 1 applied kept
+seed-launched
+seed-clean
+
+# claude_codes_plaintext_fallback_before_the_removal_keeps_the_file
+# The fallback writes the same account object with its members to the file
+# and deletes the item; the whole-document compare keeps the file, so the
+# namespace keeps its one credential, and the next use leaves it as it is.
+seedfixture fallback
+env AGENTCTL_FAULT=pause_seed_before_file_remove
+exec agentctl claude use account --json &run&
+seed-action wait-pause
+seed-action fallback
+seed-action resume
+wait run
+env AGENTCTL_FAULT=
+seed-report stdout seeded absent equal argv kept 'was kept: it changed after the seed' '`agentctl claude use --live account` reads this file until it is removed'
+stderr -count=1 '^.+$'
+stderr 'was kept: it changed after the seed; `agentctl claude use --live account` reads this file until it is removed$'
+seed-file changed
+seed-item absent
+seed-writes 1
+seed-launched
+exec agentctl claude use account --json
+seed-report stdout own_state absent - - - 'holds MCP state of its own'
+seed-writes 1
+seed-file changed
+seed-item absent
+seed-audit 1 applied kept
+seed-launched
+seed-clean

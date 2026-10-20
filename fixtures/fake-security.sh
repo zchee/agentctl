@@ -28,7 +28,10 @@
 # The delay and hold values are decimal counts; leading zeros are dropped, so
 # 010 means ten under every shell, never the octal eight.
 #
-# Read knob:
+# Read knobs:
+#   AGCTL_FAKE_SECURITY_DUMP_DELAY_MS sleep this many milliseconds before
+#                                     dump-keychain answers, so a caller's
+#                                     deadline can end the listing alone.
 #   AGCTL_FAKE_SECURITY_FIND_EXIT_IF  once this file exists, every
 #                                     find-generic-password exits with
 #                                     AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE
@@ -280,6 +283,10 @@ dump-keychain)
     # marker in between).
     if [ -n "${AGCTL_FAKE_SECURITY_DUMP_EXIT_IF:-}" ] && [ -e "$AGCTL_FAKE_SECURITY_DUMP_EXIT_IF" ]; then
         exit "${AGCTL_FAKE_SECURITY_DUMP_EXIT_IF_CODE:-36}"
+    fi
+    if [ -n "${AGCTL_FAKE_SECURITY_DUMP_DELAY_MS:-}" ]; then
+        dump_delay=$(decimal_count AGCTL_FAKE_SECURITY_DUMP_DELAY_MS "$AGCTL_FAKE_SECURITY_DUMP_DELAY_MS") || exit 1
+        delay_ms "$dump_delay"
     fi
     if [ -n "${AGCTL_FAKE_SECURITY_DUMP:-}" ] && [ -f "$AGCTL_FAKE_SECURITY_DUMP" ]; then
         cat "$AGCTL_FAKE_SECURITY_DUMP"

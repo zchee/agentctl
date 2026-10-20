@@ -685,6 +685,58 @@ func TestFakeSecurityReadsDelayCountsAsDecimal(t *testing.T) {
 	}
 }
 
+func TestFakeSecurityDelaysTheListingAlone(t *testing.T) {
+	tests := map[string]struct {
+		args      []string
+		value     string
+		wantExit  int
+		wantSleep []string
+		wantOut   string
+	}{
+		"success: a zero-padded listing delay is decimal milliseconds": {
+			args: []string{"dump-keychain", "login.keychain"}, value: "0019", wantSleep: []string{"0.019"}, wantOut: `"svce"<blob>="Claude Code-credentials"`,
+		},
+		"success: a whole-second listing delay": {
+			args: []string{"dump-keychain", "login.keychain"}, value: "4000", wantSleep: []string{"4.000"}, wantOut: `"svce"<blob>="Claude Code-credentials"`,
+		},
+		"success: an item read is not delayed": {
+			args: []string{"find-generic-password", "-s", "svc-1", "-a", KeychainAccount, "-w"}, value: "4000", wantOut: "the item bytes",
+		},
+		"error: a listing delay that is not a count stops the listing": {
+			args: []string{"dump-keychain", "login.keychain"}, value: "4s", wantExit: 1,
+		},
+	}
+
+	for _, shell := range installedShells(t) {
+		for name, tt := range tests {
+			t.Run(filepath.Base(shell)+"/"+name, func(t *testing.T) {
+				f := New(t).WithKeychain()
+				f.Dump("Claude Code-credentials")
+				f.KeychainItem("svc-1", "the item bytes")
+				trace := traceSleep(t, f)
+				f.Set("AGCTL_FAKE_SECURITY_DUMP_DELAY_MS", tt.value)
+
+				out := Run(t, securityUnder(t, f, shell, tt.args...))
+				if code := out.ExitCode(t); code != tt.wantExit {
+					t.Fatalf("%s exited %d, want %d; stderr:\n%s", tt.args[0], code, tt.wantExit, out.Stderr)
+				}
+				if diff := gocmp.Diff(tt.wantSleep, traceLines(t, trace)); diff != "" {
+					t.Fatalf("sleeps the fake asked for (-want +got):\n%s", diff)
+				}
+				if tt.wantExit != 0 {
+					if out.Stdout != "" || !strings.Contains(out.Stderr, "AGCTL_FAKE_SECURITY_DUMP_DELAY_MS must be a decimal count") {
+						t.Fatalf("a refused delay printed %q with stderr %q", out.Stdout, out.Stderr)
+					}
+					return
+				}
+				if !strings.Contains(out.Stdout, tt.wantOut) {
+					t.Fatalf("%s printed %q, want it to contain %q", tt.args[0], out.Stdout, tt.wantOut)
+				}
+			})
+		}
+	}
+}
+
 func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
 	tests := map[string]struct {
 		// knob is the variable to point elsewhere, or "" for none.
