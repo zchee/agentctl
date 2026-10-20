@@ -15,6 +15,7 @@
 package secret
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -295,16 +296,32 @@ func (c StderrClass) KeychainClass() errs.KeychainClass {
 
 // ClassifyStderr classifies a security(1) stderr message. First match wins,
 // tried in the order the [StderrClass] constants are declared, matching
-// case-insensitively on substrings. Several real messages contain more than
-// one of the substrings below, so the order is load-bearing: it decides
-// which class — and therefore which recovery advice — the user is shown.
+// ASCII case-insensitively on substrings. Several real messages contain
+// more than one of the substrings below, so the order is load-bearing: it
+// decides which class — and therefore which recovery advice — the user is
+// shown.
 func ClassifyStderr(stderr string) StderrClass {
-	trimmed := strings.TrimSpace(stderr)
-	if trimmed == "" {
+	if strings.TrimSpace(stderr) == "" {
 		return StderrEmpty
 	}
-	haystack := strings.ToLower(trimmed)
-	has := func(needle string) bool { return strings.Contains(haystack, needle) }
+	return classifyStderrText(stderr)
+}
+
+// classifyStderrBytes is [ClassifyStderr] for a captured byte buffer. It
+// reads stderr in place and allocates nothing, so wiping the buffer
+// afterwards leaves no copy of the message behind.
+func classifyStderrBytes(stderr []byte) StderrClass {
+	if len(bytes.TrimSpace(stderr)) == 0 {
+		return StderrEmpty
+	}
+	return classifyStderrText(stderr)
+}
+
+// classifyStderrText matches the phrases against a non-blank message. Case
+// is folded per byte while comparing, never into a lowered copy; security(1)
+// writes ASCII, and every phrase is lower-case ASCII.
+func classifyStderrText[T string | []byte](haystack T) StderrClass {
+	has := func(needle string) bool { return containsFoldASCII(haystack, needle) }
 
 	switch {
 	case has("errsecduplicateitem") || has("already exists"):
@@ -326,6 +343,30 @@ func ClassifyStderr(stderr string) StderrClass {
 	default:
 		return StderrOther
 	}
+}
+
+// containsFoldASCII reports whether needle, which must be lower-case ASCII,
+// occurs in haystack with ASCII letters compared case-insensitively.
+func containsFoldASCII[T string | []byte](haystack T, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		j := 0
+		for j < len(needle) && lowerASCII(haystack[i+j]) == needle[j] {
+			j++
+		}
+		if j == len(needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// lowerASCII lower-cases an ASCII upper-case letter and returns any other
+// byte unchanged.
+func lowerASCII(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
 }
 
 // DisabledReader answers "there is no keychain here" to everything. It is

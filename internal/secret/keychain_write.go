@@ -55,6 +55,10 @@ const (
 // past this is noise.
 const stderrCapture = 64 << 10
 
+// stderrDrain sizes the scratch the rest of a child's stderr is read
+// through, and discarded from, once the capture is full.
+const stderrDrain = 512
+
 // The three kinds of keychain write failure, as errors.Is targets. Each
 // failed write matches exactly one of them, beside the class sentinel its
 // class names.
@@ -104,6 +108,9 @@ type KeychainWriter struct {
 	// unregistered lets a writer built without a controller write anyway,
 	// with its children reachable from the write's own wait only.
 	unregistered bool
+	// captureHook, when set, is handed each stderr capture as it is made,
+	// so a test can check that the capture's memory is zeroed after Write.
+	captureHook func(*boundedBuffer)
 }
 
 // NewKeychainWriter selects the fixed production binary or the tagged test
@@ -195,7 +202,10 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 	cmd := exec.Command(w.bin, writeSubcommand, updateFlag, accountFlag, update.Account(), serviceFlag, update.Service(), payloadFlag, string(payload))
 	cmd.Env = w.env
 	cmd.Stdout = io.Discard
-	stderr := &boundedBuffer{limit: stderrCapture}
+	stderr := newBoundedBuffer()
+	if w.captureHook != nil {
+		w.captureHook(stderr)
+	}
 	cmd.Stderr = stderr
 	cmd.WaitDelay = childWaitDelay
 	// Its own process group, so a terminal's Ctrl-C reaches agentctl, which
@@ -272,13 +282,30 @@ func classifyWrite(ctx context.Context, state *os.ProcessState, waitErr error, b
 	}
 }
 
-// boundedBuffer keeps the first limit bytes written to it and discards the
-// rest, so a child that floods stderr cannot grow this process. The writes
-// come from the command's copying goroutine, so access is locked.
+// boundedBuffer keeps the first stderrCapture bytes written to it and
+// discards the rest, so a child that floods stderr cannot grow this process.
+//
+// Its memory is fixed when it is made: the capture array is allocated once at
+// full size and never grows, and the overflow passes through a fixed drain
+// array, so wipe reaches every byte of child stderr this process held. The
+// command's copying goroutine fills it through ReadFrom, which reads straight
+// into those arrays instead of through io.Copy's own buffer.
+//
+// The lock is held across ReadFrom's blocking reads. classify and wipe run
+// only after the child has been reaped, and the reap joins the copying
+// goroutine, so neither waits on a live pipe.
 type boundedBuffer struct {
-	mu    sync.Mutex
-	limit int
-	buf   []byte
+	mu      sync.Mutex
+	buf     []byte
+	drain   [stderrDrain]byte
+	dropped int
+}
+
+var _ io.ReaderFrom = (*boundedBuffer)(nil)
+
+// newBoundedBuffer allocates the whole capture up front.
+func newBoundedBuffer() *boundedBuffer {
+	return &boundedBuffer{buf: make([]byte, 0, stderrCapture)}
 }
 
 // Write keeps what fits and reports the whole write as consumed, so the
@@ -286,24 +313,55 @@ type boundedBuffer struct {
 func (b *boundedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if room := b.limit - len(b.buf); room > 0 {
-		b.buf = append(b.buf, p[:min(room, len(p))]...)
-	}
+	n := copy(b.buf[len(b.buf):cap(b.buf)], p)
+	b.buf = b.buf[:len(b.buf)+n]
+	b.dropped += len(p) - n
 	return len(p), nil
 }
 
-// classify reads the captured stderr once, for its class only.
+// ReadFrom reads r to its end into the free part of the capture and, once
+// that is full, through the drain, so the child is never blocked on a full
+// pipe. Reaching the end of r is success.
+func (b *boundedBuffer) ReadFrom(r io.Reader) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var total int64
+	for {
+		dst := b.buf[len(b.buf):cap(b.buf)]
+		full := len(dst) == 0
+		if full {
+			dst = b.drain[:]
+		}
+		n, err := r.Read(dst)
+		total += int64(n)
+		if full {
+			b.dropped += n
+		} else {
+			b.buf = b.buf[:len(b.buf)+n]
+		}
+		if errors.Is(err, io.EOF) {
+			return total, nil
+		}
+		if err != nil {
+			return total, err
+		}
+	}
+}
+
+// classify reads the captured stderr once, in place, for its class only.
 func (b *boundedBuffer) classify() StderrClass {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return ClassifyStderr(string(b.buf))
+	return classifyStderrBytes(b.buf)
 }
 
-// wipe zeroes the captured stderr. It is never copied anywhere else, so
-// zeroing it here leaves the class as the only trace of what it said.
+// wipe zeroes the whole capture array and the drain. Neither is ever copied
+// anywhere else, so zeroing them here leaves the class as the only trace of
+// what the child said.
 func (b *boundedBuffer) wipe() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	memguard.WipeBytes(b.buf)
-	b.buf = nil
+	memguard.WipeBytes(b.buf[:cap(b.buf)])
+	memguard.WipeBytes(b.drain[:])
+	b.buf = b.buf[:0]
 }

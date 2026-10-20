@@ -17,6 +17,7 @@ package secret
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	gocmp "github.com/google/go-cmp/cmp"
@@ -66,6 +67,35 @@ func TestClassifyStderr(t *testing.T) {
 			t.Parallel()
 			if got := ClassifyStderr(tt.stderr); got != tt.want {
 				t.Errorf("ClassifyStderr(%q) = %v, want %v", tt.stderr, got, tt.want)
+			}
+			if got := classifyStderrBytes([]byte(tt.stderr)); got != tt.want {
+				t.Errorf("classifyStderrBytes(%q) = %v, want %v", tt.stderr, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClassifyStderrBytesAllocatesNothing pins the property the write path
+// relies on: classifying a capture makes no copy of it, lowered or not, so
+// wiping the capture erases the message. It is not parallel, because the
+// allocation count is process-wide.
+func TestClassifyStderrBytesAllocatesNothing(t *testing.T) {
+	tests := map[string]struct {
+		stderr []byte
+		want   StderrClass
+	}{
+		"success: blank":                   {stderr: []byte(" \n\t"), want: StderrEmpty},
+		"success: mixed case, late phrase": {stderr: []byte(strings.Repeat("Noise ", 4096) + "The Keychain Is LOCKED"), want: StderrKeychainLocked},
+		"success: no phrase at all":        {stderr: []byte(strings.Repeat("Noise ", 4096)), want: StderrOther},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			var got StderrClass
+			if allocs := testing.AllocsPerRun(20, func() { got = classifyStderrBytes(tt.stderr) }); allocs != 0 {
+				t.Errorf("classifyStderrBytes allocated %v times per run, want 0", allocs)
+			}
+			if got != tt.want {
+				t.Errorf("class = %v, want %v", got, tt.want)
 			}
 		})
 	}

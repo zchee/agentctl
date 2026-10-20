@@ -24,10 +24,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
@@ -102,20 +104,42 @@ func assertNoStderrText(t *testing.T, err error) {
 	}
 }
 
-// waitForPID waits until the stand-in's leader has written its pid there.
-func waitForPID(t *testing.T, path string) int {
-	t.Helper()
+// lookupPID waits up to five seconds for the stand-in's leader to write its
+// pid to path, and reports whether it did. It never fails the test itself,
+// so a goroutine other than the test's own may call it.
+func lookupPID(path string) (int, bool) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if data, err := os.ReadFile(path); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-				return pid
+				return pid, true
 			}
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("the stand-in never wrote its pid to %s", path)
-	return 0
+	return 0, false
+}
+
+// waitForPID waits until the stand-in's leader has written its pid there,
+// and fails the test when it never does. Call it from the test goroutine.
+func waitForPID(t *testing.T, path string) int {
+	t.Helper()
+	pid, ok := lookupPID(path)
+	if !ok {
+		t.Fatalf("the stand-in never wrote its pid to %s", path)
+	}
+	return pid
+}
+
+// countNonZero counts the bytes of b that are not zero.
+func countNonZero(b []byte) int {
+	n := 0
+	for _, c := range b {
+		if c != 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // assertGroupGone fails when any process is still in the process group the
@@ -435,9 +459,16 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+			// The goroutine only reports; the test goroutine fails. Without a
+			// pid it signals nothing: kill(0, sig) would reach the test
+			// binary's own process group.
 			done := make(chan int, 1)
 			go func() {
-				pid := waitForPID(t, pidfile)
+				pid, ok := lookupPID(pidfile)
+				if !ok {
+					done <- 0
+					return
+				}
 				if tt.cancelFirst {
 					cancel()
 				}
@@ -446,6 +477,9 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 			}()
 			err := writer.Write(ctx, "target", newUpdate(t, "target", "new grant"))
 			pid := <-done
+			if pid == 0 {
+				t.Fatalf("the stand-in never wrote its pid to %s", pidfile)
+			}
 
 			ke, ok := errors.AsType[*KeychainError](err)
 			if !ok || ke.Class != tt.class || !ke.Transient {
@@ -456,6 +490,122 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 				t.Errorf("errors.Is(ErrKeychainTimeout) = %t, want %t: only a timeout or a cancellation is one", got, tt.cancelFirst)
 			}
 			assertGroupGone(t, pid)
+		})
+	}
+}
+
+// TestKeychainWriteWipesEveryStderrByte floods the child's stderr past the
+// capture bound and checks, after Write returns, that the capture stayed in
+// the one array it was made with and that every byte it held is zero.
+func TestKeychainWriteWipesEveryStderrByte(t *testing.T) {
+	// A phrase the classifier knows, then canaries well past the bound, so
+	// the capture fills and the rest is read through the drain.
+	flood := "errSecAuthFailed " + strings.Repeat(stderrCanary+" ", stderrCapture/len(stderrCanary)+64)
+	t.Setenv("AGCTL_FAKE_SECURITY_WRITE_EXIT", "1")
+	t.Setenv("AGCTL_FAKE_SECURITY_STDERR", flood)
+	writer, f := standInWriter(t)
+	f.AllowWrite("target").KeychainItem("target", "old grant")
+	var (
+		captures []*boundedBuffer
+		backings [][]byte
+	)
+	writer.captureHook = func(b *boundedBuffer) {
+		captures = append(captures, b)
+		backings = append(backings, b.buf[:cap(b.buf)])
+	}
+
+	err := writer.Write(t.Context(), "target", newUpdate(t, "target", "new grant"))
+	ke, ok := errors.AsType[*KeychainError](err)
+	if !ok || ke.Class != StderrAuthFailed.KeychainClass() {
+		t.Fatalf("error = %v, want the AuthFailed class read from the capture", err)
+	}
+	assertKind(t, err, "failed")
+	assertNoStderrText(t, err)
+	if len(captures) != 1 {
+		t.Fatalf("the write made %d stderr captures, want 1", len(captures))
+	}
+	b, backing := captures[0], backings[0]
+	if cap(b.buf) != stderrCapture || &b.buf[:cap(b.buf)][0] != &backing[0] {
+		t.Fatalf("the capture left the array it was made with (cap %d, want %d)", cap(b.buf), stderrCapture)
+	}
+	// The stand-in ends its stderr with a newline.
+	if want := len(flood) + 1 - stderrCapture; b.dropped != want {
+		t.Errorf("dropped %d bytes past the bound, want %d", b.dropped, want)
+	}
+	if len(b.buf) != 0 {
+		t.Errorf("the capture still holds %d bytes", len(b.buf))
+	}
+	if n := countNonZero(backing); n != 0 {
+		t.Errorf("%d of the capture array's %d bytes are not zero after Write", n, len(backing))
+	}
+	if n := countNonZero(b.drain[:]); n != 0 {
+		t.Errorf("%d of the drain's %d bytes are not zero after Write", n, len(b.drain))
+	}
+}
+
+func TestBoundedBufferStaysInItsArraysAndWipesThem(t *testing.T) {
+	over := strings.Repeat(stderrCanary, stderrCapture/len(stderrCanary)+100)
+	tests := map[string]struct {
+		fill    func(*boundedBuffer) error
+		wantErr error
+		kept    int
+		dropped int
+	}{
+		"success: chunked writes past the bound": {
+			fill: func(b *boundedBuffer) error {
+				for chunk := range slices.Chunk([]byte(over), 1000) {
+					if n, err := b.Write(chunk); err != nil || n != len(chunk) {
+						return fmt.Errorf("Write consumed %d of %d: %w", n, len(chunk), err)
+					}
+				}
+				return nil
+			},
+			kept:    stderrCapture,
+			dropped: len(over) - stderrCapture,
+		},
+		"success: short reads to the end past the bound": {
+			fill: func(b *boundedBuffer) error {
+				n, err := b.ReadFrom(iotest.HalfReader(strings.NewReader(over)))
+				if err == nil && n != int64(len(over)) {
+					return fmt.Errorf("ReadFrom consumed %d of %d", n, len(over))
+				}
+				return err
+			},
+			kept:    stderrCapture,
+			dropped: len(over) - stderrCapture,
+		},
+		"error: a read failure is returned, not swallowed": {
+			fill: func(b *boundedBuffer) error {
+				_, err := b.ReadFrom(iotest.TimeoutReader(strings.NewReader(over)))
+				return err
+			},
+			wantErr: iotest.ErrTimeout,
+			kept:    stderrCapture,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			b := newBoundedBuffer()
+			backing := b.buf[:cap(b.buf)]
+			if err := tt.fill(b); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("fill = %v, want %v", err, tt.wantErr)
+			}
+			if cap(b.buf) != stderrCapture || &b.buf[:cap(b.buf)][0] != &backing[0] {
+				t.Fatalf("the capture left the array it was made with (cap %d, want %d)", cap(b.buf), stderrCapture)
+			}
+			if len(b.buf) != tt.kept || b.dropped != tt.dropped {
+				t.Errorf("kept %d and dropped %d, want %d and %d", len(b.buf), b.dropped, tt.kept, tt.dropped)
+			}
+			if got := b.classify(); got != StderrOther {
+				t.Errorf("class = %v, want %v", got, StderrOther)
+			}
+			b.wipe()
+			if n := countNonZero(backing); n != 0 {
+				t.Errorf("%d capture bytes are not zero after wipe", n)
+			}
+			if n := countNonZero(b.drain[:]); n != 0 {
+				t.Errorf("%d drain bytes are not zero after wipe", n)
+			}
 		})
 	}
 }
