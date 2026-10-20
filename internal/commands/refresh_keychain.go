@@ -242,15 +242,26 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	injected.PausePoint(fault.MigratedAfterWrite)
 	verified, err := s.readRefreshItem(ctx, item.service)
 	defer verified.Wipe()
-	audit.SiblingsReadback, _ = useSiblingsReadback(carried, verified, err)
+	readback, changed := useSiblingsReadback(carried, verified, err)
+	audit.SiblingsReadback = readback
+	// The verdict adds a note only; applied stays the account-digest
+	// equality, so cleanup and exit status do not depend on it.
+	mismatch := ""
+	if readback == secret.SiblingsDiffer {
+		mismatch = useSiblingsMismatchNote(changed)
+	}
 	if err == nil {
 		if observed, digestErr := verified.Digests(); digestErr == nil && observed == after {
 			audit.Outcome = secret.WriteApplied
-			return refreshOutcome{credentials: current, lockState: "migrated_refreshed"}
+			return refreshOutcome{credentials: current, note: mismatch, lockState: "migrated_refreshed"}
 		}
 	}
 	audit.Outcome = secret.WriteUnknown
-	return refreshOutcome{credentials: current, state: new(claude.StateOfStale()), note: "the refreshed item could not be confirmed; re-run `status`", lockState: "migrated_refreshed"}
+	note := "the refreshed item could not be confirmed; re-run `status`"
+	if mismatch != "" {
+		note += ". " + mismatch
+	}
+	return refreshOutcome{credentials: current, state: new(claude.StateOfStale()), note: note, lockState: "migrated_refreshed"}
 }
 
 // refreshUpdate builds the keychain update for current with the members

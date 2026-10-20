@@ -18,6 +18,7 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"fmt"
+	"strings"
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
@@ -192,12 +193,53 @@ func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 			return err
 		}
 	}
+	if line := usePreservationLine(report); line != "" {
+		if err := tell(p.Out, line); err != nil {
+			return err
+		}
+	}
 	if report.desktop != nil {
 		if err := tell(p.Out, renderUseDesktop(report.desktop)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// usePreservationLine is the prose form of the keychain write's carried
+// members, readback verdict and transport, from the same fields the JSON
+// document carries: member names and entry counts, never a value. It is
+// empty when the write phase set none of them, as on a refusal.
+func usePreservationLine(report *useReport) string {
+	var parts []string
+	if report.carriedMembers != nil {
+		members := make([]string, 0, len(*report.carriedMembers))
+		for _, member := range *report.carriedMembers {
+			switch {
+			case member.Entries == nil:
+				members = append(members, member.Name)
+			case *member.Entries == 1:
+				members = append(members, member.Name+" (1 entry)")
+			default:
+				members = append(members, fmt.Sprintf("%s (%d entries)", member.Name, *member.Entries))
+			}
+		}
+		carried := "none"
+		if len(members) != 0 {
+			carried = strings.Join(members, ", ")
+		}
+		parts = append(parts, "carried "+carried)
+	}
+	if report.siblingsReadback != nil {
+		parts = append(parts, "readback "+string(*report.siblingsReadback))
+	}
+	if report.transport != nil {
+		parts = append(parts, "transport "+string(*report.transport))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "keychain item members: " + strings.Join(parts, "; ")
 }
 
 func (p SessionProcess) emitUsePlan(subject *useSubject, incoming *config.AccountRecord, fromDigest8 *string, toDigest8 string, direction secret.WriteDirection, configPath *string) error {

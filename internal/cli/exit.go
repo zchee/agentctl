@@ -158,10 +158,15 @@ const (
 
 	// SwapExitCredentialTooLarge means the credential document, the
 	// incoming account's tokens together with the members carried over
-	// from the keychain item, is over the keychain update ceiling, or the
-	// host refused the argument list that carries it before security(1)
-	// started. Nothing was written to the keychain. The JSON report
-	// carries reason "credential_too_large" and no refusal member.
+	// from the keychain item, is over the keychain update ceiling, so the
+	// swap was refused before anything was written: before the incoming
+	// credential was refreshed, or after that refresh and before the
+	// outgoing credential was adopted. The JSON report carries reason
+	// "credential_too_large" and no refusal member. A document that only
+	// outgrows the ceiling under the hold, or whose argument list the host
+	// refuses when security(1) is started, is not this exit: that write is
+	// discarded with [SwapExitDiscarded], and its note begins with
+	// "credential_too_large".
 	SwapExitCredentialTooLarge = 31
 )
 

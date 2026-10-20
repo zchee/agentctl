@@ -254,7 +254,7 @@ func useWrite(ctx context.Context, input useWritePhase, credentials *claude.Cred
 		report.note = new("the write could not be confirmed; re-run `agentctl claude status`")
 	}
 	if readback == secret.SiblingsDiffer {
-		useJoinNote(report, fmt.Sprintf("the keychain item's members %s did not read back as written: another process rewrote them after this write", strings.Join(changed, ", ")))
+		useJoinNote(report, useSiblingsMismatchNote(changed))
 	}
 	return report
 }
@@ -318,6 +318,12 @@ func useSiblingsReadback(written []claude.SiblingMeta, verified *claude.Credenti
 		return secret.SiblingsDiffer, changed
 	}
 	return secret.SiblingsEqual, nil
+}
+
+// useSiblingsMismatchNote names the carried members a readback found
+// changed, missing or new; names only, never a value.
+func useSiblingsMismatchNote(changed []string) string {
+	return fmt.Sprintf("the keychain item's members %s did not read back as written: another process rewrote them after this write", strings.Join(changed, ", "))
 }
 
 func useReadKeychain(ctx context.Context, reader secret.Reader, service string) (*claude.Credentials, error) {
