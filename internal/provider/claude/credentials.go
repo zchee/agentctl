@@ -773,39 +773,60 @@ func (c *Credentials) RefreshBody(clientID string) ([]byte, error) {
 	if c.RefreshToken == nil {
 		return nil, ErrNoRefreshToken
 	}
-	var buffer bytes.Buffer
-	enc := jsontext.NewEncoder(&buffer)
-	for _, token := range []jsontext.Token{
-		jsontext.BeginObject,
-		jsontext.String("grant_type"), jsontext.String("refresh_token"),
-		jsontext.String("refresh_token"),
-	} {
-		if err := enc.WriteToken(token); err != nil {
-			return nil, err
-		}
-	}
-	var quoted []byte
-	err := c.RefreshToken.WithPlaintext(func(b []byte) error {
-		var quoteErr error
-		if quoted, quoteErr = jsontext.AppendQuote(nil, b); quoteErr != nil {
-			return quoteErr
-		}
-		return enc.WriteValue(quoted)
-	})
-	memguard.WipeBytes(quoted)
+	scope := strings.Join(c.Scopes, " ")
+	bound, err := c.refreshBodyBound(clientID, scope)
 	if err != nil {
 		return nil, err
 	}
-	for _, token := range []jsontext.Token{
-		jsontext.String("client_id"), jsontext.String(clientID),
-		jsontext.String("scope"), jsontext.String(strings.Join(c.Scopes, " ")),
-		jsontext.EndObject,
-	} {
-		if err := enc.WriteToken(token); err != nil {
-			return nil, err
-		}
+	return c.encodeRefreshBody(encoderBacking(bound), clientID, scope)
+}
+
+// refreshBodyBound is an upper bound on the length of the refresh body,
+// trailing newline included, computed from what each field encodes to,
+// for the reason [Credentials.documentBound] gives.
+func (c *Credentials) refreshBodyBound(clientID, scope string) (int, error) {
+	// The member names, the grant type and the punctuation fit well within
+	// this; everything of variable length is added below.
+	const skeleton = 128
+	n := skeleton + quotedBound(clientID) + quotedBound(scope)
+	if err := c.RefreshToken.WithPlaintext(func(b []byte) error {
+		n += quotedBound(b)
+		return nil
+	}); err != nil {
+		return 0, err
 	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
+	return n, nil
+}
+
+// encodeRefreshBody writes the refresh body into backing.
+func (c *Credentials) encodeRefreshBody(backing []byte, clientID, scope string) ([]byte, error) {
+	return encodeInto(backing, nil, func(enc *jsontext.Encoder) error {
+		if err := writeTokens(enc,
+			jsontext.BeginObject,
+			jsontext.String("grant_type"), jsontext.String("refresh_token"),
+			jsontext.String("refresh_token"),
+		); err != nil {
+			return err
+		}
+		var quoted []byte
+		err := c.RefreshToken.WithPlaintext(func(b []byte) error {
+			// Sized for the escaped token, as in writeAccountObject.
+			var quoteErr error
+			if quoted, quoteErr = jsontext.AppendQuote(make([]byte, 0, quotedBound(b)), b); quoteErr != nil {
+				return quoteErr
+			}
+			return enc.WriteValue(quoted)
+		})
+		memguard.WipeBytes(quoted)
+		if err != nil {
+			return err
+		}
+		return writeTokens(enc,
+			jsontext.String("client_id"), jsontext.String(clientID),
+			jsontext.String("scope"), jsontext.String(scope),
+			jsontext.EndObject,
+		)
+	})
 }
 
 // AccessExpired reports whether the access token is expired, or will be

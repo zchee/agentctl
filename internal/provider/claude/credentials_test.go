@@ -448,6 +448,109 @@ func TestRefreshBodyCarriesTheScopesAndClientID(t *testing.T) {
 	}
 }
 
+func TestRefreshBodyNeverOutgrowsTheArrayItWipes(t *testing.T) {
+	t.Parallel()
+
+	// The refresh body carries the refresh token, so it is held to the
+	// rule the credential documents follow: one array, never outgrown,
+	// all of it zero once the body is wiped. Each case is far longer
+	// encoded than decoded.
+	escapes := strings.Repeat(`\"\\\u0002`, 8<<10)
+	tests := map[string]struct {
+		document string
+		clientID string
+	}{
+		"success: a refresh token that is mostly escapes": {
+			document: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"` + escapes + `","expiresAt":5,"scopes":["user:inference"]}}`,
+			clientID: ClientID,
+		},
+		"success: a client id that is mostly escapes": {
+			document: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":5,"scopes":["user:inference"]}}`,
+			clientID: strings.Repeat("\x01\"<", 4<<10),
+		},
+		"success: many scopes that need escaping": {
+			document: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","expiresAt":5,` +
+				`"scopes":["` + strings.Repeat(`\u0003&","`, 4000) + `"]}}`,
+			clientID: ClientID,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			credentials := mustParse(t, tt.document)
+			scope := strings.Join(credentials.Scopes, " ")
+			bound, err := credentials.refreshBodyBound(tt.clientID, scope)
+			if err != nil {
+				t.Fatalf("refresh body bound: %v", err)
+			}
+
+			backing := encoderBacking(bound)
+			body, err := credentials.encodeRefreshBody(backing, tt.clientID, scope)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			if cap(body) != cap(backing) || len(body) > bound {
+				t.Fatalf("the encoder reallocated: %d bytes written into a capacity of %d, bound %d, first capacity %d",
+					len(body), cap(body), bound, cap(backing))
+			}
+			want := sha256Hex(string(body))
+
+			// The body is the request the server reads: each member must
+			// decode to the field it came from.
+			var decoded struct {
+				GrantType    string `json:"grant_type"`
+				RefreshToken string `json:"refresh_token"`
+				ClientID     string `json:"client_id"`
+				Scope        string `json:"scope"`
+			}
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatalf("the body of %d bytes should be JSON: %v", len(body), err)
+			}
+			if same, err := credentials.RefreshToken.Equal(mustSecret(t, decoded.RefreshToken)); err != nil || !same {
+				t.Fatalf("the refresh token does not round-trip (%d bytes decoded): %v", len(decoded.RefreshToken), err)
+			}
+			if decoded.GrantType != "refresh_token" || decoded.ClientID != tt.clientID || decoded.Scope != scope {
+				t.Fatalf("a field does not round-trip: grant type %d bytes, client id %d bytes (want %d), scope %d bytes (want %d)",
+					len(decoded.GrantType), len(decoded.ClientID), len(tt.clientID), len(decoded.Scope), len(scope))
+			}
+
+			memguard.WipeBytes(body)
+			if n := nonZeroBytes(backing[:cap(backing)]); n != 0 {
+				t.Fatalf("%d non-zero bytes left in the encoder's array after the body was wiped", n)
+			}
+
+			// The probe sees an outgrown array when the array is too small.
+			small := make([]byte, 0, bound/8)
+			grown, err := credentials.encodeRefreshBody(small, tt.clientID, scope)
+			if err != nil {
+				t.Fatalf("encode into a small array: %v", err)
+			}
+			if got := sha256Hex(string(grown)); got != want {
+				t.Fatalf("the body depends on the array: sha256 %s, want %s", got, want)
+			}
+			memguard.WipeBytes(grown)
+			if nonZeroBytes(small[:cap(small)]) == 0 {
+				t.Fatal("an outgrown array should still hold what was written before the growth")
+			}
+
+			public, err := credentials.RefreshBody(tt.clientID)
+			if err != nil {
+				t.Fatalf("refresh body: %v", err)
+			}
+			if got := sha256Hex(string(public)); got != want {
+				t.Fatalf("the public body differs: sha256 %s, want %s", got, want)
+			}
+			if cap(public) != cap(encoderBacking(bound)) {
+				t.Fatalf("RefreshBody reallocated: capacity %d, planned %d", cap(public), cap(encoderBacking(bound)))
+			}
+			memguard.WipeBytes(public)
+			if n := nonZeroBytes(public[:cap(public)]); n != 0 {
+				t.Fatalf("%d non-zero bytes left after the public body was wiped", n)
+			}
+		})
+	}
+}
+
 func TestRefreshBodyRefusesAnAccountWithNoRefreshToken(t *testing.T) {
 	t.Parallel()
 
