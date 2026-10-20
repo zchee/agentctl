@@ -97,7 +97,11 @@ fault_points=(
 	flock_enotsup
 	lock_contended
 	lock_resume_after_sample_b
+	migrated_after_held_read
+	migrated_after_write
 	rename_fail
+	swap_after_held_read
+	swap_after_write
 	swap_lock_leak
 	swap_namespace_acquired
 	swap_pause_in_locks
