@@ -209,10 +209,13 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 			return catchUp(useAlreadyActive(service, from8, from8, "that account's credential is already the one the live store holds"))
 		}
 	}
+	// A credential file is never a source of the members carried beside the
+	// account object: only the keychain item's own members are written back.
+	credentials.CarrySiblingsFrom(nil)
 	account := secret.CurrentAccount()
-	if _, err := credentials.ToKeychainStdinLine(account, service); err != nil {
-		if _, tooLong := errors.AsType[*secret.LineTooLongError](err); tooLong {
-			return useLineTooLong(service)
+	if _, err := credentials.ToKeychainUpdate(account, service); err != nil {
+		if errors.Is(err, secret.ErrCredentialTooLarge) {
+			return useCredentialTooLarge(service)
 		}
 	}
 	var third *config.AccountRecord
@@ -350,10 +353,10 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 	if err != nil {
 		return useCannotAdopt(claude.AdoptionUnreadable, service)
 	}
-	line, err := credentials.ToKeychainStdinLine(account, service)
+	update, err := credentials.ToKeychainUpdate(account, service)
 	if err != nil {
-		if _, tooLong := errors.AsType[*secret.LineTooLongError](err); tooLong {
-			return useLineTooLong(service)
+		if errors.Is(err, secret.ErrCredentialTooLarge) {
+			return useCredentialTooLarge(service)
 		}
 		return useCannotAdopt(claude.AdoptionUnreadable, service)
 	}
@@ -388,7 +391,7 @@ func (swap useLiveSwap) swapPhases(ctx context.Context, incoming useIncoming, st
 			restored = dir
 		}
 	}
-	report := useWrite(ctx, useWritePhase{paths: swap.paths, env: swap.env, subject: subject, log: log, before: before, after: after, fromDigest8: from8, toDigest8: to8, adoptedTo: adopted, staged: staged, direction: incoming.direction, shadowingStore: !itemPresent && displaced != nil, restoredAdopted: restored, incomingIdentity: incomingIdentity}, line)
+	report := useWrite(ctx, useWritePhase{paths: swap.paths, env: swap.env, subject: subject, log: log, before: before, after: after, fromDigest8: from8, toDigest8: to8, adoptedTo: adopted, staged: staged, direction: incoming.direction, shadowingStore: !itemPresent && displaced != nil, restoredAdopted: restored, incomingIdentity: incomingIdentity, controller: swap.process.Signals}, update)
 	if swap.live {
 		report.config = useConfigStep(ctx, report.outcome, swap.env, installedProfile)
 		if report.config != nil {
@@ -421,6 +424,6 @@ func useAlreadyActive(service string, from, to *string, note string) *useReport 
 	return &useReport{outcome: claude.SwapOutcome{Kind: claude.SwapAlreadyActive}, service: service, fromDigest8: from, toDigest8: to, note: &note}
 }
 
-func useLineTooLong(service string) *useReport {
-	return useRefused(claude.SwapRefusal{Kind: claude.SwapLineTooLong}, service, fmt.Sprintf("the credential does not fit the %d-byte keychain line the transport allows, so it cannot be written at all", secret.KeychainLineLimit))
+func useCredentialTooLarge(service string) *useReport {
+	return useRefused(claude.SwapRefusal{Kind: claude.SwapCredentialTooLarge}, service, fmt.Sprintf("the credential document, the incoming account's tokens together with the members carried over from the keychain item, is over the %d-byte keychain update ceiling, so it cannot be written at all", secret.KeychainBlobLimit))
 }

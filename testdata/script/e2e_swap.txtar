@@ -490,10 +490,20 @@ rcmod check a 1 0
 [!darwin] rcmod counts
 [!darwin] swap-io 0 0 0
 
-# refusal_d_on_the_stored_blob_is_decided_before_any_child_exists
+# a_credential_over_the_retired_stdin_line_is_written_through_argv
 swapfixture line-too-long
-exec expectexit 12 agentctl claude use $INCOMING --live --yes --json
-stdout '"refusal": "D"'
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+swap-audit applied 0
+
+# a_document_over_the_update_ceiling_is_refused_before_any_child_exists
+swapfixture credential-too-large
+exec expectexit 31 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "credential_too_large"'
+stdout '"refusal": null'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 0 0
@@ -501,10 +511,10 @@ swap-io 1 0 0
 swap-audit none 0
 ! exists $SWAP_STORE/.credentials.adopted.json
 
-# refusal_d_on_the_refreshed_blob_is_decided_before_any_child_exists
+# a_refreshed_document_over_the_update_ceiling_is_refused_before_any_child_exists
 swapfixture refresh-too-long
-exec expectexit 12 agentctl claude use $INCOMING --live --yes --json
-stdout '"refusal": "D"'
+exec expectexit 31 agentctl claude use $INCOMING --live --yes --json
+stdout '"reason": "credential_too_large"'
 ! stdout SENTINEL
 ! stderr SENTINEL
 swap-check 0 1 0

@@ -20,27 +20,28 @@ import (
 	"github.com/zchee/agentctl/internal/secret"
 )
 
-// ToKeychainStdinLine builds the keychain update line for this credential,
-// ready for `security -i`'s standard input.
+// ToKeychainUpdate builds the keychain update for this credential: the
+// account object followed by the members carried beside it, as
+// [Credentials.KeychainBlobJSON] writes them.
 //
-// The line itself is assembled by [secret.NewKeychainStdinLine], which
-// owns the wire shape, the quoting rule and the length bound; this method
-// owns the secret half — the serialized blob — and wipes it once the line
-// is sealed, so the plaintext document never outlives the call.
+// The update itself is assembled by [secret.NewKeychainUpdate], which owns
+// the name validation, the hex encoding and the size ceiling; this method
+// owns the plaintext document and wipes it once the update is sealed, so the
+// document never outlives the call.
 //
 // account is the item's acct attribute and service is the target item's
 // service name. Both are recorded in the returned value so the write
-// transport can refuse a line built for a different item than the one it
+// transport can refuse an update built for a different item than the one it
 // was asked to write.
 //
-// A finished line — trailing newline included — over
-// [secret.KeychainLineLimit] returns [secret.LineTooLongError], whose exit
-// classification is the lettered refusal for an over-long credential line.
-func (c *Credentials) ToKeychainStdinLine(account, service string) (*secret.KeychainStdinLine, error) {
-	blob, err := c.BlobJSON()
+// A document over [secret.KeychainBlobLimit] returns
+// [secret.BlobTooLargeError], whose exit classification is the
+// credential_too_large refusal.
+func (c *Credentials) ToKeychainUpdate(account, service string) (*secret.KeychainUpdate, error) {
+	blob, err := c.KeychainBlobJSON()
 	if err != nil {
 		return nil, err
 	}
 	defer memguard.WipeBytes(blob)
-	return secret.NewKeychainStdinLine(account, service, blob)
+	return secret.NewKeychainUpdate(account, service, blob)
 }

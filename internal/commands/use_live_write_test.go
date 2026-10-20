@@ -27,6 +27,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/runtime/signals"
 	"github.com/zchee/agentctl/internal/secret"
 	"github.com/zchee/agentctl/internal/testutil"
 )
@@ -42,6 +43,8 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 		duplicate bool
 		busy      bool
 		gone      bool
+		holdPipes bool
+		shutdown  bool
 		kind      claude.SwapOutcomeKind
 		refusal   claude.SwapRefusalKind
 		audited   bool
@@ -54,6 +57,8 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 		"error: definite write failure has no verify read":            {failed: true, staging: true, kind: claude.SwapFailed, audited: true, reads: 1},
 		"error: changed baseline discards before write":               {changed: true, staging: true, kind: claude.SwapDiscarded, reads: 1},
 		"error: unknown drops displaced staging":                      {unknown: true, staging: true, kind: claude.SwapUnknown, audited: true, reads: 2},
+		"success: unreleased output is settled by the readback":       {holdPipes: true, staging: true, kind: claude.SwapApplied, audited: true, reads: 2},
+		"error: a refused spawn discards without a write":             {shutdown: true, staging: true, kind: claude.SwapDiscarded, reads: 1},
 		"error: unknown preserves namespace plaintext":                {unknown: true, shadow: true, kind: claude.SwapUnknown, audited: true, reads: 2},
 		"error: busy peer never reads under a hold":                   {busy: true, kind: claude.SwapBusy},
 		"error: vanished live store is not a compromised hold":        {live: true, gone: true, kind: claude.SwapRefused, refusal: claude.SwapLiveUnreachable},
@@ -107,6 +112,11 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 			if test.failed {
 				t.Setenv("AGCTL_FAKE_SECURITY_WRITE_EXIT", "1")
 			}
+			if test.holdPipes {
+				// The fake stores, then exits 0 while a background sleep keeps
+				// its output open: the wait reports exec.ErrWaitDelay.
+				t.Setenv("AGCTL_FAKE_SECURITY_HOLD_PIPES", "2")
+			}
 			if test.unknown {
 				wrapper := fixture.Scratch("unknown-security.sh")
 				marker := fixture.Scratch("write-done")
@@ -124,12 +134,12 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			line, err := incoming.ToKeychainStdinLine(testutil.KeychainAccount, subject.service)
+			update, err := incoming.ToKeychainUpdate(testutil.KeychainAccount, subject.service)
 			if err != nil {
 				t.Fatal(err)
 			}
 			to8, _ := secret.Digest8(after.AccessSHA256)
-			input := useWritePhase{paths: paths, env: &env, subject: subject, before: before, after: after, toDigest8: to8, direction: secret.DirectionForward, shadowingStore: test.shadow}
+			input := useWritePhase{paths: paths, env: &env, subject: subject, before: before, after: after, toDigest8: to8, direction: secret.DirectionForward, shadowingStore: test.shadow, controller: testSignalController(t)}
 			if test.live {
 				input.log, err = secret.OpenAuditLog(paths, secret.AuditLogPath(paths))
 				if err != nil {
@@ -184,7 +194,10 @@ func TestUseWriteOutcomesAndRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			report := useWrite(t.Context(), input, line)
+			if test.shutdown {
+				input.controller.Stop()
+			}
+			report := useWrite(t.Context(), input, update)
 			if diff := gocmp.Diff(test.kind, report.outcome.Kind); diff != "" {
 				t.Fatalf("outcome (-want +got):\n%s; note=%v", diff, report.note)
 			}
@@ -331,4 +344,14 @@ func TestUseDuplicateAdoptedCleanupRequiresBothHomes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testSignalController installs a signal controller for one test, as the
+// command's entry point does for a run: the keychain writer refuses to start
+// a child the signal path cannot see.
+func testSignalController(t *testing.T) *signals.Controller {
+	t.Helper()
+	_, controller := signals.Install(t.Context())
+	t.Cleanup(controller.Stop)
+	return controller
 }

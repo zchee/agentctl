@@ -209,7 +209,7 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 			}
 			access := "sk-ant-oat01-rotated"
 			if kind == "large-line" {
-				access += strings.Repeat("x", 3000)
+				access += strings.Repeat("x", 300<<10)
 			}
 			expiresIn := 3600
 			if kind == "pending-expired" && tokenCalls.Load() == 1 {

@@ -108,6 +108,67 @@ func TestMigratedRefreshPersistsUnderPeerLocks(t *testing.T) {
 	}
 }
 
+func TestMigratedRefreshSettlesAnUnsettledWriteByItsReadback(t *testing.T) {
+	tests := map[string]struct {
+		holdPipes   bool
+		shutdown    bool
+		wantLock    string
+		wantStale   bool
+		wantNote    string
+		wantWrites  int
+		wantOutcome string
+		wantStored  string
+	}{
+		"success: unreleased output is settled by the readback": {
+			holdPipes: true, wantLock: "migrated_refreshed", wantWrites: 1, wantOutcome: "applied", wantStored: "Bearer rotated-access",
+		},
+		"error: a refused spawn discards the refresh without a write": {
+			shutdown: true, wantLock: "none", wantStale: true, wantNote: "a shutdown is in progress", wantOutcome: "discarded", wantStored: "Bearer old-access",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			world, item, current := migratedWorld(t)
+			paths, _ := refreshRecord(t, world.fixture)
+			world.status.Refresher = refreshOAuth(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}`))
+			})
+			if tt.holdPipes {
+				t.Setenv("AGCTL_FAKE_SECURITY_HOLD_PIPES", "2")
+			}
+			if tt.shutdown {
+				_, controller := signals.Install(t.Context())
+				controller.Stop()
+				world.status.Writer = secret.NewKeychainWriter(controller)
+			}
+			result := world.status.refreshMigrated(t.Context(), paths, item, current)
+			if result.lockState != tt.wantLock || (result.state != nil) != tt.wantStale || !strings.Contains(result.note, tt.wantNote) {
+				t.Fatalf("result = %+v", result)
+			}
+			writes := 0
+			for _, line := range world.fixture.SecurityLog() {
+				if strings.HasPrefix(line, "add-generic-password") {
+					writes++
+				}
+			}
+			if writes != tt.wantWrites {
+				t.Fatalf("add-generic-password calls = %d, want %d: %v", writes, tt.wantWrites, world.fixture.SecurityLog())
+			}
+			stored, err := world.status.readRefreshItem(t.Context(), item.service)
+			if err != nil || stored.AuthorizationHeader() != tt.wantStored {
+				t.Fatalf("stored item does not hold the expected credential: %v", err)
+			}
+			audit, err := os.ReadFile(secret.AuditLogPath(paths))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(audit), `"outcome":"`+tt.wantOutcome+`"`) {
+				t.Fatalf("audit lacks outcome %q: %s", tt.wantOutcome, audit)
+			}
+		})
+	}
+}
+
 func TestMigratedRefreshAdoptsChangedPeerAndDiscardsLaterChanges(t *testing.T) {
 	tests := map[string]struct {
 		before    bool

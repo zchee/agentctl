@@ -50,11 +50,11 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		}
 	}
 	scenarios := map[string]struct {
-		live, absent, duplicate, expired, migrated, incomingAbsent, envToken, auditRefused, declined, failed, mismatch, profileUnavailable, newer, compact, busy bool
-		lineLong, rotateLong, timeout, peerChange, outgoingUnavailable, outgoingMalformed, missingClaim, sessions, configBusy, configStale, configLink, saveRace bool
-		unowned, unreadable, outgoingMismatch, dangling, outgoingExpired                                                                                         bool
-		third                                                                                                                                                    bool
-		storageBusy, independent, ownerMissing, configAbsent, auditSymlink, ownAudit, alternateSpelling                                                          bool
+		live, absent, duplicate, expired, migrated, incomingAbsent, envToken, auditRefused, declined, failed, mismatch, profileUnavailable, newer, compact, busy                bool
+		lineLong, documentLarge, rotateLong, timeout, peerChange, outgoingUnavailable, outgoingMalformed, missingClaim, sessions, configBusy, configStale, configLink, saveRace bool
+		unowned, unreadable, outgoingMismatch, dangling, outgoingExpired                                                                                                        bool
+		third                                                                                                                                                                   bool
+		storageBusy, independent, ownerMissing, configAbsent, auditSymlink, ownAudit, alternateSpelling                                                                         bool
 	}{
 		"namespace-storage-busy":       {storageBusy: true},
 		"live-independent":             {live: true, independent: true},
@@ -93,6 +93,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		"live-compact-config":          {live: true, compact: true},
 		"live-busy":                    {live: true, busy: true},
 		"line-too-long":                {lineLong: true},
+		"credential-too-large":         {documentLarge: true},
 		"refresh-too-long":             {expired: true, rotateLong: true, alternateSpelling: true},
 		"namespace-timeout":            {timeout: true},
 		"first-write-timeout":          {absent: true, timeout: true},
@@ -137,6 +138,11 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	incomingName := "incoming"
 	if test.lineLong {
 		incomingName += strings.Repeat("x", 2500)
+	}
+	// Past the keychain update ceiling, so the constructor refuses the
+	// document before any security(1) child could be handed it.
+	if test.documentLarge {
+		incomingName += strings.Repeat("x", 300<<10)
 	}
 	incomingBlob := blob(incomingName, incoming, expires)
 	outgoingBlob := blob("outgoing", owner, FreshAt())
@@ -307,7 +313,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 			}
 			access := "SENTINEL-rotated-access"
 			if test.rotateLong {
-				access += strings.Repeat("x", 2500)
+				access += strings.Repeat("x", 300<<10)
 			}
 			say(w, `{"access_token":%q,"refresh_token":"SENTINEL-rotated-refresh","token_type":"Bearer","expires_in":28800,"scope":"user:inference user:profile"}`, access)
 			return

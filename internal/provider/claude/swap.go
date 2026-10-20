@@ -22,7 +22,7 @@ type SwapRefusalKind uint8
 const (
 	SwapCompromisedHold SwapRefusalKind = iota + 1
 	SwapEnvToken
-	SwapLineTooLong
+	SwapCredentialTooLarge
 	SwapCannotAdopt
 	SwapNotOwned
 	SwapLiveNamespaceEnv
@@ -49,8 +49,6 @@ func (r SwapRefusal) Letter() string {
 		return "A"
 	case SwapEnvToken:
 		return "C"
-	case SwapLineTooLong:
-		return "D"
 	case SwapLiveNamespaceEnv:
 		return "E"
 	case SwapCannotAdopt:
@@ -81,6 +79,8 @@ func (r SwapRefusal) Reason() string {
 		return "live_token_expired"
 	case SwapLiveUndoForeignLogin:
 		return "live_undo_foreign_login"
+	case SwapCredentialTooLarge:
+		return "credential_too_large"
 	default:
 		return ""
 	}
@@ -93,8 +93,8 @@ func (r SwapRefusal) ExitCode() int {
 		return cli.SwapExitRefusedA
 	case SwapEnvToken:
 		return cli.SwapExitRefusedC
-	case SwapLineTooLong:
-		return cli.SwapExitRefusedD
+	case SwapCredentialTooLarge:
+		return cli.SwapExitCredentialTooLarge
 	case SwapCannotAdopt:
 		return cli.SwapExitRefusedF
 	case SwapNotOwned:

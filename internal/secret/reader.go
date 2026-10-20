@@ -144,6 +144,10 @@ type KeychainError struct {
 	// The class cannot carry that, because one class covers more than one
 	// kind.
 	kind writeKind
+	// shutdown marks the not-started write the signal controller refused
+	// because a shutdown was already in progress, so a write site can say
+	// why nothing was written.
+	shutdown bool
 }
 
 // writeKind sorts a keychain write failure by what it says about the item.
@@ -200,6 +204,9 @@ func (e *KeychainError) Is(target error) bool {
 	other, ok := target.(*KeychainError)
 	if !ok {
 		return false
+	}
+	if other.shutdown {
+		return e.shutdown
 	}
 	if other.kind != writeKindNone {
 		return other.kind == e.kind

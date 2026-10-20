@@ -24,7 +24,7 @@ func TestSwapRefusalVocabulary(t *testing.T) {
 	}{
 		"error: compromised":                {SwapCompromisedHold, "A", "", 10},
 		"error: token environment":          {SwapEnvToken, "C", "", 11},
-		"error: line bound":                 {SwapLineTooLong, "D", "", 12},
+		"error: credential size":            {SwapCredentialTooLarge, "", "credential_too_large", 31},
 		"error: namespace environment":      {SwapLiveNamespaceEnv, "E", "", 13},
 		"error: adoption":                   {SwapCannotAdopt, "F", "", 14},
 		"error: ownership":                  {SwapNotOwned, "", "not_owned", 15},

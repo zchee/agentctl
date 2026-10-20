@@ -52,12 +52,12 @@ func (p SwapPhase) Name() string {
 }
 
 // DecidedIn identifies the latest phase allowed to decide this refusal.
-// Line size is checked before a write child exists; lock drift only under a hold.
+// Credential size is checked before a write child exists; lock drift only under a hold.
 func (r SwapRefusal) DecidedIn() SwapPhase {
 	switch r.Kind {
 	case SwapCompromisedHold:
 		return SwapHeld
-	case SwapLineTooLong, SwapCannotAdopt, SwapAuditRefused:
+	case SwapCredentialTooLarge, SwapCannotAdopt, SwapAuditRefused:
 		return SwapPrepare
 	default:
 		return SwapReadOnly
@@ -67,7 +67,7 @@ func (r SwapRefusal) DecidedIn() SwapPhase {
 // SwapDecisionOrder returns independent values in the refusal precedence order.
 func SwapDecisionOrder() []SwapRefusal {
 	return []SwapRefusal{
-		{Kind: SwapRemoteControlUnsupportedPlatform}, {Kind: SwapNotOwned}, {Kind: SwapLiveNamespaceEnv}, {Kind: SwapLiveUnreachable}, {Kind: SwapEnvToken}, {Kind: SwapRemoteControlUnreachable}, {Kind: SwapLiveItemAbsent}, {Kind: SwapProfileUnavailable}, {Kind: SwapLiveUndoForeignLogin}, {Kind: SwapLineTooLong}, {Kind: SwapAuditRefused}, {Kind: SwapCannotAdopt, Adoption: AdoptionNewerCopy}, {Kind: SwapCompromisedHold},
+		{Kind: SwapRemoteControlUnsupportedPlatform}, {Kind: SwapNotOwned}, {Kind: SwapLiveNamespaceEnv}, {Kind: SwapLiveUnreachable}, {Kind: SwapEnvToken}, {Kind: SwapRemoteControlUnreachable}, {Kind: SwapLiveItemAbsent}, {Kind: SwapProfileUnavailable}, {Kind: SwapLiveUndoForeignLogin}, {Kind: SwapCredentialTooLarge}, {Kind: SwapAuditRefused}, {Kind: SwapCannotAdopt, Adoption: AdoptionNewerCopy}, {Kind: SwapCompromisedHold},
 	}
 }
 

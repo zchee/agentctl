@@ -35,6 +35,11 @@ import (
 // KeychainWriteTimeout bounds the child while the caller holds the peer locks.
 const KeychainWriteTimeout = 1200 * time.Millisecond
 
+// KeychainWriteWaitDelay is how long a write may still take after its
+// timeout to reap the killed child, so a caller's hold budget can count the
+// whole write.
+const KeychainWriteWaitDelay = childWaitDelay
+
 // KeychainVerifyTimeout bounds the under-lock read before a keychain write.
 const KeychainVerifyTimeout = 800 * time.Millisecond
 
@@ -76,6 +81,10 @@ var (
 	// ErrKeychainWriteFailed matches a write whose security(1) exited on its
 	// own with a non-zero status while the run was live.
 	ErrKeychainWriteFailed = &KeychainError{kind: writeFailed}
+	// ErrKeychainShutdown matches the not-started write the signal
+	// controller refused because a shutdown was already in progress. It
+	// narrows [ErrKeychainNotStarted]; it is not a fourth kind.
+	ErrKeychainShutdown = &KeychainError{kind: writeNotStarted, shutdown: true}
 )
 
 // KeychainTargetMismatchError reports an update built for a different item.
@@ -105,9 +114,6 @@ type KeychainWriter struct {
 	// registered with, so a signal exit terminates it before the process is
 	// gone.
 	controller *signals.Controller
-	// unregistered lets a writer built without a controller write anyway,
-	// with its children reachable from the write's own wait only.
-	unregistered bool
 	// captureHook, when set, is handed each stderr capture as it is made,
 	// so a test can check that the capture's memory is zeroed after Write.
 	captureHook func(*boundedBuffer)
@@ -125,18 +131,6 @@ func NewKeychainWriter(controller *signals.Controller) *KeychainWriter {
 		return &KeychainWriter{account: CurrentAccount(), controller: controller}
 	}
 	return &KeychainWriter{bin: reader.bin, account: reader.account, env: reader.env, budget: KeychainWriteTimeout, controller: controller}
-}
-
-// NewKeychainWriterWithoutSignals builds a writer whose children are not
-// registered with any termination-signal controller; the write's own bounded
-// wait is their only bound.
-//
-// It is kept only for the callers that do not reach the run's controller
-// yet; new code uses [NewKeychainWriter] with that controller.
-func NewKeychainWriterWithoutSignals() *KeychainWriter {
-	w := NewKeychainWriter(nil)
-	w.unregistered = true
-	return w
 }
 
 // Write updates service in place with update, creating the item when absent.
@@ -171,7 +165,7 @@ func (w *KeychainWriter) Write(ctx context.Context, service string, update *Keyc
 	if update.Len() > 2*KeychainBlobLimit {
 		return &BlobTooLargeError{Len: update.Len() / 2}
 	}
-	if w.bin == "" || (w.controller == nil && !w.unregistered) {
+	if w.bin == "" || w.controller == nil {
 		return ErrKeychainUnsupported
 	}
 
@@ -194,7 +188,7 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 	pass := coordinator.Standalone(ctx, w.controller, time.Now().Add(w.budget))
 	release, ok := pass.BeginSpawn()
 	if !ok {
-		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "a shutdown is in progress; no keychain update was issued", Transient: true, kind: writeNotStarted}
+		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "a shutdown is in progress; no keychain update was issued", Transient: true, kind: writeNotStarted, shutdown: true}
 	}
 
 	// No CommandContext: the pass owns the kill, and a second killer would

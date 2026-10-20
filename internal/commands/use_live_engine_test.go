@@ -215,7 +215,7 @@ func TestUseSharedEngineOrderingAndContainment(t *testing.T) {
 				}
 			}
 			var stdout, stderr bytes.Buffer
-			process := SessionProcess{In: strings.NewReader("yes\n"), Out: &stdout, Err: &stderr}
+			process := SessionProcess{In: strings.NewReader("yes\n"), Out: &stdout, Err: &stderr, Signals: testSignalController(t)}
 			swap := useLiveSwap{paths: paths, config: registry, env: &env, live: test.live, inherited: claude.ExportSpelling(ownerDir), process: process}
 			store := owner
 			if test.live {

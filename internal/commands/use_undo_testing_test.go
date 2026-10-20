@@ -106,7 +106,7 @@ func TestRunUndoSharedEngine(t *testing.T) {
 			defer server.Close()
 			t.Setenv(claude.ProfileURLEnv, server.URL)
 			var out, stderr bytes.Buffer
-			process := SessionProcess{Out: &out, Err: &stderr}
+			process := SessionProcess{Out: &out, Err: &stderr, Signals: testSignalController(t)}
 			globals := cli.Globals{ConfigDir: fixture.ConfigDir()}
 			if err := process.RunLive(t.Context(), globals, cli.ClaudeUseOptions{ID: "incoming", Live: true, Yes: true, JSON: true}); err != nil {
 				t.Fatalf("forward swap: %v; out=%s; stderr=%s", err, out.String(), stderr.String())

@@ -27,6 +27,7 @@ import (
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/fault"
+	"github.com/zchee/agentctl/internal/runtime/signals"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -45,10 +46,14 @@ type useWritePhase struct {
 	shadowingStore   bool
 	restoredAdopted  string
 	incomingIdentity *secret.IncomingIdentity
+	// controller is the run's termination-signal controller; the keychain
+	// write registers its child with it so a signal ends the child before
+	// the hold is released.
+	controller *signals.Controller
 }
 
 // useWrite takes peer locks only after all network and consent work is finished.
-func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStdinLine) *useReport {
+func useWrite(ctx context.Context, input useWritePhase, update *secret.KeychainUpdate) *useReport {
 	report := &useReport{service: input.subject.service, fromDigest8: input.fromDigest8, toDigest8: new(input.toDigest8), adoptedTo: input.adoptedTo, lock: useLockReport{BudgetMS: new(uint64(secret.HoldBudget.Milliseconds()))}}
 	if input.staged != nil {
 		defer input.staged.Discard()
@@ -129,7 +134,7 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 	if err := hold.DriftCheck(); err != nil {
 		return heldEnd(claude.SwapRefused, claude.SwapCompromisedHold, "the lock agentctl holds is compromised: "+err.Error())
 	}
-	if hold.HoldElapsed()+secret.KeychainWriteTimeout > secret.HoldBudget {
+	if hold.HoldElapsed()+secret.KeychainWriteTimeout+secret.KeychainWriteWaitDelay > secret.HoldBudget {
 		return heldEnd(claude.SwapDiscarded, 0, "the hold ran out of budget before the write")
 	}
 	if err := hold.WriteAdmission(); err != nil {
@@ -139,7 +144,7 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 	if injected.Is(fault.SwapWriteFail) {
 		writeErr = errors.New("the write was refused by the test fault switch")
 	} else {
-		writeErr = secret.NewKeychainWriterWithoutSignals().Write(ctx, input.subject.service, line)
+		writeErr = secret.NewKeychainWriter(input.controller).Write(ctx, input.subject.service, update)
 	}
 	elapsed := hold.HoldElapsed()
 	report.lock.HoldMS = new(uint64(max(elapsed.Milliseconds(), 0)))
@@ -148,7 +153,14 @@ func useWrite(ctx context.Context, input useWritePhase, line *secret.KeychainStd
 		slog.WarnContext(ctx, "the credential-store hold outlasted its budget", "hold_ms", elapsed.Milliseconds(), "budget_ms", secret.HoldBudget.Milliseconds())
 	}
 	audit := secret.WriteEvent{Target: input.subject.audit, FromDigest8: input.fromDigest8, ToDigest8: input.toDigest8, Direction: input.direction, IncomingIdentity: input.incomingIdentity}
-	if writeErr != nil && !errors.Is(writeErr, secret.ErrKeychainTimeout) {
+	// security(1) never ran, so the item is unchanged: a discard like any
+	// other under the hold, with no write to record.
+	if errors.Is(writeErr, secret.ErrKeychainNotStarted) {
+		return end(claude.SwapDiscarded, 0, useNotStartedNote(writeErr))
+	}
+	// An outcome-unknown write may have committed: only the readback can
+	// say, and a staged adoption is committed when it says so.
+	if writeErr != nil && !errors.Is(writeErr, secret.ErrKeychainOutcomeUnknown) {
 		audit.Outcome = secret.WriteFailed
 		report.auditID = useAppendAudit(ctx, input.paths, input.log, &audit)
 		recovery := "The outgoing credential is still recoverable with `agentctl claude use --undo`"
@@ -256,4 +268,17 @@ func useJoinNote(report *useReport, sentence string) {
 		return
 	}
 	report.note = new(*report.note + ". " + sentence)
+}
+
+// useNotStartedNote explains a write whose security(1) child never ran, so
+// the keychain item is unchanged by construction.
+func useNotStartedNote(err error) string {
+	switch {
+	case errors.Is(err, secret.ErrCredentialTooLarge):
+		return "credential_too_large: the host refused the argument list that carries the credential document; security was not started and no keychain update was issued"
+	case errors.Is(err, secret.ErrKeychainShutdown):
+		return "a shutdown is in progress; no keychain update was issued"
+	default:
+		return "security could not be started; no keychain update was issued"
+	}
 }

@@ -35,9 +35,10 @@ import (
 // TokenRefresher exchanges and merges one refresh grant without writing a store.
 type TokenRefresher = claude.TokenRefresher
 
-// KeychainWriter updates an already validated item using a bounded stdin line.
+// KeychainWriter updates an already validated item with a sealed keychain
+// update, the document passed to security(1) in its argument vector.
 type KeychainWriter interface {
-	Write(ctx context.Context, service string, line *secret.KeychainStdinLine) error
+	Write(ctx context.Context, service string, update *secret.KeychainUpdate) error
 }
 
 // RefreshNotWiredError refuses a refresh when its required transport is absent.

@@ -265,21 +265,6 @@ func TestNewKeychainWriterWithANilControllerRefuses(t *testing.T) {
 	}
 }
 
-func TestWriterWithoutSignalsStillWrites(t *testing.T) {
-	f := fakeKeychain(t)
-	t.Setenv(keychainBackendEnv, "")
-	t.Setenv(securityBinEnv, f.SecurityBin())
-	t.Setenv("USER", testutil.KeychainAccount)
-	f.AllowWrite("target")
-
-	if err := NewKeychainWriterWithoutSignals().Write(t.Context(), "target", newUpdate(t, "target", "document")); err != nil {
-		t.Fatalf("write = %v", err)
-	}
-	if got, err := os.ReadFile(f.KeychainItemPath("target")); err != nil || string(got) != "document" {
-		t.Fatalf("stored %q, %v", got, err)
-	}
-}
-
 func TestKeychainWriteClassifiesExitsAndPreservesOldGrant(t *testing.T) {
 	tests := map[string]struct {
 		exit   string
@@ -623,6 +608,9 @@ func TestKeychainWriteNotStarted(t *testing.T) {
 		if errors.Is(err, ErrCredentialTooLarge) {
 			t.Errorf("a missing binary is not a size refusal: %v", err)
 		}
+		if errors.Is(err, ErrKeychainShutdown) {
+			t.Errorf("a missing binary is not a shutdown refusal: %v", err)
+		}
 	})
 
 	t.Run("error: a shutdown already in progress starts nothing", func(t *testing.T) {
@@ -633,6 +621,9 @@ func TestKeychainWriteNotStarted(t *testing.T) {
 		assertKind(t, err, "not started")
 		if ke, ok := errors.AsType[*KeychainError](err); !ok || !strings.Contains(ke.Detail, "a shutdown is in progress") {
 			t.Fatalf("write = %v, want the shutdown refusal", err)
+		}
+		if !errors.Is(err, ErrKeychainShutdown) || !errors.Is(err, ErrKeychainNotStarted) {
+			t.Fatalf("write = %v, want it to match the shutdown and the not-started sentinels", err)
 		}
 		if got := f.SecurityLog(); len(got) != 0 {
 			t.Fatalf("a cancelled run spawned a child: %v", got)

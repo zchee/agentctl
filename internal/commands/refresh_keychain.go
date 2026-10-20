@@ -30,6 +30,10 @@ import (
 	"github.com/zchee/agentctl/internal/secret"
 )
 
+// refreshTooLargeLabel is the state label of a refresh whose keychain
+// document is over the update ceiling; it names the public reason token.
+const refreshTooLargeLabel = "credential_too_large: the keychain document is over the keychain update ceiling"
+
 // migratedRefreshTarget binds write authority to one owned registry record.
 type migratedRefreshTarget struct {
 	nsDir, service, sha8, account string
@@ -128,14 +132,16 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	from, _ := secret.Digest8(before.AccessSHA256)
 	audit := secret.WriteEvent{Target: secret.NamespaceTarget(item.sha8), FromDigest8: &from, ToDigest8: to, Outcome: secret.WriteDiscarded, Direction: secret.DirectionForward}
 	defer func() { appendRefreshAudit(ctx, paths, &audit) }()
-	line, err := current.ToKeychainStdinLine(item.account, item.service)
-	if _, tooLong := errors.AsType[*secret.LineTooLongError](err); tooLong && (current.SubscriptionType != unplannedType || current.RateLimitTier != unplannedTier) {
+	// Discovery's file copy is never a source of carried members.
+	current.CarrySiblingsFrom(nil)
+	update, err := current.ToKeychainUpdate(item.account, item.service)
+	if _, tooLarge := errors.AsType[*secret.BlobTooLargeError](err); tooLarge && (current.SubscriptionType != unplannedType || current.RateLimitTier != unplannedTier) {
 		current.SubscriptionType, current.RateLimitTier = unplannedType, unplannedTier
-		line, err = current.ToKeychainStdinLine(item.account, item.service)
+		update, err = current.ToKeychainUpdate(item.account, item.service)
 	}
 	if err != nil {
-		if _, tooLong := errors.AsType[*secret.LineTooLongError](err); tooLong {
-			return refreshRefused(claude.StateOfError("blob exceeds the keychain stdin limit"), "none")
+		if errors.Is(err, secret.ErrCredentialTooLarge) {
+			return refreshRefused(claude.StateOfError(refreshTooLargeLabel), "none")
 		}
 		return refreshFailure(err)
 	}
@@ -185,12 +191,16 @@ func (s *Status) refreshMigrated(ctx context.Context, paths *config.Paths, item 
 	if err := hold.DriftCheck(); err != nil {
 		return refreshRefused(claude.StateOfError("refresh refused: "+err.Error()), "unavailable")
 	}
-	if err := hold.WriteAdmission(); err != nil || hold.HoldElapsed()+secret.KeychainWriteTimeout > secret.HoldBudget {
+	if err := hold.WriteAdmission(); err != nil || hold.HoldElapsed()+secret.KeychainWriteTimeout+secret.KeychainWriteWaitDelay > secret.HoldBudget {
 		return refreshDiscarded("the hold ran out of budget before the write")
 	}
-	writeErr := s.Writer.Write(ctx, item.service, line)
+	writeErr := s.Writer.Write(ctx, item.service, update)
 	hold.Release()
-	if writeErr != nil && !errors.Is(writeErr, secret.ErrKeychainTimeout) {
+	if errors.Is(writeErr, secret.ErrKeychainNotStarted) {
+		return refreshDiscarded(useNotStartedNote(writeErr))
+	}
+	// An outcome-unknown write may have committed: the readback decides.
+	if writeErr != nil && !errors.Is(writeErr, secret.ErrKeychainOutcomeUnknown) {
 		audit.Outcome = secret.WriteFailed
 		state := claude.StateOfError("the refresh could not be stored: " + writeErr.Error())
 		if errors.Is(writeErr, secret.ErrKeychainLocked) {

@@ -291,12 +291,12 @@ refresh-calls 0 0 0
 refresh-check read-only
 refresh-check peers-absent
 
-# a_blob_over_the_stdin_limit_spawns_no_write
+# a_document_over_the_update_ceiling_spawns_no_write
 refreshfixture large-line
 exec expectexit 2 agentctl claude status --json --refresh --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
 refresh-check row stdout state error
-refresh-check row stdout state_label 'blob exceeds the keychain stdin limit'
+refresh-check row stdout state_label 'credential_too_large: the keychain document is over the keychain update ceiling'
 refresh-calls 0 1 0
 refresh-check stored old
 refresh-check read-only
