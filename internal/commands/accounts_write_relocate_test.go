@@ -18,6 +18,7 @@ import (
 	"bytes"
 	json "encoding/json/v2"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -188,6 +189,95 @@ func TestAccountsRelocate(t *testing.T) {
 			}
 			if diff := gocmp.Diff(before, after); diff != "" {
 				t.Fatalf("credentials changed: %s", diff)
+			}
+		})
+	}
+}
+
+func TestAccountsRelocateRefusesANamespaceWhoseItemIsListed(t *testing.T) {
+	tests := map[string]struct {
+		// listed says which of the two checks finds the item listed.
+		listed      [2]bool
+		locked      bool
+		noSource    bool
+		wantRefusal bool
+		wantMoved   bool
+	}{
+		"error: a listed item refuses before the probe of the source":             {listed: [2]bool{true, true}, noSource: true, wantRefusal: true},
+		"error: a listed item refuses with the source and the registry unchanged": {listed: [2]bool{true, true}, wantRefusal: true},
+		"error: an item listed only at the second check refuses under the guard":  {listed: [2]bool{false, true}, wantRefusal: true},
+		"success: an unlisted item moves as before":                               {wantMoved: true},
+		"success: a keychain that is not unlocked moves as before":                {listed: [2]bool{true, true}, locked: true, wantMoved: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := seedStore(t)
+			store.fixture.WriteRegistry([]any{store.fixture.OwnedRecord(testutil.Acct, config.UnknownOrg)})
+			source := store.paths.NamespaceDir(testutil.Acct, config.UnknownOrg)
+			target := store.paths.NamespaceDir(testutil.Acct, testutil.Org)
+			blob := store.fixture.Blob("sk-ant-oat01-relocate", "sk-ant-ort01-relocate", testutil.FreshAt())
+			if !tt.noSource {
+				store.fixture.WriteCredentials(testutil.Acct, config.UnknownOrg, blob)
+			}
+			registryBefore, err := os.ReadFile(store.fixture.ConfigFile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := claude.LiveService + "-" + testutil.Sha8(testutil.ExportSpelling(source))
+			opened := 0
+			command := store.accounts(nil, &bytes.Buffer{})
+			command.Keychain = func() secret.Reader {
+				opened++
+				items := map[string][]byte{}
+				if tt.listed[min(opened, 2)-1] {
+					items[service] = []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-item","expiresAt":1}}`)
+				}
+				keychain := unlockedKeychain(items)
+				if tt.locked {
+					keychain.state = secret.KeychainStateLocked
+				}
+				return keychain
+			}
+			var out bytes.Buffer
+			err = command.Relocate(t.Context(), cli.ClaudeAccountsRelocateOptions{ID: testutil.Acct, Yes: true}, TerminalPrompt{Out: &out}, nil)
+			if strings.Contains(out.String()+fmt.Sprint(err), "sk-ant-") {
+				t.Fatal("credential leaked into the report")
+			}
+			refused := err != nil && strings.Contains(err.Error(), "lives in its keychain item")
+			if refused != tt.wantRefusal {
+				t.Fatalf("refused = %v, want %v: %v", refused, tt.wantRefusal, err)
+			}
+			if tt.wantMoved {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(target, secret.CredentialsFile)); err != nil {
+					t.Fatalf("the credential did not move: %v", err)
+				}
+				if opened != 2 {
+					t.Errorf("the keychain was opened %d times, want one fresh reader per check", opened)
+				}
+				return
+			}
+			if code := errs.ExitCode(err); code != 1 {
+				t.Errorf("exit = %d, want 1", code)
+			}
+			for _, part := range []string{"`" + source + "`'s credential lives in its keychain item `" + service + "`", "nothing was moved", "`agentctl claude use " + testutil.Acct + "`", "`/login`"} {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("refusal %q does not contain %q", err, part)
+				}
+			}
+			registryAfter, err := os.ReadFile(store.fixture.ConfigFile())
+			if err != nil || !bytes.Equal(registryBefore, registryAfter) {
+				t.Errorf("a refused relocate changed the registry: %v", err)
+			}
+			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a refused relocate created the target: %v", err)
+			}
+			if !tt.noSource {
+				if data, err := os.ReadFile(filepath.Join(source, secret.CredentialsFile)); err != nil || string(data) != blob {
+					t.Errorf("a refused relocate changed the source: %v", err)
+				}
 			}
 		})
 	}

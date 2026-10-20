@@ -111,6 +111,10 @@ type Login struct {
 	IO                 LoginIO
 	LiveIdentity       *claude.Identity
 	LiveIdentitySource string
+	// Keychain opens a fresh keychain reader for each check that the
+	// namespace already has its keychain item. Nil reads no keychain and
+	// logs in as before, as a keychain that is not unlocked does.
+	Keychain func() secret.Reader
 }
 
 // Run authorizes a fresh session, confirms replacements, then persists it under locks.
@@ -199,6 +203,29 @@ func (l *Login) Run(ctx context.Context, opts cli.ClaudeLoginOptions) error {
 	if err != nil {
 		return err
 	}
+	nsDir := l.Paths.NamespaceDir(account, organization)
+	// The item is keyed by the spelling the record was created with, which
+	// differs from today's when the store moved.
+	sha8, useID := claude.SHA8(claude.ExportSpelling(nsDir)), account
+	if existing := registry.Get(account, organization); existing != nil {
+		useID = existing.DisplayID(registry.Accounts)
+		if existing.Kind.Owned != nil {
+			sha8 = existing.Kind.Owned.ExportSHA8
+		}
+	}
+	// Claude Code reads a listed item instead of the file, so a file
+	// written here would change nothing a session uses.
+	listed := func() error {
+		service, ok := namespaceItemListed(ctx, l.Keychain, sha8)
+		if !ok {
+			return nil
+		}
+		credentials.Wipe()
+		return errs.NewConfig(fmt.Sprintf("`%s/%s`'s credential lives in its keychain item `%s`, which Claude Code reads instead of agentctl's file, so logging in here would change nothing a session uses; nothing was written, and the sign-in just completed is not stored. Start the session with `agentctl claude use %s` and run `/login` inside it.", account, organization, service, useID))
+	}
+	if err := listed(); err != nil {
+		return err
+	}
 	if registry.Get(account, organization) != nil {
 		confirmed, err := l.IO.Confirm(ctx, fmt.Sprintf("`%s/%s` is already logged in. Replace its stored credentials?", account, organization))
 		if err != nil {
@@ -211,12 +238,16 @@ func (l *Login) Run(ctx context.Context, opts cli.ClaudeLoginOptions) error {
 	if err := l.Paths.EnsureDirs(ctx); err != nil {
 		return err
 	}
-	nsDir := l.Paths.NamespaceDir(account, organization)
 	guard, err := secret.Acquire(ctx, l.Paths.LocksDir(), filepath.Base(l.Paths.LockPath(account, organization)), time.Now().Add(secret.NamespaceLockWait))
 	if err != nil {
 		return errs.NewConfig(fmt.Sprintf("could not take the namespace lock: %v", err))
 	}
 	defer func() { _ = guard.Release() }()
+	// Again under the guard: a seed that created the item since the first
+	// check removes the owned file under this same guard.
+	if err := listed(); err != nil {
+		return err
+	}
 	if err := ClearStaleFiles(ctx, l.Paths, nsDir); err != nil {
 		return err
 	}
@@ -262,6 +293,27 @@ func (l *Login) Run(ctx context.Context, opts cli.ClaudeLoginOptions) error {
 		return l.IO.Tell(fmt.Sprintf("Logged in as %s (%s).", *identity.Email, id))
 	}
 	return l.IO.Tell(fmt.Sprintf("Logged in (%s).", id))
+}
+
+// namespaceItemListed reports whether the keychain lists the namespace item
+// whose service ends in sha8, and that service. Each call opens its own
+// reader, because a reader keeps the first listing it took. A keychain that
+// is not unlocked, or a listing that fails, reports false: the item cannot
+// be listed, and Claude Code cannot read it either.
+func namespaceItemListed(ctx context.Context, open func() secret.Reader, sha8 string) (string, bool) {
+	if open == nil {
+		return "", false
+	}
+	reader := open()
+	if reader.Preflight(ctx).State != secret.KeychainStateUnlocked {
+		return "", false
+	}
+	listing, err := reader.ListServices(ctx, claude.LiveService)
+	if err != nil {
+		return "", false
+	}
+	service := claude.LiveService + "-" + sha8
+	return service, seedListed(listing, service)
 }
 
 // writeCredentialBlob consumes the serialized bytes before any later store I/O.

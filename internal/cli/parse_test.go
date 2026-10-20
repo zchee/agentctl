@@ -392,6 +392,44 @@ func TestClaudeUseAcceptsEveryFlagTogetherWithAnID(t *testing.T) {
 	}
 }
 
+func TestClaudeUseNoMCPSeed(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		args []string
+		want ClaudeUseOptions
+	}{
+		"success: --no-mcp-seed on an isolated session": {
+			args: []string{"claude", "use", "acct-1", "--no-mcp-seed"},
+			want: ClaudeUseOptions{ID: "acct-1", NoMCPSeed: true},
+		},
+		"success: --no-mcp-seed is accepted beside --live, which ignores it": {
+			args: []string{"claude", "use", "acct-1", "--live", "--no-mcp-seed"},
+			want: ClaudeUseOptions{ID: "acct-1", Live: true, NoMCPSeed: true},
+		},
+		"success: --no-mcp-seed is accepted beside --undo, which ignores it": {
+			args: []string{"claude", "use", "--undo", "--no-mcp-seed"},
+			want: ClaudeUseOptions{Undo: true, NoMCPSeed: true},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var got ClaudeUseOptions
+			h := Handlers{ClaudeUse: func(_ context.Context, _ Globals, opts ClaudeUseOptions) error {
+				got = opts
+				return nil
+			}}
+			if _, err := execute(t, h, tt.args...); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if diff := gocmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("flags mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestClaudeUseUndoAndForgetParseWithoutAnID(t *testing.T) {
 	t.Parallel()
 

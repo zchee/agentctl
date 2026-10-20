@@ -74,34 +74,37 @@ func quoteFish(value string) string {
 	return "'" + strings.NewReplacer("\\", "\\\\", "'", "\\'").Replace(value) + "'"
 }
 
-func prepareSession(ctx context.Context, configDir, id string, opts SessionOptions) (SessionDir, ExportSpec, error) {
+// prepareSession resolves the store and the account's record, ensures the
+// session directory and checks the export. It also returns the store's
+// paths and the record, which `use <id>` seeds the namespace from.
+func prepareSession(ctx context.Context, configDir, id string, opts SessionOptions) (SessionDir, ExportSpec, *config.Paths, *config.AccountRecord, error) {
 	paths, err := config.Resolve(configDir)
 	if err != nil {
-		return SessionDir{}, ExportSpec{}, err
+		return SessionDir{}, ExportSpec{}, nil, nil, err
 	}
 	if err := paths.EnsureDirs(ctx); err != nil {
-		return SessionDir{}, ExportSpec{}, err
+		return SessionDir{}, ExportSpec{}, nil, nil, err
 	}
 	registry, err := config.LoadRegistry(ctx, paths)
 	if err != nil {
-		return SessionDir{}, ExportSpec{}, err
+		return SessionDir{}, ExportSpec{}, nil, nil, err
 	}
 	rec, err := registry.ResolveID(id)
 	if err != nil {
-		return SessionDir{}, ExportSpec{}, err
+		return SessionDir{}, ExportSpec{}, nil, nil, err
 	}
 	env := claude.EnvFromProcess()
 	session, err := EnsureSession(ctx, paths, rec, opts, &env)
 	if err != nil {
-		return SessionDir{}, ExportSpec{}, err
+		return SessionDir{}, ExportSpec{}, nil, nil, err
 	}
 	spec, err := SessionExport(rec, session)
-	return session, spec, err
+	return session, spec, paths, rec, err
 }
 
 // RunEnv prepares a session and prints its shell commands with one trailing LF.
 func RunEnv(ctx context.Context, globals cli.Globals, opts cli.ClaudeEnvOptions, out io.Writer) error {
-	_, spec, err := prepareSession(ctx, globals.ConfigDir, opts.ID, SessionOptions{ConfigDir: opts.ClaudeConfigDir, FreshContext: opts.FreshContext, NoMCP: opts.NoMCP})
+	_, spec, _, _, err := prepareSession(ctx, globals.ConfigDir, opts.ID, SessionOptions{ConfigDir: opts.ClaudeConfigDir, FreshContext: opts.FreshContext, NoMCP: opts.NoMCP})
 	if err != nil {
 		return err
 	}

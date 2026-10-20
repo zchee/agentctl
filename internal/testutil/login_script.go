@@ -140,8 +140,12 @@ func loginFixture(ts *testscript.TestScript, neg bool, args []string) {
 		if int(exchanges.Load()) != calls || int(profiles.Load()) != calls {
 			ts.Fatalf("request counts exchange=%d profile=%d; want %d each", exchanges.Load(), profiles.Load(), calls)
 		}
-		if log := ts.ReadFile(filepath.Join(root, "security.log")); log != "" {
-			ts.Fatalf("login touched the keychain: %s", log)
+		// Login only asks whether the namespace's keychain item is listed:
+		// it never reads an item and never writes one.
+		for line := range strings.SplitSeq(ts.ReadFile(filepath.Join(root, "security.log")), "\n") {
+			if subcommand, _, _ := strings.Cut(line, " "); line != "" && subcommand != "show-keychain-info" && subcommand != "dump-keychain" {
+				ts.Fatalf("login read or wrote a keychain item: %s", subcommand)
+			}
 		}
 		if liveBefore != nil && !bytes.Equal(liveBefore, []byte(ts.ReadFile(filepath.Join(home, ".claude.json")))) {
 			ts.Fatalf("login changed the live identity document")

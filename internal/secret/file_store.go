@@ -186,12 +186,17 @@ func WriteCredentials(ctx context.Context, req *WriteRequest) (WriteOutcome, err
 // RemoveCredentialsFile removes the namespace's plaintext
 // [CredentialsFile], if it is there, returning whether one was removed.
 //
-// The one caller is a swap whose store had not migrated: once the keychain
-// item demonstrably holds the incoming credential this name is a second
-// copy of the displaced one rather than its home, and the vendor's
+// There are two callers. One is a swap whose store had not migrated: once
+// the keychain item demonstrably holds the incoming credential this name is
+// a second copy of the displaced one rather than its home, and the vendor's
 // composed read would hand it to the peer session on nothing worse than a
-// keychain hiccup. The directory is reached through the no-follow walk and
-// the name unlinked relative to that descriptor.
+// keychain hiccup. The other is `use <id>`'s seed, once it has confirmed the
+// namespace item it created from this file, while it holds the namespace
+// guard and the namespace's peer lock and the file is still byte for byte
+// the one the item's account was taken from: the item is then the
+// namespace's credential, as after the vendor's own migration. The
+// directory is reached through the no-follow walk and the name unlinked
+// relative to that descriptor.
 func RemoveCredentialsFile(paths *config.Paths, nsDir string) (bool, error) {
 	return removeStoreFile(paths, nsDir, CredentialsFile)
 }

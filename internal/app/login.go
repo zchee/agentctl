@@ -22,6 +22,7 @@ import (
 	"github.com/zchee/agentctl/internal/commands"
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/secret"
 )
 
 func init() { register(loginHandlers) }
@@ -41,6 +42,7 @@ func loginHandlers(deps Dependencies, handlers *cli.Handlers) {
 			Paths: paths, Client: client,
 			IO:           commands.LoginTerminal{TerminalPrompt: commands.TerminalPrompt{In: os.Stdin, Out: deps.Stdout}, Err: os.Stderr},
 			LiveIdentity: claude.LiveIdentity(&env), LiveIdentitySource: claude.ClaudeJSONPath(&env),
+			Keychain: secret.NewReader,
 		}
 		return login.Run(ctx, opts)
 	}

@@ -130,6 +130,7 @@ type ClaudeUseOptions struct {
 	ClaudeConfigDir      string
 	FreshContext         bool
 	NoMCP                bool
+	NoMCPSeed            bool
 	Yes                  bool
 	JSON                 bool
 }
@@ -389,6 +390,7 @@ func (c *CLI) newClaudeUseCmd() *cobra.Command {
 	f.StringVar(&opts.ClaudeConfigDir, "claude-config-dir", "", "Use this directory as the session's Claude Code config directory instead of a generated one. Must be an absolute path.")
 	f.BoolVar(&opts.FreshContext, "fresh-context", false, "Do not symlink the directories that hold resumable work.")
 	f.BoolVar(&opts.NoMCP, "no-mcp", false, "Omit the MCP symlink, the --mcp-config flag and the shell alias together.")
+	f.BoolVar(&opts.NoMCPSeed, "no-mcp-seed", false, "Do not copy the live keychain item's MCP credentials into the namespace item this session would otherwise create; the MCP symlink and --mcp-config stay.")
 	f.BoolVar(&opts.Yes, "yes", false, "Do not prompt for confirmation.")
 	f.BoolVar(&opts.JSON, "json", false, "Print the session's details as JSON before launching.")
 	cmd.MarkFlagsMutuallyExclusive("live", "new-only")

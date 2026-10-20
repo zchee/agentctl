@@ -25,7 +25,9 @@ import (
 	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/internal/cli"
+	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/testutil"
 )
 
@@ -73,11 +75,18 @@ func TestRunUseIsolated(t *testing.T) {
 					t.Fatal(err)
 				}
 				session := filepath.Join(f.ConfigDir(), "claude-sessions", "account", "org")
-				var mcp any
+				var mcp, seed any
 				if !tt.noMCP {
 					mcp = filepath.Join(session, "mcp.json")
+					registry, err := config.LoadRegistry(t.Context(), config.NewPaths(f.ConfigDir()))
+					if err != nil {
+						t.Fatal(err)
+					}
+					// No keychain reader is wired, so the seed is the silent
+					// skip of a keychain that cannot be read.
+					seed = map[string]any{"target": claude.LiveService + "-" + registry.Get("account", "org").Kind.Owned.ExportSHA8, "outcome": "skipped", "path": nil, "seeded_members": []any{}, "siblings_readback": nil, "transport": nil, "owned_file": nil, "note": "the keychain is unavailable; nothing seeded"}
 				}
-				want := map[string]any{"securestorage_dir": f.NamespaceDir("account", "org"), "config_dir": session, "session_path": session, "mcp_config": mcp}
+				want := map[string]any{"securestorage_dir": f.NamespaceDir("account", "org"), "config_dir": session, "session_path": session, "mcp_config": mcp, "mcp_seed": seed}
 				if diff := gocmp.Diff(want, doc); diff != "" {
 					t.Fatal(diff)
 				}

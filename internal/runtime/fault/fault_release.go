@@ -75,6 +75,14 @@ const (
 	MigratedAfterHeldRead = ""
 	// MigratedAfterWrite is inert in a release build.
 	MigratedAfterWrite = ""
+	// BeforeSeedHold is inert in a release build.
+	BeforeSeedHold = ""
+	// SeedAfterHeldRead is inert in a release build.
+	SeedAfterHeldRead = ""
+	// SeedAfterWrite is inert in a release build.
+	SeedAfterWrite = ""
+	// SeedBeforeFileRemove is inert in a release build.
+	SeedBeforeFileRemove = ""
 	// SwapWriteFail is inert in a release build.
 	SwapWriteFail = ""
 	// BeforeRename is inert in a release build.

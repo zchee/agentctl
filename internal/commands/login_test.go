@@ -320,3 +320,109 @@ func TestLoginClearStaleFiles(t *testing.T) {
 		t.Fatal("outside store was allowed")
 	}
 }
+
+func TestLoginRefusesANamespaceWhoseItemIsListed(t *testing.T) {
+	tests := map[string]struct {
+		// listed says which of the two checks finds the item listed.
+		listed      [2]bool
+		locked      bool
+		moved       bool
+		recomputed  bool
+		wantRefusal bool
+		wantExit    int
+	}{
+		"error: a listed item refuses before the prompt":                         {listed: [2]bool{true, true}, wantRefusal: true, wantExit: 1},
+		"error: an item listed only at the second check refuses under the guard": {listed: [2]bool{false, true}, wantRefusal: true, wantExit: 1},
+		"success: an unlisted item logs in as before":                            {},
+		"success: a keychain that is not unlocked logs in as before":             {listed: [2]bool{true, true}, locked: true},
+		"error: a moved spelling refuses on the item the record names":           {listed: [2]bool{true, true}, moved: true, wantRefusal: true, wantExit: 1},
+		"error: a moved spelling is not refused on the recomputed item":          {listed: [2]bool{true, true}, moved: true, recomputed: true, wantExit: 1},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/token" {
+					_, _ = io.WriteString(w, `{"access_token":"sk-ant-oat01-minted","refresh_token":"sk-ant-ort01-minted","expires_in":28800,"account":{"uuid":"acct","email_address":"minted@example.com"},"organization":{"uuid":"org","name":"Example"}}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"account":{"uuid":"acct","email":"profile@example.com"},"organization":{"uuid":"org","name":"Profile Org"}}`)
+			}))
+			defer server.Close()
+			client, err := claude.NewLoginClient(server.URL+"/authorize", server.URL+"/token", server.URL+"/profile", "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths := config.NewPaths(filepath.Join(t.TempDir(), "store"))
+			nsDir := paths.NamespaceDir("acct", "org")
+			sha8 := claude.SHA8(claude.ExportSpelling(nsDir))
+			var registryBefore []byte
+			if test.moved {
+				// The record keeps the spelling it was created with, which
+				// no longer matches this store's.
+				spelling := "/moved/store/claude/acct/org"
+				record, err := config.NewRecord("acct", "org", config.AccountKindOwned(spelling, claude.SHA8(spelling)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := config.UpdateRegistry(t.Context(), paths, func(registry *config.Registry) { registry.Upsert(record) }); err != nil {
+					t.Fatal(err)
+				}
+				if !test.recomputed {
+					sha8 = claude.SHA8(spelling)
+				}
+				if registryBefore, err = os.ReadFile(paths.ConfigFile()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			service := claude.LiveService + "-" + sha8
+			opened := 0
+			login := Login{Paths: paths, Client: client, Keychain: func() secret.Reader {
+				opened++
+				items := map[string][]byte{}
+				if test.listed[min(opened, 2)-1] {
+					items[service] = []byte(`{"claudeAiOauth":{"accessToken":"sk-ant-item","expiresAt":1}}`)
+				}
+				keychain := unlockedKeychain(items)
+				if test.locked {
+					keychain.state = secret.KeychainStateLocked
+				}
+				return keychain
+			}}
+			out, stderr, runErr := driveLogin(t, &login, cli.ClaudeLoginOptions{Manual: true}, false)
+			if got := errs.ExitCode(runErr); got != test.wantExit {
+				t.Fatalf("exit %d, want %d: %v", got, test.wantExit, runErr)
+			}
+			if strings.Contains(out+stderr+fmt.Sprint(runErr), "sk-ant") {
+				t.Fatal("login output leaked a token")
+			}
+			refused := runErr != nil && strings.Contains(runErr.Error(), "lives in its keychain item")
+			if refused != test.wantRefusal {
+				t.Fatalf("refused = %v, want %v: %v", refused, test.wantRefusal, runErr)
+			}
+			if test.wantRefusal {
+				for _, part := range []string{"`acct/org`'s credential lives in its keychain item `" + service + "`", "nothing was written", "`agentctl claude use acct`", "`/login`"} {
+					if !strings.Contains(runErr.Error(), part) {
+						t.Errorf("refusal %q does not contain %q", runErr, part)
+					}
+				}
+			}
+			if test.wantExit != 0 {
+				if _, err := os.Lstat(filepath.Join(nsDir, secret.CredentialsFile)); !os.IsNotExist(err) {
+					t.Errorf("a refused login wrote the credential file: %v", err)
+				}
+				registryAfter, _ := os.ReadFile(paths.ConfigFile())
+				if !bytes.Equal(registryBefore, registryAfter) {
+					t.Error("a refused login changed the registry")
+				}
+				return
+			}
+			if stored, err := secret.ReadCredentials(nsDir); err != nil || !stored.Present {
+				t.Fatalf("stored credential: %v", err)
+			}
+			if opened != 2 {
+				t.Errorf("the keychain was opened %d times, want one fresh reader per check", opened)
+			}
+		})
+	}
+}

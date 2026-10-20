@@ -238,3 +238,80 @@ func TestDoctorHeldRecordAndNamespaceBody(t *testing.T) {
 		t.Errorf("missing stale record:\n%s", output)
 	}
 }
+
+func TestDoctorAttentionListedNamespaceItem(t *testing.T) {
+	tests := map[string]struct {
+		listed, file bool
+		wantListed   bool
+		wantKept     bool
+	}{
+		"success: a listed item prints the corrected line":                       {listed: true, wantListed: true},
+		"success: a listed item with a credential file beside it names the file": {listed: true, file: true, wantListed: true, wantKept: true},
+		"success: an unlisted namespace with a credential file prints neither":   {file: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := testutil.New(t)
+			fixture.WriteRegistry([]any{fixture.OwnedRecord(testutil.Acct, testutil.Org)})
+			paths := config.NewPaths(fixture.ConfigDir())
+			registry, err := config.LoadRegistry(t.Context(), paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := claude.LiveService + "-" + registry.Get(testutil.Acct, testutil.Org).Kind.Owned.ExportSHA8
+			file := filepath.Join(fixture.NamespaceDir(testutil.Acct, testutil.Org), secret.CredentialsFile)
+			if tt.file {
+				// Unparsable on purpose: the line must come from a stat, so a
+				// read would have nothing to report.
+				doctorWrite(t, file, "sk-ant-private-marker")
+			}
+			found := claude.Discovery{}
+			if tt.listed {
+				found.Listing = []secret.ServiceEntry{{Service: service, Account: testutil.KeychainAccount}}
+			}
+			env := claude.EnvWithHome(fixture.Home())
+			command := Doctor{Paths: paths, Env: &env}
+			report := strings.Join(command.attentionSection(registry, &found), "\n")
+			listedLine := service + "  a keychain item exists for this namespace (a Claude Code session migrated it or `agentctl claude use` seeded it), and agentctl will not write the file again"
+			keptLine := file + "  is still there beside the keychain item: Claude Code reads it only when the keychain is unavailable, and `agentctl claude use --live " + testutil.Acct + "` reads it until it is removed; remove it by hand once `agentctl claude status` shows the item holds the account"
+			if got := strings.Contains(report, listedLine); got != tt.wantListed {
+				t.Errorf("listed line present = %v, want %v:\n%s", got, tt.wantListed, report)
+			}
+			if got := strings.Contains(report, keptLine); got != tt.wantKept {
+				t.Errorf("kept-file line present = %v, want %v:\n%s", got, tt.wantKept, report)
+			}
+			if strings.Contains(report, "has migrated it") || strings.Contains(report, "sk-ant-") {
+				t.Errorf("the old wording or a file's content is in the report:\n%s", report)
+			}
+		})
+	}
+}
+
+func TestDoctorConfigVerdictIgnoresASeedEntry(t *testing.T) {
+	seed := secret.AuditEntry{TS: "seed", PID: 3, Event: &secret.SeedEvent{Target: secret.NamespaceTarget("1a2b3c4d"), ToDigest8: "0011aabb", Outcome: secret.WriteApplied, Transport: secret.TransportArgv, OwnedFile: secret.OwnedFileRemoved}}
+	tests := map[string]struct {
+		entries []secret.AuditEntry
+		want    string
+	}{
+		"success: a seed after a live write leaves the live write the newest": {
+			entries: []secret.AuditEntry{{TS: "write", PID: 1, Event: &secret.WriteEvent{Target: secret.TargetLive, Outcome: secret.WriteApplied}}, seed},
+			want:    "the newest live write (write#1) has no config write after it",
+		},
+		"success: a seed after a config write leaves the config write the last": {
+			entries: []secret.AuditEntry{{TS: "config", PID: 2, Event: &secret.ConfigWriteRecord{Outcome: secret.ConfigSkipped, Reason: new(secret.ConfigReasonAbsent)}}, seed},
+			want:    "last config write skipped (absent) at config#2; it recorded no account",
+		},
+		"success: a seed alone is no config write": {
+			entries: []secret.AuditEntry{seed},
+			want:    "no config write recorded",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			tail := secret.AuditTail{Entries: tt.entries}
+			if diff := gocmp.Diff(tt.want, doctorConfigVerdict(&tail, filepath.Join(t.TempDir(), "missing"))); diff != "" {
+				t.Errorf("verdict (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

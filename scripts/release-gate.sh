@@ -64,6 +64,7 @@ fault_points=(
 	before_migrated_write
 	before_refresh_recheck
 	before_rename
+	before_seed_hold
 	before_swap_write
 	codex_abort_after_marker
 	codex_abort_after_pending
@@ -100,6 +101,9 @@ fault_points=(
 	migrated_after_held_read
 	migrated_after_write
 	rename_fail
+	seed_after_held_read
+	seed_after_write
+	seed_before_file_remove
 	swap_after_held_read
 	swap_after_write
 	swap_lock_leak

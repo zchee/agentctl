@@ -383,7 +383,12 @@ func (d *Doctor) attentionSection(registry *config.Registry, found *claude.Disco
 		}
 		migrated := claude.LiveService + "-" + owned.ExportSHA8
 		if hasService(migrated) {
-			out = append(out, "  "+migrated+"  a keychain item exists for this namespace: a Claude Code session has migrated it, and agentctl will not write the file again")
+			out = append(out, "  "+migrated+"  a keychain item exists for this namespace (a Claude Code session migrated it or `agentctl claude use` seeded it), and agentctl will not write the file again")
+			// A stat only: the file is never read here.
+			file := filepath.Join(d.Paths.NamespaceDir(record.AccountUUID, record.OrganizationUUID), secret.CredentialsFile)
+			if _, err := os.Lstat(file); err == nil {
+				out = append(out, fmt.Sprintf("  %s  is still there beside the keychain item: Claude Code reads it only when the keychain is unavailable, and `agentctl claude use --live %s` reads it until it is removed; remove it by hand once `agentctl claude status` shows the item holds the account", file, record.DisplayID(registry.Accounts)))
+			}
 		}
 	}
 	if len(out) == 1 {

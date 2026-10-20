@@ -22,6 +22,7 @@ import (
 	"github.com/zchee/agentctl/internal/commands"
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/secret"
 )
 
 func init() { register(accountsWriteHandlers) }
@@ -36,7 +37,7 @@ func accountsWriteHandlers(deps Dependencies, handlers *cli.Handlers) {
 			return nil, err
 		}
 		env := claude.EnvFromProcess()
-		return &commands.Accounts{Paths: paths, Env: &env, Out: deps.Stdout}, nil
+		return &commands.Accounts{Paths: paths, Env: &env, Out: deps.Stdout, Keychain: secret.NewReader}, nil
 	}
 	handlers.ClaudeAccountsRemove = func(ctx context.Context, globals cli.Globals, opts cli.ClaudeAccountsRemoveOptions) error {
 		command, err := makeAccounts(ctx, globals)

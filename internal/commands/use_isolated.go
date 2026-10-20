@@ -18,10 +18,13 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+	"fmt"
 
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/errs"
+	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/render"
+	"github.com/zchee/agentctl/internal/secret"
 )
 
 // RunUse dispatches isolated sessions, live swaps, and removal requests.
@@ -45,9 +48,23 @@ func (p SessionProcess) RunUse(ctx context.Context, globals cli.Globals, opts cl
 	if opts.ID == "" {
 		return errs.NewConfig("an account id is required unless one of --undo or --forget is given")
 	}
-	session, spec, err := prepareSession(ctx, globals.ConfigDir, opts.ID, SessionOptions{ConfigDir: opts.ClaudeConfigDir, FreshContext: opts.FreshContext, NoMCP: opts.NoMCP})
+	session, spec, paths, record, err := prepareSession(ctx, globals.ConfigDir, opts.ID, SessionOptions{ConfigDir: opts.ClaudeConfigDir, FreshContext: opts.FreshContext, NoMCP: opts.NoMCP})
 	if err != nil {
 		return err
+	}
+	// Seeding is a convenience: whatever it reports, the session launches,
+	// and only a signal, which also refuses the launch, ends the run early.
+	var seed *useSeedReport
+	if !opts.NoMCP && !opts.NoMCPSeed {
+		reader := secret.Reader(secret.DisabledReader{})
+		if p.Keychain != nil {
+			reader = p.Keychain()
+		}
+		env := claude.EnvFromProcess()
+		seed = p.seedNamespaceSiblings(ctx, seedInput{paths: paths, record: record, env: &env, reader: reader, id: opts.ID})
+		if line := seed.prose(); line != "" && p.Err != nil {
+			_, _ = fmt.Fprintln(p.Err, line)
+		}
 	}
 	if opts.JSON {
 		var mcp *string
@@ -55,11 +72,12 @@ func (p SessionProcess) RunUse(ctx context.Context, globals cli.Globals, opts cl
 			mcp = &session.MCPConfig
 		}
 		doc := struct {
-			SecureStorageDir string  `json:"securestorage_dir"`
-			ConfigDir        string  `json:"config_dir"`
-			SessionPath      string  `json:"session_path"`
-			MCPConfig        *string `json:"mcp_config"`
-		}{spec.SecureStorageDir, spec.ConfigDir, session.Path, mcp}
+			SecureStorageDir string         `json:"securestorage_dir"`
+			ConfigDir        string         `json:"config_dir"`
+			SessionPath      string         `json:"session_path"`
+			MCPConfig        *string        `json:"mcp_config"`
+			MCPSeed          *useSeedReport `json:"mcp_seed"`
+		}{spec.SecureStorageDir, spec.ConfigDir, session.Path, mcp, seed}
 		data, err := json.Marshal(doc, jsontext.WithIndent("  "), jsontext.EscapeForHTML(false))
 		if err != nil {
 			return errs.NewConfig("could not render the session as JSON")

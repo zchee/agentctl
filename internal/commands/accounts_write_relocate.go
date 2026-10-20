@@ -57,6 +57,18 @@ func (a *Accounts) Relocate(ctx context.Context, opts cli.ClaudeAccountsRelocate
 		return errs.NewConfig(fmt.Sprintf("`%s` already names an organization; `relocate` only moves a namespace created as `%s`", spelling, config.UnknownOrg))
 	}
 	source := a.Paths.NamespaceDir(record.AccountUUID, config.UnknownOrg)
+	// The item's service hashes the source directory's spelling, so moving
+	// the directory would leave the item under a path no record names.
+	listed := func() error {
+		service, ok := namespaceItemListed(ctx, a.Keychain, record.Kind.Owned.ExportSHA8)
+		if !ok {
+			return nil
+		}
+		return errs.NewConfig(fmt.Sprintf("`%s`'s credential lives in its keychain item `%s`, which is keyed to this directory and which agentctl cannot move yet; nothing was moved. The namespace keeps working with `agentctl claude use %s`, where `/login` replaces its credential.", source, service, opts.ID))
+	}
+	if err := listed(); err != nil {
+		return err
+	}
 	probe, err := readRelocationNamespace(source)
 	if err != nil {
 		return err
@@ -91,6 +103,11 @@ func (a *Accounts) Relocate(ctx context.Context, opts cli.ClaudeAccountsRelocate
 		return err
 	}
 	defer func() { _ = sourceGuard.Release() }()
+	// Again under the source guard: a seed whose file removal waited on
+	// this guard keeps the file, so only the listing shows the new item.
+	if err := listed(); err != nil {
+		return err
+	}
 	targetGuard, err := a.lockNamespace(ctx, record.AccountUUID, org)
 	if err != nil {
 		return err

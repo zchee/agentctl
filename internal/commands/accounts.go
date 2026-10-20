@@ -47,6 +47,11 @@ type Accounts struct {
 	Env *claude.EnvView
 	// Reader is the keychain transport.
 	Reader secret.Reader
+	// Keychain opens a fresh keychain reader for each check that a
+	// namespace already has its keychain item before `relocate` moves it.
+	// Nil reads no keychain and moves as before, as a keychain that is not
+	// unlocked does.
+	Keychain func() secret.Reader
 	// Out is where reports are written.
 	Out io.Writer
 }

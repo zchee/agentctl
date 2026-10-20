@@ -81,6 +81,14 @@ const (
 	MigratedAfterHeldRead = "migrated_after_held_read"
 	// MigratedAfterWrite pauses after a migrated refresh's keychain write, before its readback.
 	MigratedAfterWrite = "migrated_after_write"
+	// BeforeSeedHold pauses a seed after its dry admission, before it takes the namespace's lock.
+	BeforeSeedHold = "before_seed_hold"
+	// SeedAfterHeldRead pauses a seed between its re-reads under the hold and the build of its keychain update.
+	SeedAfterHeldRead = "seed_after_held_read"
+	// SeedAfterWrite pauses a seed after its keychain write and the release of its hold, before its readback.
+	SeedAfterWrite = "seed_after_write"
+	// SeedBeforeFileRemove pauses a seed holding the namespace guard and peer lock, before it re-reads the owned file to remove it.
+	SeedBeforeFileRemove = "seed_before_file_remove"
 	// SwapWriteFail fails the swap's keychain write.
 	SwapWriteFail = "swap_write_fail"
 	// BeforeRename pauses before replacing a credential file.

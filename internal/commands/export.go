@@ -31,6 +31,7 @@ import (
 	"github.com/zchee/agentctl/internal/provider/claude"
 	"github.com/zchee/agentctl/internal/runtime/coordinator"
 	"github.com/zchee/agentctl/internal/runtime/signals"
+	"github.com/zchee/agentctl/internal/secret"
 )
 
 // SessionProcess supplies inherited streams and the process signal controller.
@@ -43,6 +44,10 @@ type SessionProcess struct {
 	// Desktop runs the desktop app switch that `--desktop` adds to a live
 	// swap. Its zero value reaches the real system.
 	Desktop DesktopProcess
+	// Keychain opens the keychain reader `use <id>` seeds the namespace's
+	// item through. Nil reads no keychain, which seeds nothing, as a
+	// keychain that is not unlocked does.
+	Keychain func() secret.Reader
 }
 
 // Exec starts argv directly with the session environment and returns its status.
@@ -89,7 +94,7 @@ func (p SessionProcess) Exec(ctx context.Context, spec ExportSpec, argv []string
 
 // RunExec prepares the account's session and forwards the invoked child's status.
 func (p SessionProcess) RunExec(ctx context.Context, globals cli.Globals, opts cli.ClaudeExecOptions) error {
-	_, spec, err := prepareSession(ctx, globals.ConfigDir, opts.ID, SessionOptions{ConfigDir: opts.ClaudeConfigDir, FreshContext: opts.FreshContext, NoMCP: opts.NoMCP})
+	_, spec, _, _, err := prepareSession(ctx, globals.ConfigDir, opts.ID, SessionOptions{ConfigDir: opts.ClaudeConfigDir, FreshContext: opts.FreshContext, NoMCP: opts.NoMCP})
 	if err != nil {
 		return err
 	}
