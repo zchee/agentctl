@@ -204,6 +204,61 @@ func TestKeychainWriteUpsertsThroughArgvOnly(t *testing.T) {
 	}
 }
 
+// TestKeychainWriteStoresTheMeasuredItemSizeWhole writes a document the size
+// of the measured live item (11.5 KiB: the account object plus its MCP
+// logins) through the production writer and the stand-in, and reads it back
+// the way the swap's readback does: every byte must arrive.
+func TestKeychainWriteStoresTheMeasuredItemSizeWhole(t *testing.T) {
+	const service = "Claude Code-credentials"
+	const size = 11776
+	writer, f := standInWriter(t)
+	f.AllowWrite(service)
+	f.KeychainItem(service, "old grant")
+	head := `{"claudeAiOauth":{"accessToken":"synthetic-write-marker","refreshToken":"synthetic-refresh-marker"},"mcpOAuth":{"a|1":{"accessToken":"`
+	middle := `"},"b|2":{"accessToken":"synthetic-mcp-b"}},"mcpOAuthClientConfig":{"a|1":{"clientSecret":"synthetic-client"}},"pluginSecrets":"`
+	tail := `"}`
+	padding := size - len(head) - len(middle) - len(tail)
+	document := head + strings.Repeat("m", padding/2) + middle + strings.Repeat("p", padding-padding/2) + tail
+	if len(document) != size {
+		t.Fatalf("the document is %d bytes, want %d", len(document), size)
+	}
+
+	if err := writer.Write(t.Context(), service, newUpdate(t, service, document)); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := os.ReadFile(f.KeychainItemPath(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != size || string(stored) != document {
+		t.Fatalf("the stand-in stored %d bytes, want the whole %d-byte document", len(stored), size)
+	}
+	sealed, err := standInReader(f).Read(t.Context(), service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sealed.WithPlaintext(func(readBack []byte) error {
+		if string(readBack) != document {
+			t.Errorf("the readback is %d bytes and differs from the %d-byte document written", len(readBack), size)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		fmt.Sprintf(`add-generic-password -U -a "%s" -s "%s" -X <REDACTED:%d>`, testutil.KeychainAccount, service, 2*size),
+	}
+	if diff := gocmp.Diff(want, f.SecurityLog()[:1]); diff != "" {
+		t.Errorf("argv log (-want +got):\n%s", diff)
+	}
+	for _, logged := range f.SecurityLog() {
+		if strings.Contains(logged, "synthetic-") {
+			t.Fatal("the document escaped into the stand-in's log")
+		}
+	}
+}
+
 func TestKeychainWriteRefusesBeforeSpawn(t *testing.T) {
 	tests := map[string]struct {
 		mutate func(*KeychainUpdate)
