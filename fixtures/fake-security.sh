@@ -38,9 +38,11 @@
 #
 # Every path knob (ITEMS, LOG, DUMP, DUMP_EXIT_IF, FIND_EXIT_IF, PIDFILE) must
 # name a place under AGCTL_FAKE_SECURITY_ROOT, the fixture directory the
-# harness exports. A path knob that is set while the root is not, or that
-# points outside the root or climbs out of it through "..", stops the
-# stand-in before it logs, creates or appends anything.
+# harness exports. A path knob that is set while the root is not, that
+# points outside the root or climbs out of it through "..", that is itself a
+# symbolic link, or whose nearest existing directory resolves outside the
+# root once its symbolic links are followed, stops the stand-in before it
+# logs, creates or appends anything.
 
 # confine_path stops the stand-in when the path knob named $1, whose value
 # is $2, is set and does not name a place under the fixture root.
@@ -71,6 +73,34 @@ confine_path() {
     "$root"/?*) ;;
     *)
         printf 'security: %s is outside AGCTL_FAKE_SECURITY_ROOT\n' "$1" >&2
+        exit 1
+        ;;
+    esac
+    # The prefix above holds for the path as spelled. A symbolic link below
+    # the root can still lead out of it, so the nearest directory that exists
+    # is compared again with both sides resolved physically. Components that
+    # do not exist yet cannot be links; a dangling link is refused on the way.
+    if [ -L "$2" ]; then
+        printf 'security: %s is a symbolic link\n' "$1" >&2
+        exit 1
+    fi
+    dir=${2%/*}
+    while [ -n "$dir" ] && [ ! -d "$dir" ]; do
+        if [ -L "$dir" ]; then
+            printf 'security: %s passes through a dangling symbolic link\n' "$1" >&2
+            exit 1
+        fi
+        dir=${dir%/*}
+    done
+    if ! physical_root=$(cd -P -- "$root" 2>/dev/null && pwd -P) ||
+        ! physical_dir=$(cd -P -- "${dir:-/}" 2>/dev/null && pwd -P); then
+        printf 'security: %s or AGCTL_FAKE_SECURITY_ROOT cannot be resolved\n' "$1" >&2
+        exit 1
+    fi
+    case "$physical_dir/" in
+    "${physical_root%/}"/*) ;;
+    *)
+        printf 'security: %s leads outside AGCTL_FAKE_SECURITY_ROOT through a symbolic link\n' "$1" >&2
         exit 1
         ;;
     esac

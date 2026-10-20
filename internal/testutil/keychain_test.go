@@ -692,6 +692,10 @@ func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
 		// escape returns its value, given the fixture root and a directory
 		// outside it.
 		escape func(root, outside string) string
+		// link, when set, is a symbolic link the case plants: its name
+		// under the root and its target, given the root and the outside
+		// directory.
+		link func(root, outside string) (name, target string)
 		// root overrides the exported fixture root when set.
 		root     *string
 		wantExit int
@@ -723,6 +727,35 @@ func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
 		"error: the log is the root's sibling sharing its prefix": {
 			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(root, _ string) string { return root + "-sibling/security.log" }, wantExit: 1,
 		},
+		"error: the log under a directory link that leads out of the root": {
+			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(root, _ string) string { return filepath.Join(root, "linked", "escaped.log") },
+			link:     func(root, outside string) (string, string) { return filepath.Join(root, "linked"), outside },
+			wantExit: 1,
+		},
+		"error: the items under a directory link that leads out of the root": {
+			knob: "AGCTL_FAKE_SECURITY_ITEMS", escape: func(root, _ string) string { return filepath.Join(root, "linked", "items") },
+			link:     func(root, outside string) (string, string) { return filepath.Join(root, "linked"), outside },
+			wantExit: 1,
+		},
+		"error: the log is itself a link to a file outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(root, _ string) string { return filepath.Join(root, "security-link.log") },
+			link: func(root, outside string) (string, string) {
+				return filepath.Join(root, "security-link.log"), filepath.Join(outside, "security.log")
+			},
+			wantExit: 1,
+		},
+		"error: the pidfile under a dangling link": {
+			knob: "AGCTL_FAKE_SECURITY_PIDFILE", escape: func(root, _ string) string { return filepath.Join(root, "dangling", "run", "security.pid") },
+			link: func(root, outside string) (string, string) {
+				return filepath.Join(root, "dangling"), filepath.Join(outside, "missing")
+			},
+			wantExit: 1,
+		},
+		"success: a link that stays inside the root": {
+			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(root, _ string) string { return filepath.Join(root, "inner-link", "security.log") },
+			link:     func(root, _ string) (string, string) { return filepath.Join(root, "inner-link"), root },
+			wantExit: 0,
+		},
 		"error: a path knob while no root is exported": {root: new(""), wantExit: 1},
 		"error: a relative root":                       {root: new("relative/root"), wantExit: 1},
 	}
@@ -733,6 +766,12 @@ func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
 				f := New(t).WithKeychain()
 				f.AllowWrite("svc-1")
 				outside := t.TempDir()
+				if tt.link != nil {
+					name, target := tt.link(f.Root(), outside)
+					if err := os.Symlink(target, name); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if tt.knob != "" {
 					f.Set(tt.knob, tt.escape(f.Root(), outside))
 				}
@@ -755,8 +794,15 @@ func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
 					t.Fatalf("the fake created the root's prefix sibling: %v", err)
 				}
 				if tt.wantExit == 0 {
-					if !itemHolds(f, "svc-1", "hello") || len(f.SecurityLog()) != 1 {
-						t.Fatalf("a confined write did not store its item and log one line")
+					if !itemHolds(f, "svc-1", "hello") {
+						t.Fatalf("a confined write did not store its item")
+					}
+					logPath := f.SecurityLogPath()
+					if tt.knob == "AGCTL_FAKE_SECURITY_LOG" {
+						logPath = tt.escape(f.Root(), outside)
+					}
+					if data, err := os.ReadFile(logPath); err != nil || strings.Count(string(data), "\n") != 1 {
+						t.Fatalf("a confined write did not log one line to %s: %q, %v", logPath, data, err)
 					}
 					return
 				}
