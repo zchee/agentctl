@@ -60,7 +60,7 @@ All entries below follow `agentctl claude`.
 | `accounts unforget <service>` | Make that service visible again. |
 | `import --from keychain [--dry-run]` | Record other Claude Code stores as read-only accounts. |
 | `doctor [--remove-stale PATH] [--yes]` | Inspect stores and locks; optionally remove one proven-stale lock. |
-| `use <id> [--new-only] [--json]` | Start Claude Code in an isolated session; `--new-only` is a synonym. |
+| `use <id> [--new-only] [--no-mcp-seed] [--json]` | Start Claude Code in an isolated session, [seeding MCP credentials](#mcp-credentials); `--new-only` is a synonym. |
 | `use --live <id> [--restart-remote-control] [--desktop] [--yes] [--json]` | Swap the live credential after consent. |
 | `use --undo [--restart-remote-control] [--desktop] [--yes] [--json]` | Reverse the most recent live swap. |
 | `use --forget <id> [--yes]` | Delete the generated session, not the account's credentials. |
@@ -74,6 +74,7 @@ All entries below follow `agentctl claude`.
 `status` also accepts repeatable `--account ID`, `--refresh`, `--no-cache`, and `--timeout DUR`
 (default `10s`). `import` accepts repeatable `--claude-config-dir DIR` to select vendor stores.
 Isolated `use`, `exec`, and `env` accept `--claude-config-dir DIR`, `--fresh-context`, and `--no-mcp`.
+Isolated `use` also accepts `--no-mcp-seed`; `use --live` and `use --undo` ignore both MCP flags.
 The directory override must be absolute and cannot be the live Claude configuration directory.
 `claude doctor` has no `--json` flag. Stale-lock removal requires `--yes`, an eligible directory,
 and an unchanged modification time across two samples 12 seconds apart; it does not break live locks.
@@ -97,10 +98,11 @@ account. Every keychain write agentctl makes (a live swap, an undo, a namespace 
 `status` saves into a namespace's item) writes the account's tokens together with every other
 top-level member of the destination item, as read again while agentctl holds the item's locks. An
 owned credential file never contributes such members, and a namespace whose item is absent receives
-none. A swap does not touch the `headers` and `env` of `mcpServers` entries in `~/.claude.json`, nor
-`mcp-needs-auth-cache.json` and `mcp-discovery-cache/`. An isolated session (`use <id>`) keeps its own
-MCP logins in its namespace's item; agentctl does not copy the live item's into it. Claude desktop app
-connectors use the app's own web session and are out of scope.
+none from a swap or a refresh. A swap does not touch the `headers` and `env` of `mcpServers` entries
+in `~/.claude.json`, nor `mcp-needs-auth-cache.json` and `mcp-discovery-cache/`. An isolated session
+(`use <id>`) keeps its own MCP logins in its namespace's item; agentctl copies the live item's members
+into it only once, when `use <id>` creates that item (see below). Claude desktop app connectors use
+the app's own web session and are out of scope.
 
 The write passes the whole document to `security add-generic-password -U` as hex in its argument
 list, for every write, large or small; Claude Code does the same for a write over 4032 bytes. While
@@ -133,6 +135,139 @@ row's keychain document holds, for the live row and every namespace row whose cr
 `status --json` carries the same count as the row member `mcp_oauth_entries`, null on other rows. A
 namespace row read from its credential file reports 0. No report, log, or audit entry carries a
 member's value.
+
+`use <id>` seeds the namespace's keychain item before it starts Claude Code. When the namespace has no
+item yet (`Claude Code-credentials-<sha8>`), agentctl creates it from the account in the owned
+credential file and every other top-level member of the live keychain item (`mcpOAuth`,
+`mcpOAuthClientConfig`, `pluginSecrets`). The isolated session then uses a seeded MCP token for a
+server it loads under the same name and configuration as the live session, without authorizing it
+again. Seeding happens once, when the item is created; agentctl never writes that item again, so a
+server authorized in the live session afterwards is authorized once inside the isolated session. The
+live item is only read, never locked or written. The seed is the same argv write as a swap, with the
+same exposure to process listings described above.
+
+Nothing is seeded when the namespace already has an item; that item is not even read. Claude Code
+creates the item at its first credential write in the namespace (an account refresh or an MCP
+authorization), so most namespaces in regular use are never seeded. A namespace whose credential file
+holds MCP state of its own (members beside `claudeAiOauth`, which Claude Code writes there when it
+cannot write the keychain) is not seeded either: the outcome is `own_state` and the file is left as it
+is. Both kinds authorize their servers inside the isolated session. Seeding is also skipped, and the
+session starts as before, when the keychain is not unlocked (including every host other than macOS),
+when `CLAUDE_SECURESTORAGE_CONFIG_DIR` is set in agentctl's own environment, when the live item
+cannot be read, when the namespace has no credential file (the note says to run
+`agentctl claude login`), when a pending credential write is parked there (the note says to run
+`agentctl claude status` first), when the seeded document would exceed the 256 KiB limit, and when
+the namespace lock is busy. `--no-mcp-seed` turns seeding off and keeps the MCP server
+configuration; its help reads "Do not copy the live keychain item's MCP credentials into the
+namespace item this session would otherwise create; the MCP symlink and --mcp-config stay."
+`--no-mcp` turns off both.
+
+Seeding adds at most 9000 ms before Claude Code starts: 3000 ms for the keychain calls before the
+write, two lock waits of 500 ms each, the 3000 ms hold in which the item is written, and a 2000 ms
+read-back. When the keychain calls before the write take longer than 3000 ms, seeding is skipped. A
+namespace that already has an item costs only the first keychain calls, within those 3000 ms. A busy
+or stale namespace lock is not waited out: seeding is skipped, and a later `use <id>` seeds. No
+seeding outcome stops the launch or changes the exit status of `use <id>`, which stays the child's;
+a note may name `credential_too_large`, but `use <id>` never exits 31. Only a signal stops the
+launch, as before.
+
+After a seed whose read-back is `equal`, agentctl removes the namespace's owned `.credentials.json`,
+as Claude Code's own migration does; the keychain item is then the namespace's only credential. Only
+that file is removed: a `.credentials.adopted.json` a swap parked for `use --undo` stays. To replace
+the credential, run `/login` inside `agentctl claude use <id>`. If the item is lost, the next
+`use <id>` skips with the `agentctl claude login` note, and `login` writes a new credential file.
+Removing the file also removes Claude Code's plaintext fallback: a session started while the
+keychain is locked (an ssh login, for one) has no credential until the keychain is unlocked.
+
+The file is kept when the write failed or was not confirmed (outcome `failed` or `unknown`, or a
+read-back other than `equal`), when the namespace is busy, when the file changed after the seed,
+when it cannot be removed, and when the run is interrupted. In each case but the failed or
+unconfirmed write, `note` and the stderr line carry a warning that names the file in full, for
+example:
+
+```text
+the owned credential file `<namespace directory>/.credentials.json` was kept: its namespace is busy; `agentctl claude use --live <id>` reads this file until it is removed
+```
+
+The part after "was kept:" is `its namespace is busy`,
+`its namespace lock could not be taken (<error class>)`, `it changed after the seed`, or
+`the run was interrupted before it was removed`; an unlink error reads
+`could not be removed (<error class>)` in place of "was kept: ...". `use --live <id>` reads the kept
+file and, while its token has not expired, does not look at the item; once the isolated session has
+refreshed the account, the file is stale and that swap installs a stale credential.
+`agentctl claude doctor` lists a namespace whose item exists, and the kept file beside it, in its
+attention section:
+
+```text
+  Claude Code-credentials-<sha8>  a keychain item exists for this namespace (a Claude Code session migrated it or `agentctl claude use` seeded it), and agentctl will not write the file again
+  <namespace directory>/.credentials.json  is still there beside the keychain item: Claude Code reads it only when the keychain is unavailable, and `agentctl claude use --live <id>` reads it until it is removed; remove it by hand once `agentctl claude status` shows the item holds the account
+```
+
+With `--json`, the `use <id>` document gains `mcp_seed`, which is `null` under `--no-mcp` or
+`--no-mcp-seed`:
+
+```json
+"mcp_seed": {
+  "target": "Claude Code-credentials-1a2b3c4d",
+  "outcome": "seeded",
+  "path": "absent",
+  "seeded_members": [{"name": "mcpOAuth", "entries": 2}, {"name": "pluginSecrets", "entries": null}],
+  "siblings_readback": "equal",
+  "transport": "argv",
+  "owned_file": "removed",
+  "note": null
+}
+```
+
+`outcome` is `seeded`, `unchanged` (the item is present, or the live item has no other members),
+`own_state`, `skipped`, `discarded` (something changed while agentctl held the namespace lock, such
+as the item being created or the file rewritten meanwhile; nothing written), `failed` (the write
+failed), or `unknown` (the write was not confirmed). Only `seeded`, `failed` and `unknown` issued a
+write. `path` is `absent`, `present`, or `null` when seeding ended before the item was looked up.
+`seeded_members` names each copied member and, for an object, its entry count, and is `[]` when no
+write was issued. `siblings_readback` and `transport` mean what they mean for a swap and are `null`
+when no write was issued. `owned_file` is `removed` or `kept`, and `null` when no write was issued.
+`note` carries the reason for a skip or a discard and the kept-file warning.
+
+Whether or not `--json` is given, seeding prints at most one line on stderr before the launch,
+because stdout belongs to Claude Code. A seed prints
+
+```text
+seeded mcpOAuth (2 entries), pluginSecrets into Claude Code-credentials-<sha8>; removed the owned credential file
+```
+
+A member that is an object shows its entry count, `(1 entry)` for one. When the file was kept, the
+last clause is the warning above, or `kept the owned credential file`, followed by `: <note>` when
+there is one, for a seed whose read-back is not `equal`. Any other outcome prints
+`MCP credentials not seeded: <note>`, except `unchanged`, either flag, a keychain that is not
+unlocked, and a set `CLAUDE_SECURESTORAGE_CONFIG_DIR`, which print nothing. A seed that took the
+namespace lock appends a `seed_write` entry to `keychain-writes.jsonl` with member names, never
+values; a skip before the lock appends nothing. A seed is not a swap: `use --undo` never selects it.
+
+Seeding copies the MCP grants; it does not move them. The live item and the namespace item then hold
+the same access and refresh token for each seeded server, and the two stores change independently.
+Where a server rotates refresh tokens, the first store to refresh gets the new token and the other
+store's copy stops working at its next refresh: that session asks for authorization again. Where the
+server also detects refresh-token reuse, the stale copy's attempt can revoke the grant for both
+stores. Clearing a server's authentication in either session revokes the shared tokens at the
+server, and the other session's copy fails at its next use. The sharing is limited to the servers
+copied when the item was created. `--no-mcp-seed` keeps the servers configured without sharing a
+grant.
+
+While a namespace's item is listed in the keychain, agentctl does not write its owned file.
+`agentctl claude login` for that account is refused after the sign-in, because `login` learns the
+account only from its token exchange; the tokens just obtained are discarded, not stored.
+`agentctl claude accounts relocate <id>` is refused before anything moves, because the item is keyed
+to the namespace directory. For both, the remedy is `/login` inside `agentctl claude use <id>`,
+which replaces the item's credential. After the owned file was removed, `use --live <id>` reports
+that the account's credential lives in its keychain item and that swapping it in is not supported
+yet; nothing is written. While a seeded account is the live one, `use --live <other>` is refused with
+`migrated`, because the displaced credential cannot be written back to a namespace whose item
+shadows its file. These two `use --live` refusals applied before only to namespaces Claude Code had
+migrated; seeding makes them start at the first `use <id>`. A credential write that bypasses the
+namespace lock while agentctl creates the item can leave the item holding the older account
+credential; Claude Code's next account refresh may then fail, and `/login` inside
+`agentctl claude use <id>` is the remedy.
 
 #### Remote Control
 
