@@ -252,7 +252,7 @@ func loginProcess(ctx context.Context, ts *testscript.TestScript, mode string, w
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Args[0] = "agentctl"
 	cmd.Dir = ts.MkAbs(".")
-	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "AGENTCTL_CONFIG_DIR", "AGENTCTL_LOG", "AGENTCTL_NO_BROWSER", "AGENTCTL_CLAUDE_TOKEN_URL", "AGENTCTL_CLAUDE_AUTHORIZE_URL", "AGENTCTL_CLAUDE_PROFILE_URL", "AGENTCTL_SECURITY_BIN", "AGCTL_FAKE_SECURITY_LOG", "AGCTL_FAKE_SECURITY_ITEMS", "AGCTL_FAKE_SECURITY_DUMP"} {
+	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "AGENTCTL_CONFIG_DIR", "AGENTCTL_LOG", "AGENTCTL_NO_BROWSER", "AGENTCTL_CLAUDE_TOKEN_URL", "AGENTCTL_CLAUDE_AUTHORIZE_URL", "AGENTCTL_CLAUDE_PROFILE_URL", "AGENTCTL_SECURITY_BIN", "AGCTL_FAKE_SECURITY_ROOT", "AGCTL_FAKE_SECURITY_LOG", "AGCTL_FAKE_SECURITY_ITEMS", "AGCTL_FAKE_SECURITY_DUMP"} {
 		cmd.Env = append(cmd.Env, key+"="+ts.Getenv(key))
 	}
 	if mode == "signal" {

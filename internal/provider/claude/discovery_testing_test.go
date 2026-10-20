@@ -50,7 +50,7 @@ const otherUUID = "33333333-3333-4333-8333-333333333333"
 func keychainWorld(t *testing.T) *testutil.Fixture {
 	t.Helper()
 	fixture := testutil.New(t).WithKeychain()
-	for _, key := range []string{"AGENTCTL_SECURITY_BIN", "AGCTL_FAKE_SECURITY_LOG", "AGCTL_FAKE_SECURITY_ITEMS", "AGCTL_FAKE_SECURITY_DUMP", "USER", "LOGNAME"} {
+	for _, key := range []string{"AGENTCTL_SECURITY_BIN", "AGCTL_FAKE_SECURITY_ROOT", "AGCTL_FAKE_SECURITY_LOG", "AGCTL_FAKE_SECURITY_ITEMS", "AGCTL_FAKE_SECURITY_DUMP", "USER", "LOGNAME"} {
 		value, ok := fixture.Lookup(key)
 		if !ok {
 			t.Fatalf("the fixture sets no %s", key)

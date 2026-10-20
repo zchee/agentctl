@@ -60,7 +60,14 @@ func testController(t *testing.T) *signals.Controller {
 // environment when it is built.
 func standInWriter(t *testing.T) (*KeychainWriter, *testutil.Fixture) {
 	t.Helper()
-	f := fakeKeychain(t)
+	return standInWriterOn(t, fakeKeychain(t))
+}
+
+// standInWriterOn is standInWriter over a stand-in already installed, for a
+// test that must set a knob naming a path under the fixture's root before
+// the writer snapshots the child environment.
+func standInWriterOn(t *testing.T, f *testutil.Fixture) (*KeychainWriter, *testutil.Fixture) {
+	t.Helper()
 	t.Setenv(keychainBackendEnv, "")
 	t.Setenv(securityBinEnv, f.SecurityBin())
 	t.Setenv("USER", testutil.KeychainAccount)
@@ -384,12 +391,13 @@ func TestKeychainWriteExitZeroNeedsACleanWait(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			pidfile := filepath.Join(t.TempDir(), "security.pid")
+			f := fakeKeychain(t)
+			pidfile := filepath.Join(f.Root(), "security.pid")
 			t.Setenv("AGCTL_FAKE_SECURITY_PIDFILE", pidfile)
 			if tt.holdPipes {
 				t.Setenv("AGCTL_FAKE_SECURITY_HOLD_PIPES", "5")
 			}
-			writer, f := standInWriter(t)
+			writer, _ := standInWriterOn(t, f)
 			f.AllowWrite("target")
 
 			err := writer.Write(t.Context(), "target", newUpdate(t, "target", "new grant"))
@@ -490,10 +498,11 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			pidfile := filepath.Join(t.TempDir(), "security.pid")
+			f := fakeKeychain(t)
+			pidfile := filepath.Join(f.Root(), "security.pid")
 			t.Setenv("AGCTL_FAKE_SECURITY_PIDFILE", pidfile)
 			t.Setenv("AGCTL_FAKE_WRITE_DELAY_MS", "5000")
-			writer, f := standInWriter(t)
+			writer, _ := standInWriterOn(t, f)
 			f.AllowWrite("target").KeychainItem("target", "old grant")
 			writer.budget = 10 * time.Second
 

@@ -266,7 +266,8 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	for key, value := range map[string]string{
 		"AGENTCTL_CONFIG_DIR": configDir, "HOME": home, "USER": KeychainAccount, "LOGNAME": KeychainAccount,
 		"AGENTCTL_KEYCHAIN_BACKEND": "", "AGCTL_FAKE_SECURITY_ITEMS": items, "AGCTL_FAKE_SECURITY_DUMP": filepath.Join(root, "dump"), "AGCTL_FAKE_SECURITY_LOG": filepath.Join(root, "security.log"),
-		"AGCTL_FAKE_SECURITY_WRITE_EXIT": "", "AGCTL_FAKE_SECURITY_FIND_EXIT": "", "AGCTL_FAKE_SECURITY_SLEEP": "", "AGCTL_FAKE_SECURITY_STDERR": "", "CLAUDE_CODE_OAUTH_TOKEN": "", "CLAUDE_CONFIG_DIR": "", "AGENTCTL_FAULT": "", "AGENTCTL_FAULT_RESUME": filepath.Join(root, "resume"),
+		"AGCTL_FAKE_SECURITY_WRITE_EXIT": "", "AGCTL_FAKE_SECURITY_FIND_EXIT": "", "AGCTL_FAKE_SECURITY_SLEEP": "", "AGCTL_FAKE_SECURITY_STDERR": "",
+		"AGCTL_FAKE_WRITE_DELAY_MS": "", "AGCTL_FAKE_WRITE_DELAY_AFTER_MS": "", "AGCTL_FAKE_SECURITY_HOLD_PIPES": "", "AGCTL_FAKE_SECURITY_PIDFILE": "", "AGCTL_FAKE_SECURITY_FIND_EXIT_IF": "", "AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE": "", "CLAUDE_CODE_OAUTH_TOKEN": "", "CLAUDE_CONFIG_DIR": "", "AGENTCTL_FAULT": "", "AGENTCTL_FAULT_RESUME": filepath.Join(root, "resume"),
 		"CLAUDE_SECURESTORAGE_CONFIG_DIR": ExportSpelling(ownerDir), "INCOMING": incoming, "OWNER": owner, "SWAP_ROOT": root, "SWAP_STORE": ownerDir, "SWAP_AUDIT": auditPath,
 	} {
 		ts.Setenv(key, value)

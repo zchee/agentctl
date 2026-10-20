@@ -581,3 +581,250 @@ func TestWithCodexInstallsTheScript(t *testing.T) {
 		t.Fatalf("CodexHome(%q) = %q escapes the fixture", "scratch", dir)
 	}
 }
+
+// installedShells returns every POSIX shell on this host that the fake can
+// be run under, so its arithmetic and parameter expansion are checked under
+// dash (Linux's /bin/sh) as well as bash and macOS's /bin/sh.
+func installedShells(t *testing.T) []string {
+	t.Helper()
+	var shells []string
+	for _, shell := range []string{"/bin/sh", "/bin/dash", "/bin/bash"} {
+		if _, err := os.Stat(shell); err == nil {
+			shells = append(shells, shell)
+		}
+	}
+	if len(shells) == 0 {
+		t.Fatalf("no POSIX shell found to run the fake under")
+	}
+	return shells
+}
+
+// securityUnder returns an unstarted command that runs the installed fake
+// through shell with args, in the fixture's environment.
+func securityUnder(t *testing.T, f *Fixture, shell string, args ...string) *exec.Cmd {
+	t.Helper()
+	return f.Apply(exec.CommandContext(t.Context(), shell, append([]string{f.SecurityBin()}, args...)...))
+}
+
+// traceSleep puts a sleep stand-in first on the fixture's PATH that records
+// its argument and returns at once, and returns the trace file. It turns
+// the fake's delays into an exact record of what it asked to sleep, instead
+// of a lower bound measured on a clock.
+func traceSleep(t *testing.T, f *Fixture) string {
+	t.Helper()
+	dir := filepath.Join(f.Root(), "sleep-trace-bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	trace := filepath.Join(f.Root(), "sleep-trace")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$SLEEP_TRACE\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.Set("SLEEP_TRACE", trace)
+	f.Set("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return trace
+}
+
+// traceLines returns the lines of a trace file, nil when it is absent.
+func traceLines(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+}
+
+func TestFakeSecurityReadsDelayCountsAsDecimal(t *testing.T) {
+	tests := map[string]struct {
+		knob      string
+		value     string
+		pidfile   bool
+		wantSleep []string
+		wantBeats int
+	}{
+		"success: a zero-padded delay is eight milliseconds, not an octal error": {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "08", wantSleep: []string{"0.008"}},
+		"success: a zero-padded ten is ten, not octal eight":                     {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "010", wantSleep: []string{"0.010"}},
+		"success: an all-zero delay is zero":                                     {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "000", wantSleep: []string{"0.000"}},
+		"success: a zero-padded delay after storing is decimal":                  {knob: "AGCTL_FAKE_WRITE_DELAY_AFTER_MS", value: "0019", wantSleep: []string{"0.019"}},
+		"success: a zero-padded hold is decimal seconds":                         {knob: "AGCTL_FAKE_SECURITY_HOLD_PIPES", value: "08", wantSleep: []string{"8"}},
+		"success: a zero-padded delay with a heartbeat is decimal":               {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "08", pidfile: true, wantSleep: []string{"0.008"}, wantBeats: 1},
+		"success: a zero-padded ten with a heartbeat is one whole step":          {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "010", pidfile: true, wantSleep: []string{"0.01"}, wantBeats: 1},
+		"success: an all-zero delay with a heartbeat neither beats nor sleeps":   {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "000", pidfile: true},
+		"success: one millisecond still beats once and sleeps it":                {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "1", pidfile: true, wantSleep: []string{"0.001"}, wantBeats: 1},
+		"success: nine milliseconds are one beat and the remainder":              {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "9", pidfile: true, wantSleep: []string{"0.009"}, wantBeats: 1},
+		"success: ten milliseconds are one whole step":                           {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "10", pidfile: true, wantSleep: []string{"0.01"}, wantBeats: 1},
+		"success: nineteen milliseconds are a step and a nine millisecond rest":  {knob: "AGCTL_FAKE_WRITE_DELAY_MS", value: "19", pidfile: true, wantSleep: []string{"0.01", "0.009"}, wantBeats: 2},
+		"success: a remainder after storing is slept too":                        {knob: "AGCTL_FAKE_WRITE_DELAY_AFTER_MS", value: "25", pidfile: true, wantSleep: []string{"0.01", "0.01", "0.005"}, wantBeats: 3},
+	}
+
+	for _, shell := range installedShells(t) {
+		for name, tt := range tests {
+			t.Run(filepath.Base(shell)+"/"+name, func(t *testing.T) {
+				f := New(t).WithKeychain()
+				f.AllowWrite("svc-1")
+				trace := traceSleep(t, f)
+				f.Set(tt.knob, tt.value)
+				pidfile := filepath.Join(f.Root(), "security.pid")
+				if tt.pidfile {
+					f.Set("AGCTL_FAKE_SECURITY_PIDFILE", pidfile)
+				}
+
+				out := Run(t, securityUnder(t, f, shell, "add-generic-password", "-U", "-a", KeychainAccount, "-s", "svc-1", "-X", helloHex))
+				if code := out.ExitCode(t); code != 0 {
+					t.Fatalf("the write exited %d; stderr:\n%s", code, out.Stderr)
+				}
+				if out.Stderr != "" {
+					t.Fatalf("the write printed diagnostics, so a count was not plain arithmetic:\n%s", out.Stderr)
+				}
+				if diff := gocmp.Diff(tt.wantSleep, traceLines(t, trace)); diff != "" {
+					t.Fatalf("sleeps the fake asked for (-want +got):\n%s", diff)
+				}
+				beats, ok := readCount(pidfile + ".heartbeat")
+				if tt.wantBeats == 0 && ok {
+					t.Fatalf("the heartbeat holds %d, want no heartbeat file", beats)
+				}
+				if tt.wantBeats != 0 && (!ok || beats != tt.wantBeats) {
+					t.Fatalf("the heartbeat holds %d (readable %t), want %d", beats, ok, tt.wantBeats)
+				}
+				if !itemHolds(f, "svc-1", "hello") {
+					t.Fatalf("the write did not store the decoded payload")
+				}
+			})
+		}
+	}
+}
+
+func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
+	tests := map[string]struct {
+		// knob is the variable to point elsewhere, or "" for none.
+		knob string
+		// escape returns its value, given the fixture root and a directory
+		// outside it.
+		escape func(root, outside string) string
+		// root overrides the exported fixture root when set.
+		root     *string
+		wantExit int
+	}{
+		"success: every path knob under the root": {wantExit: 0},
+		"error: the log outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(_, outside string) string { return filepath.Join(outside, "security.log") }, wantExit: 1,
+		},
+		"error: the items outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_ITEMS", escape: func(_, outside string) string { return filepath.Join(outside, "items") }, wantExit: 1,
+		},
+		"error: the dump outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_DUMP", escape: func(_, outside string) string { return filepath.Join(outside, "dump") }, wantExit: 1,
+		},
+		"error: the dump marker outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_DUMP_EXIT_IF", escape: func(_, outside string) string { return filepath.Join(outside, "marker") }, wantExit: 1,
+		},
+		"error: the find marker outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_FIND_EXIT_IF", escape: func(_, outside string) string { return filepath.Join(outside, "marker") }, wantExit: 1,
+		},
+		"error: the pidfile outside the root": {
+			knob: "AGCTL_FAKE_SECURITY_PIDFILE", escape: func(_, outside string) string { return filepath.Join(outside, "security.pid") }, wantExit: 1,
+		},
+		"error: the log climbs out of the root through a dot-dot segment": {
+			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(root, outside string) string {
+				return root + "/../" + filepath.Base(filepath.Dir(outside)) + "/" + filepath.Base(outside) + "/security.log"
+			}, wantExit: 1,
+		},
+		"error: the log is the root's sibling sharing its prefix": {
+			knob: "AGCTL_FAKE_SECURITY_LOG", escape: func(root, _ string) string { return root + "-sibling/security.log" }, wantExit: 1,
+		},
+		"error: a path knob while no root is exported": {root: new(""), wantExit: 1},
+		"error: a relative root":                       {root: new("relative/root"), wantExit: 1},
+	}
+
+	for _, shell := range installedShells(t) {
+		for name, tt := range tests {
+			t.Run(filepath.Base(shell)+"/"+name, func(t *testing.T) {
+				f := New(t).WithKeychain()
+				f.AllowWrite("svc-1")
+				outside := t.TempDir()
+				if tt.knob != "" {
+					f.Set(tt.knob, tt.escape(f.Root(), outside))
+				}
+				if tt.root != nil {
+					f.Set("AGCTL_FAKE_SECURITY_ROOT", *tt.root)
+				}
+
+				out := Run(t, securityUnder(t, f, shell, "add-generic-password", "-U", "-a", KeychainAccount, "-s", "svc-1", "-X", helloHex))
+				if code := out.ExitCode(t); code != tt.wantExit {
+					t.Fatalf("the write exited %d, want %d; stderr:\n%s", code, tt.wantExit, out.Stderr)
+				}
+				entries, err := os.ReadDir(outside)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("the fake created %d entries outside the fixture root", len(entries))
+				}
+				if _, err := os.Stat(f.Root() + "-sibling"); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("the fake created the root's prefix sibling: %v", err)
+				}
+				if tt.wantExit == 0 {
+					if !itemHolds(f, "svc-1", "hello") || len(f.SecurityLog()) != 1 {
+						t.Fatalf("a confined write did not store its item and log one line")
+					}
+					return
+				}
+				if log := f.SecurityLog(); len(log) != 0 {
+					t.Fatalf("a refused knob still logged %d lines", len(log))
+				}
+				if items := f.KeychainItems(); len(items) != 0 {
+					t.Fatalf("a refused knob still stored %d items", len(items))
+				}
+				if !strings.Contains(out.Stderr, "AGCTL_FAKE_SECURITY_") {
+					t.Fatalf("the refusal does not name the knob; stderr:\n%s", out.Stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestFakeSecurityFailsReadsOnceTheMarkerExists(t *testing.T) {
+	tests := map[string]struct {
+		code     string
+		marked   bool
+		wantExit int
+	}{
+		"success: reads pass while the marker is absent":   {wantExit: 0},
+		"error: a read fails with 36 once it exists":       {marked: true, wantExit: 36},
+		"error: a read fails with the chosen code instead": {marked: true, code: "1", wantExit: 1},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := New(t).WithKeychain()
+			f.KeychainItem("svc-1", "the item bytes")
+			marker := filepath.Join(f.Root(), "read-fails")
+			f.Set("AGCTL_FAKE_SECURITY_FIND_EXIT_IF", marker)
+			if tt.code != "" {
+				f.Set("AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE", tt.code)
+			}
+			if tt.marked {
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			cmd := f.Apply(exec.CommandContext(t.Context(), f.SecurityBin(), "find-generic-password", "-s", "svc-1", "-a", KeychainAccount, "-w"))
+			out := Run(t, cmd)
+			if code := out.ExitCode(t); code != tt.wantExit {
+				t.Fatalf("the read exited %d, want %d", code, tt.wantExit)
+			}
+			if tt.wantExit == 0 && out.Stdout != "the item bytes" {
+				t.Fatalf("the read served %d bytes, want the planted item", len(out.Stdout))
+			}
+			if tt.wantExit != 0 && out.Stdout != "" {
+				t.Fatalf("a failed read still served %d bytes", len(out.Stdout))
+			}
+		})
+	}
+}

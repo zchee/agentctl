@@ -79,6 +79,9 @@ func ScriptSetup(env *testscript.Env) error {
 	env.Setenv("AGENTCTL_NO_BROWSER", "1")
 	env.Setenv("AGENTCTL_SECURITY_BIN", securityBin)
 	env.Setenv("AGENTCTL_CODEX_BIN", codexBin)
+	// Every path the fake security takes from a knob must lie under this
+	// script's own work directory; the stand-in refuses any other.
+	env.Setenv("AGCTL_FAKE_SECURITY_ROOT", env.WorkDir)
 	env.Setenv("AGCTL_FAKE_SECURITY_LOG", filepath.Join(root, "security-argv.log"))
 	env.Setenv("AGCTL_FAKE_SECURITY_ITEMS", filepath.Join(root, "keychain-items"))
 	env.Setenv("AGCTL_FAKE_SECURITY_DUMP", dumpPath)

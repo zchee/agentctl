@@ -1,0 +1,43 @@
+# Every fixture command resets the fake security's write and read knobs, so a
+# delay, a pipe holder, a pidfile or a read-failure marker one case sets
+# never leaks into the next case of the same script.
+
+# a_swap_fixture_clears_the_write_and_read_knobs_an_earlier_case_set
+mkdir stale
+cp marker stale/read-fails
+env AGCTL_FAKE_WRITE_DELAY_MS=5000
+env AGCTL_FAKE_WRITE_DELAY_AFTER_MS=5000
+env AGCTL_FAKE_SECURITY_HOLD_PIPES=30
+env AGCTL_FAKE_SECURITY_PIDFILE=$WORK/stale/security.pid
+env AGCTL_FAKE_SECURITY_FIND_EXIT_IF=$WORK/stale/read-fails
+env AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE=36
+swapfixture namespace
+exec agentctl claude use $INCOMING --live --yes --json
+stdout '"outcome": "applied"'
+! stdout SENTINEL
+! stderr SENTINEL
+swap-check 1 0 0
+swap-audit applied 0
+! exists stale/security.pid
+! exists stale/security.pid.heartbeat
+
+# a_refresh_fixture_clears_the_write_and_read_knobs_an_earlier_case_set
+env AGCTL_FAKE_WRITE_DELAY_MS=5000
+env AGCTL_FAKE_WRITE_DELAY_AFTER_MS=5000
+env AGCTL_FAKE_SECURITY_HOLD_PIPES=30
+env AGCTL_FAKE_SECURITY_PIDFILE=$WORK/stale/security.pid
+env AGCTL_FAKE_SECURITY_FIND_EXIT_IF=$WORK/stale/read-fails
+env AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE=36
+refreshfixture migrated
+exec agentctl claude status --json --refresh --account owner@example.com
+! stderr 'sk-ant|SENTINEL'
+refresh-check row stdout state ok
+refresh-check row stdout lock_state migrated_refreshed
+refresh-calls 1 1 0
+refresh-check stored rotated
+refresh-check write
+! exists stale/security.pid
+! exists stale/security.pid.heartbeat
+
+-- marker --
+present

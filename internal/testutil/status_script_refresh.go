@@ -66,6 +66,7 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 		"AGENTCTL_CONFIG_DIR": filepath.Join(root, "config"), "HOME": filepath.Join(root, "home"), "USER": KeychainAccount, "LOGNAME": KeychainAccount,
 		"AGCTL_FAKE_SECURITY_ITEMS": filepath.Join(root, "items"), "AGCTL_FAKE_SECURITY_DUMP": filepath.Join(root, "dump"), "AGCTL_FAKE_SECURITY_LOG": filepath.Join(root, "security.log"),
 		"AGCTL_FAKE_SECURITY_PREFLIGHT_EXIT": "0", "AGCTL_FAKE_SECURITY_FIND_EXIT": "", "AGCTL_FAKE_SECURITY_SLEEP": "", "AGCTL_FAKE_SECURITY_WRITE_EXIT": "",
+		"AGCTL_FAKE_WRITE_DELAY_MS": "", "AGCTL_FAKE_WRITE_DELAY_AFTER_MS": "", "AGCTL_FAKE_SECURITY_HOLD_PIPES": "", "AGCTL_FAKE_SECURITY_PIDFILE": "", "AGCTL_FAKE_SECURITY_FIND_EXIT_IF": "", "AGCTL_FAKE_SECURITY_FIND_EXIT_IF_CODE": "",
 		"AGENTCTL_FAULT": "", "AGENTCTL_LOG": "warn", "AGENTCTL_FAULT_RESUME": filepath.Join(root, "resume"), "CLAUDE_SECURESTORAGE_CONFIG_DIR": "", "CLAUDE_CONFIG_DIR": "", "REFRESH_NS": ns, "REFRESH_LOCK": lock, "REFRESH_ITEM": item, "REFRESH_ROOT": root,
 	} {
 		ts.Setenv(key, value)

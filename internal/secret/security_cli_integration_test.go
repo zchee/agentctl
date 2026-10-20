@@ -45,6 +45,7 @@ const fakeToken = "sk-ant-oat01-FAKE-NOT-A-REAL-TOKEN"
 func fakeKeychain(t *testing.T) *testutil.Fixture {
 	t.Helper()
 	f := testutil.New(t).WithKeychain()
+	t.Setenv("AGCTL_FAKE_SECURITY_ROOT", f.Root())
 	t.Setenv("AGCTL_FAKE_SECURITY_LOG", f.SecurityLogPath())
 	t.Setenv("AGCTL_FAKE_SECURITY_ITEMS", f.ItemsDir())
 	t.Setenv("AGCTL_FAKE_SECURITY_DUMP", f.KeychainDumpPath())

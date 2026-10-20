@@ -67,6 +67,7 @@ func (f *Fixture) WithKeychain() *Fixture {
 	f.installScript("fake-security.sh", f.SecurityBin())
 	f.Unset("AGENTCTL_KEYCHAIN_BACKEND")
 	f.Set("AGENTCTL_SECURITY_BIN", f.SecurityBin())
+	f.Set("AGCTL_FAKE_SECURITY_ROOT", f.root)
 	f.Set("AGCTL_FAKE_SECURITY_LOG", f.SecurityLogPath())
 	f.Set("AGCTL_FAKE_SECURITY_ITEMS", f.ItemsDir())
 	f.Set("AGCTL_FAKE_SECURITY_DUMP", f.KeychainDumpPath())
