@@ -155,6 +155,11 @@ type JSONRow struct {
 	// token — an email address when the occupying blob named one, an
 	// account UUID otherwise.
 	OccupiedBy *string `json:"occupied_by"`
+	// MCPOAuthEntries is how many MCP servers the row's keychain document
+	// holds OAuth tokens for: the live row and every namespace row whose
+	// credential was read, 0 when the document holds none; nil on every
+	// other row. A count only, never a server name or a token.
+	MCPOAuthEntries *int `json:"mcp_oauth_entries"`
 }
 
 // JSONWindow is one usage window of the report.

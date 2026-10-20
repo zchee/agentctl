@@ -566,6 +566,16 @@ func TestStateCellJoinsItsNotesWithASemicolon(t *testing.T) {
 			row:  StatusRow{State: "expired", Note: "refresh refused", SameIdentityAsLive: true},
 			want: "expired (refresh refused; same identity as live)",
 		},
+		"success: a zero MCP OAuth count is still printed": {
+			// Zero is an answer — the document holds no MCP tokens — and
+			// differs from a row that reports no count at all.
+			row:  StatusRow{State: "ok", MCPOAuthEntries: new(0)},
+			want: "ok (mcp_oauth_entries=0)",
+		},
+		"success: the MCP OAuth count follows every other note": {
+			row:  StatusRow{State: "ok", Note: "keychain service `Claude Code-credentials`", SameIdentityAsLive: true, MCPOAuthEntries: new(2)},
+			want: "ok (keychain service `Claude Code-credentials`; same identity as live; mcp_oauth_entries=2)",
+		},
 	}
 
 	for name, tt := range tests {

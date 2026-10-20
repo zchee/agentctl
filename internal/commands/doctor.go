@@ -28,6 +28,7 @@ import (
 
 	"github.com/zchee/agentctl/internal/config"
 	"github.com/zchee/agentctl/internal/provider/claude"
+	"github.com/zchee/agentctl/internal/render"
 	"github.com/zchee/agentctl/internal/runtime/proc"
 	"github.com/zchee/agentctl/internal/secret"
 	"github.com/zchee/agentctl/internal/usage"
@@ -65,6 +66,8 @@ func (d *Doctor) Report(ctx context.Context) error {
 	readCtx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
 	found := claude.Discover(readCtx, registry, d.Paths, d.Reader, d.Env)
 	cancel()
+	// The report is the last holder of every credential discovery parsed.
+	defer wipeRows(found.Rows)
 	out := []string{
 		"store",
 		fmt.Sprintf("  config dir       %s", d.Paths.ConfigDir()),
@@ -88,7 +91,13 @@ func (d *Doctor) Report(ctx context.Context) error {
 		if row.Record.Email != nil {
 			email = *row.Record.Email
 		}
-		out = append(out, fmt.Sprintf("  %s  %s  kind=%s source=%s state=%s", row.ID, email, row.Record.Kind.Name(), row.Source.Name(), row.State.Label()))
+		line := fmt.Sprintf("  %s  %s  kind=%s source=%s state=%s", row.ID, email, row.Record.Kind.Name(), row.Source.Name(), row.State.Label())
+		if reportsMCPOAuth(row) {
+			if entries := mcpOAuthEntries(ctx, row.Credentials); entries != nil {
+				line += fmt.Sprintf(" %s=%d", render.MCPOAuthEntriesLabel, *entries)
+			}
+		}
+		out = append(out, line)
 		if c := row.Credentials; c != nil {
 			refresh := "not recorded"
 			now := time.Now()

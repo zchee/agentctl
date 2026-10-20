@@ -15,6 +15,7 @@
 package render
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,11 @@ import (
 // both sessions stay valid. What the reader needs is the reason the same
 // address appears twice.
 const SameIdentityNote = "same identity as live"
+
+// MCPOAuthEntriesLabel names the MCP OAuth entry count wherever a row
+// prints it, so the table, the doctor report and the JSON member spell it
+// the same way.
+const MCPOAuthEntriesLabel = "mcp_oauth_entries"
 
 // LiveAndOwnedKind is the Kind cell of a row two rows were folded into:
 // the live credential first, because that is the one already in use,
@@ -78,20 +84,29 @@ type StatusRow struct {
 	// Kind is carried on every row but printed only when the identity
 	// column is requested, so the default table keeps its fixed columns.
 	Kind string
+	// MCPOAuthEntries is how many MCP servers the row's keychain document
+	// holds OAuth tokens for, nil when the row is not one whose document
+	// can carry them or no credential was read. A count only: the tokens
+	// themselves never reach a row.
+	MCPOAuthEntries *int
 }
 
 // StateCell returns the state column's full text: the state, then its
-// notes in parentheses. Two notes are joined with a semicolon rather
-// than one replacing the other: a row can be both expired for a stated
-// reason and the live account's twin, and dropping either would answer
-// half the reader's question.
+// notes in parentheses. Notes are joined with a semicolon rather than
+// one replacing another: a row can be both expired for a stated reason
+// and the live account's twin, and dropping either would answer half the
+// reader's question. The MCP OAuth entry count comes last, as a plain
+// count beside the notes that explain the state.
 func (r *StatusRow) StateCell() string {
-	notes := make([]string, 0, 2)
+	notes := make([]string, 0, 3)
 	if r.Note != "" {
 		notes = append(notes, r.Note)
 	}
 	if r.SameIdentityAsLive {
 		notes = append(notes, SameIdentityNote)
+	}
+	if r.MCPOAuthEntries != nil {
+		notes = append(notes, MCPOAuthEntriesLabel+"="+strconv.Itoa(*r.MCPOAuthEntries))
 	}
 	if len(notes) == 0 {
 		return r.State

@@ -151,6 +151,11 @@
         "occupied_by": {
           "description": "Who holds this row's keychain item, when a hot-swap put another identity there; null on every other row. The opposite fact from `same_identity_as`: that one says two rows describe one account, this says the item this row's namespace names is not this row's, so the credentials reported here were read from the adopted copy beside it. An email address when the occupying credential named one, an account UUID otherwise; never token material. Additive, and deliberately absent from `required`: a consumer written against an earlier version 1 document stays valid.",
           "type": ["string", "null"]
+        },
+        "mcp_oauth_entries": {
+          "description": "How many MCP servers the keychain document behind this row holds OAuth tokens for: the number of entries of its `mcpOAuth` member, 0 when it has none. Set on the live row and on every namespace row whose credential was read; null on every other row, and on a row whose credential could not be read. A credential file never holds MCP tokens, so a namespace row read from its file reports 0. A count only; no server name, token or other value of the member is ever reported. Additive, and deliberately absent from `required`: a consumer written against an earlier version 1 document stays valid.",
+          "type": ["integer", "null"],
+          "minimum": 0
         }
       }
     },

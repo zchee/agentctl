@@ -138,6 +138,9 @@ type rowOutcome struct {
 	// sameIdentityAsLive reports whether an owned row names the same
 	// account and organization pair as the live credential.
 	sameIdentityAsLive bool
+	// mcpOAuthEntries is the MCP OAuth entry count of the credential
+	// discovery read for this row, nil when the row reports none.
+	mcpOAuthEntries *int
 }
 
 // Run runs the whole status command: resolve the store, discover,
@@ -172,6 +175,11 @@ func (s *Status) Run(ctx context.Context, globals cli.Globals, opts cli.ClaudeSt
 	// row: they are the same answer for every account, and asking a
 	// dozen times would mean a dozen subprocesses.
 	discovery := claude.Discover(passCtx, registry, paths, s.Reader, s.Env)
+	// Every row is wiped, not only the selected ones: discovery parsed
+	// them all, and an unselected row's document still holds its MCP
+	// tokens in plaintext. The pass has waited for every worker by the
+	// time this runs, so no fetch can still be reading a credential.
+	defer wipeRows(discovery.Rows)
 	slog.DebugContext(ctx, "discovery finished",
 		slog.Int("rows", len(discovery.Rows)),
 		slog.String("keychain", discovery.Preflight.State.String()),
@@ -282,6 +290,20 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 	if credentials != nil && credentials.SubscriptionType != nil {
 		outcome.plan = *credentials.SubscriptionType
 	}
+	// Counted from the discovery read, before any refresh replaces the
+	// credential: that read is the one whose document the row describes.
+	if reportsMCPOAuth(&row) {
+		outcome.mcpOAuthEntries = mcpOAuthEntries(ctx, credentials)
+	}
+	// A refresh result is a credential this row now owns; discovery's
+	// own copy is wiped by the pass. Wipe is idempotent, so a result
+	// that is discovery's copy handed back costs nothing.
+	var refreshed []*claude.Credentials
+	defer func() {
+		for _, c := range refreshed {
+			c.Wipe()
+		}
+	}()
 
 	nowMillis := s.now().UnixMilli()
 	// Every row gets a cache entry, including one keyed by a keychain
@@ -325,6 +347,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 				outcome.usage = cachedUsage()
 				return outcome
 			}
+			refreshed = append(refreshed, result.credentials)
 			credentials, networkAllowed = result.credentials, true
 			if credentials.SubscriptionType != nil {
 				outcome.plan = *credentials.SubscriptionType
@@ -379,6 +402,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 			outcome.usage = cachedUsage()
 			return outcome
 		}
+		refreshed = append(refreshed, result.credentials)
 		credentials = result.credentials
 		if credentials.SubscriptionType != nil {
 			outcome.plan = *credentials.SubscriptionType
@@ -430,6 +454,7 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 					outcome.usage = cachedUsage()
 					return outcome
 				}
+				refreshed = append(refreshed, result.credentials)
 				credentials = result.credentials
 				continue
 			}
@@ -608,6 +633,7 @@ func (o *rowOutcome) statusRow() render.StatusRow {
 		VisibleByDefault:   o.visibleByDefault,
 		SameIdentityAsLive: o.sameIdentityAsLive,
 		Kind:               o.record.Kind.Name(),
+		MCPOAuthEntries:    o.mcpOAuthEntries,
 	}
 }
 
@@ -629,6 +655,7 @@ func (o *rowOutcome) jsonRow() render.JSONRow {
 		NextReset:        render.NextResetOf(o.usage),
 		SessionReset:     render.SessionResetOf(o.usage),
 		WeeklyReset:      render.WeeklyResetOf(o.usage),
+		MCPOAuthEntries:  o.mcpOAuthEntries,
 	}
 	if o.note != "" {
 		row.Note = &o.note
@@ -691,6 +718,53 @@ func (s *Status) printRaw(outcomes []rowOutcome, showAll bool) error {
 		}
 	}
 	return nil
+}
+
+// mcpOAuthMember is the top-level member of Claude Code's keychain
+// document that holds one OAuth token set per MCP server.
+const mcpOAuthMember = "mcpOAuth"
+
+// reportsMCPOAuth reports whether row is one whose MCP OAuth entry count
+// the reports print: the live row and every namespace row. Those are the
+// rows whose keychain document agentctl rewrites, so they are the ones
+// where a lost MCP login would come from.
+func reportsMCPOAuth(row *claude.AccountRow) bool {
+	return row.Record.Kind.Live || row.Record.Kind.Owned != nil
+}
+
+// mcpOAuthEntries counts the MCP servers credentials hold OAuth tokens
+// for: the entries of the mcpOAuth member, 0 when the document has no
+// such member or it is not an object. Nil means nothing is known — no
+// credential was read, or its members could not be summarized.
+//
+// Only the count leaves this function. The summary's names and digests
+// stay here, and a failure is logged without its error, whose text could
+// quote a byte of a member value.
+func mcpOAuthEntries(ctx context.Context, credentials *claude.Credentials) *int {
+	if credentials == nil {
+		return nil
+	}
+	summary, err := credentials.SiblingSummary()
+	if err != nil {
+		slog.DebugContext(ctx, "could not count the MCP OAuth entries of a keychain document")
+		return nil
+	}
+	count := 0
+	for _, meta := range summary {
+		if meta.Name == mcpOAuthMember && meta.Entries != nil {
+			count = *meta.Entries
+		}
+	}
+	return &count
+}
+
+// wipeRows disposes of every credential discovery parsed for rows. The
+// report that read them is the last holder, so it owns them; the MCP
+// tokens and other members they carry must not outlive the report.
+func wipeRows(rows []claude.AccountRow) {
+	for i := range rows {
+		rows[i].Credentials.Wipe()
+	}
 }
 
 // selectRows narrows the discovered rows to the ones the account flag
