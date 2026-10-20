@@ -87,3 +87,90 @@ func TestSwapAuditLinesRoundTrip(t *testing.T) {
 		t.Fatalf("legacy entry: %+v", got)
 	}
 }
+
+func TestSelectUndoNeverSelectsASeed(t *testing.T) {
+	// A seed creates an item that had no earlier credential, so nothing
+	// could be put back: whatever its outcome, it is never an undo
+	// candidate, and an earlier swap stays the one selected.
+	live := AuditEntry{Event: &WriteEvent{Target: TargetLive, FromDigest8: new("aaaaaaaa"), ToDigest8: "bbbbbbbb", Outcome: WriteApplied, Direction: DirectionForward, IncomingIdentity: &IncomingIdentity{AccountUUID: "account"}}}
+	namespace := AuditEntry{Event: &WriteEvent{Target: NamespaceTarget("12345678"), ToDigest8: "cccccccc", Outcome: WriteApplied, Direction: DirectionForward}}
+	seeds := map[string]AuditEntry{
+		"applied":   {Event: &SeedEvent{Target: NamespaceTarget("12345678"), ToDigest8: "dddddddd", Outcome: WriteApplied, Seeded: []string{"mcpOAuth"}, SiblingsReadback: SiblingsEqual, Transport: TransportArgv, OwnedFile: OwnedFileRemoved}},
+		"unknown":   {Event: &SeedEvent{Target: NamespaceTarget("12345678"), ToDigest8: "dddddddd", Outcome: WriteUnknown, SiblingsReadback: SiblingsUnverified, Transport: TransportArgv, OwnedFile: OwnedFileKept, Signal: "SIGTERM"}},
+		"own_state": {Event: &SeedEvent{Target: NamespaceTarget("12345678"), ToDigest8: "dddddddd", Outcome: WriteOwnState}},
+	}
+	wantLive := Undoable{Kind: UndoLive, FromDigest8: new("aaaaaaaa"), ToDigest8: "bbbbbbbb", Outcome: WriteApplied, Direction: DirectionForward, IncomingIdentity: &IncomingIdentity{AccountUUID: "account"}}
+	wantNamespace := Undoable{Kind: UndoNamespace, SHA8: "12345678", ToDigest8: "cccccccc"}
+	for outcome, seed := range seeds {
+		tests := map[string]struct {
+			tail AuditTail
+			want Undoable
+		}{
+			"success: a tail ending in a seed alone selects nothing":        {AuditTail{Entries: []AuditEntry{seed}}, Undoable{}},
+			"success: a seed after a namespace swap leaves the swap":        {AuditTail{Entries: []AuditEntry{namespace, seed}}, wantNamespace},
+			"success: a seed after a live forward swap leaves the swap":     {AuditTail{Entries: []AuditEntry{live, seed}}, wantLive},
+			"success: a seed between two swaps leaves the newest candidate": {AuditTail{Entries: []AuditEntry{live, seed, namespace, seed}}, wantLive},
+		}
+		for name, tt := range tests {
+			t.Run(outcome+"/"+name, func(t *testing.T) {
+				if diff := gocmp.Diff(tt.want, SelectUndo(tt.tail)); diff != "" {
+					t.Fatalf("(-want +got):\n%s", diff)
+				}
+			})
+		}
+	}
+}
+
+func TestSelectUndoReadsASeedLineFromTheLog(t *testing.T) {
+	// The same through the log itself: the seed lines decode, so the tail
+	// has nothing unreadable, and the namespace swap before them is still
+	// the one selected, by its own id.
+	tests := map[string]struct {
+		before []AuditEvent
+		want   UndoKind
+	}{
+		"success: with an earlier namespace swap": {
+			before: []AuditEvent{&WriteEvent{Target: NamespaceTarget("12345678"), ToDigest8: "cccccccc", Outcome: WriteApplied, Direction: DirectionForward}},
+			want:   UndoNamespace,
+		},
+		"success: without an earlier swap": {
+			want: UndoNothing,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths := newAuditStore(t)
+			var wantID AuditID
+			for _, event := range tt.before {
+				id, err := AuditAppend(t.Context(), paths, NewAuditEntry(event))
+				if err != nil {
+					t.Fatalf("append the swap: %v", err)
+				}
+				wantID = id
+			}
+			for _, seed := range []*SeedEvent{
+				{Target: NamespaceTarget("12345678"), ToDigest8: "dddddddd", Outcome: WriteOwnState},
+				{Target: NamespaceTarget("12345678"), ToDigest8: "dddddddd", Outcome: WriteDiscarded},
+				{Target: NamespaceTarget("12345678"), ToDigest8: "dddddddd", Outcome: WriteApplied, Seeded: []string{"mcpOAuth"}, SiblingsReadback: SiblingsEqual, Transport: TransportArgv, OwnedFile: OwnedFileRemoved},
+			} {
+				if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(seed)); err != nil {
+					t.Fatalf("append the seed: %v", err)
+				}
+			}
+			tail, err := TailAuditLog(paths, 1<<30)
+			if err != nil {
+				t.Fatalf("read the log: %v", err)
+			}
+			if len(tail.Unreadable) != 0 {
+				t.Fatalf("a seed line must never read as unreadable: %+v", tail.Unreadable)
+			}
+			got := SelectUndo(tail)
+			if got.Kind != tt.want {
+				t.Fatalf("SelectUndo kind = %d, want %d: %+v", got.Kind, tt.want, got)
+			}
+			if tt.want != UndoNothing && got.ID != wantID {
+				t.Errorf("selected %s, want the swap %s", got.ID, wantID)
+			}
+		})
+	}
+}

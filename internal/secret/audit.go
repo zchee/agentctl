@@ -95,6 +95,24 @@ const (
 	// away, so the next pass may report needs-login for reasons this pass
 	// created.
 	WriteDiscarded KeychainWriteOutcome = "discarded"
+	// WriteOwnState means a seed found that the namespace's credential
+	// file already holds MCP state of its own and wrote nothing, leaving
+	// the file as it was. Only a [SeedEvent] carries it: a [WriteEvent]
+	// line with this outcome is refused, as it is by every build that
+	// predates the word.
+	WriteOwnState KeychainWriteOutcome = "own_state"
+)
+
+// OwnedFileDisposition is what a seed did with the namespace's credential
+// file after its write.
+type OwnedFileDisposition string
+
+const (
+	// OwnedFileRemoved means the file was unlinked, so the keychain item
+	// is the namespace's only credential.
+	OwnedFileRemoved OwnedFileDisposition = "removed"
+	// OwnedFileKept means the file was left in place beside the item.
+	OwnedFileKept OwnedFileDisposition = "kept"
 )
 
 // WriteDirection is which way round a swap ran.
@@ -181,6 +199,83 @@ type WriteEvent struct {
 }
 
 func (*WriteEvent) auditEventName() string { return "write" }
+
+// SeedEvent is one attempt to create a namespace's keychain item with the
+// live item's MCP credentials beside the namespace's own account, recorded
+// once the attempt held the namespace's lock.
+//
+// It is a kind of its own rather than a [WriteEvent] with a namespace
+// target because every applied or unknown namespace write is a candidate
+// for undo, and a seed has no earlier credential to put back. A build that
+// does not know the kind reads the line as [UnrecognizedEvent], so its undo
+// keeps working. There is no outgoing digest: a seed only ever creates.
+type SeedEvent struct {
+	// Target says which namespace item the seed created.
+	Target Target
+	// ToDigest8 is the first eight hex digits of the access-token digest of
+	// the account the seed wrote, or would have written.
+	ToDigest8 string
+	// Outcome says how the attempt ended: applied, unknown or failed once
+	// a write was issued; discarded or own_state when none was.
+	Outcome KeychainWriteOutcome
+	// Seeded names the members copied beside the account object; names
+	// only, never a value.
+	Seeded []string
+	// SiblingsReadback is the readback's verdict on the seeded members;
+	// empty when no readback ran.
+	SiblingsReadback SiblingsReadback
+	// Transport is how the document reached security(1); empty when no
+	// child was started.
+	Transport WriteTransport
+	// OwnedFile is what became of the namespace's credential file. Set
+	// exactly when a write was issued, and empty otherwise, because without
+	// a write the file was never a candidate for removal.
+	OwnedFile OwnedFileDisposition
+	// Signal names the signal that ended the write itself, such as
+	// `SIGTERM`; empty otherwise.
+	Signal string
+}
+
+func (*SeedEvent) auditEventName() string { return "seed_write" }
+
+// checkSeedVocabulary refuses a seed record whose words a reader would
+// refuse. The append and the reader both call it, so the log can never hold
+// a seed line that reads back as unreadable: an unreadable line refuses
+// every undo, and a seed must never cost the user one.
+func checkSeedVocabulary(event *SeedEvent) error {
+	if _, err := parseTarget(string(event.Target)); err != nil {
+		return err
+	}
+	written := false
+	switch event.Outcome {
+	case WriteApplied, WriteUnknown, WriteFailed:
+		written = true
+	case WriteDiscarded, WriteOwnState:
+	default:
+		return fmt.Errorf("unknown seed outcome `%s`", event.Outcome)
+	}
+	switch event.SiblingsReadback {
+	case "", SiblingsEqual, SiblingsDiffer, SiblingsUnverified:
+	default:
+		return fmt.Errorf("unknown siblings readback `%s`", event.SiblingsReadback)
+	}
+	if event.Transport != "" && event.Transport != TransportArgv {
+		return fmt.Errorf("unknown write transport `%s`", event.Transport)
+	}
+	switch event.OwnedFile {
+	case "":
+		if written {
+			return fmt.Errorf("a seed_write entry with outcome `%s` issued a write and must say what became of the owned file", event.Outcome)
+		}
+	case OwnedFileRemoved, OwnedFileKept:
+		if !written {
+			return fmt.Errorf("a seed_write entry with outcome `%s` issued no write and cannot name an owned-file disposition", event.Outcome)
+		}
+	default:
+		return fmt.Errorf("unknown owned-file disposition `%s`", event.OwnedFile)
+	}
+	return nil
+}
 
 // auditEventName makes a lock-break record appendable as an audit event.
 func (*LockBreakRecord) auditEventName() string { return "lock_break" }
@@ -367,6 +462,19 @@ type auditWriteLine struct {
 	Signal           string               `json:"signal,omitzero"`
 }
 
+// auditSeedLine is a seed entry as the line spells it.
+type auditSeedLine struct {
+	auditProvenance
+	Target           Target               `json:"target"`
+	ToDigest8        string               `json:"to_digest8"`
+	Outcome          KeychainWriteOutcome `json:"outcome"`
+	Seeded           []string             `json:"seeded,omitzero"`
+	SiblingsReadback SiblingsReadback     `json:"siblings_readback,omitzero"`
+	Transport        WriteTransport       `json:"transport,omitzero"`
+	OwnedFile        OwnedFileDisposition `json:"owned_file,omitzero"`
+	Signal           string               `json:"signal,omitzero"`
+}
+
 // auditLockBreakLine is a lock-break entry as the line spells it.
 type auditLockBreakLine struct {
 	auditProvenance
@@ -400,12 +508,29 @@ func auditEntryLine(entry AuditEntry) (string, error) {
 		if event.Signal != "" && !isSignalName(event.Signal) {
 			return "", errs.NewConfig(fmt.Sprintf("an audit entry's `signal` must be a signal name such as `SIGTERM`, not %d characters; the audit log holds names only", len(event.Signal)))
 		}
+		// The reader refuses this outcome on a write line, and one
+		// unreadable line refuses every undo.
+		if event.Outcome == WriteOwnState {
+			return "", errs.NewConfig("a write audit entry cannot carry the outcome `own_state`; only a seed entry records it")
+		}
 		direction := event.Direction
 		if direction == "" {
 			direction = DirectionForward
 		}
 		provenance.Event = event.auditEventName()
 		line = &auditWriteLine{auditProvenance: provenance, Target: event.Target, FromDigest8: event.FromDigest8, ToDigest8: event.ToDigest8, Outcome: event.Outcome, Direction: direction, IncomingIdentity: event.IncomingIdentity, Carried: event.Carried, SiblingsReadback: event.SiblingsReadback, Transport: event.Transport, Signal: event.Signal}
+	case *SeedEvent:
+		if err := checkDigest8("to_digest8", event.ToDigest8); err != nil {
+			return "", err
+		}
+		if event.Signal != "" && !isSignalName(event.Signal) {
+			return "", errs.NewConfig(fmt.Sprintf("an audit entry's `signal` must be a signal name such as `SIGTERM`, not %d characters; the audit log holds names only", len(event.Signal)))
+		}
+		if err := checkSeedVocabulary(event); err != nil {
+			return "", errs.NewConfig(fmt.Sprintf("a seed audit entry the log could not read back is refused: %v", err))
+		}
+		provenance.Event = event.auditEventName()
+		line = &auditSeedLine{auditProvenance: provenance, Target: event.Target, ToDigest8: event.ToDigest8, Outcome: event.Outcome, Seeded: event.Seeded, SiblingsReadback: event.SiblingsReadback, Transport: event.Transport, OwnedFile: event.OwnedFile, Signal: event.Signal}
 	case *LockBreakRecord:
 		provenance.Event = event.auditEventName()
 		line = &auditLockBreakLine{auditProvenance: provenance, LockBreakRecord: *event}
@@ -975,6 +1100,43 @@ func decodeAuditLine(line []byte) (AuditEntry, error) {
 			}
 		}
 		entry.Event = &WriteEvent{Target: target, FromDigest8: body.FromDigest8, ToDigest8: *body.ToDigest8, Outcome: outcome, Direction: direction, IncomingIdentity: body.IncomingIdentity, Carried: body.Carried, SiblingsReadback: readback, Transport: transport, Signal: signal}
+	case "seed_write":
+		var body struct {
+			Target           *string  `json:"target"`
+			ToDigest8        *string  `json:"to_digest8"`
+			Outcome          *string  `json:"outcome"`
+			Seeded           []string `json:"seeded"`
+			SiblingsReadback *string  `json:"siblings_readback"`
+			Transport        *string  `json:"transport"`
+			OwnedFile        *string  `json:"owned_file"`
+			Signal           *string  `json:"signal"`
+		}
+		if err := json.Unmarshal(line, &body); err != nil {
+			return AuditEntry{}, err
+		}
+		if body.Target == nil || body.ToDigest8 == nil || body.Outcome == nil {
+			return AuditEntry{}, errors.New("a seed_write entry is missing target, to_digest8 or outcome")
+		}
+		event := &SeedEvent{Target: Target(*body.Target), ToDigest8: *body.ToDigest8, Outcome: KeychainWriteOutcome(*body.Outcome), Seeded: body.Seeded}
+		if body.SiblingsReadback != nil {
+			event.SiblingsReadback = SiblingsReadback(*body.SiblingsReadback)
+		}
+		if body.Transport != nil {
+			event.Transport = WriteTransport(*body.Transport)
+		}
+		if body.OwnedFile != nil {
+			event.OwnedFile = OwnedFileDisposition(*body.OwnedFile)
+		}
+		if body.Signal != nil {
+			event.Signal = *body.Signal
+			if !isSignalName(event.Signal) {
+				return AuditEntry{}, fmt.Errorf("a seed_write entry's signal is not a signal name (%d characters)", len(event.Signal))
+			}
+		}
+		if err := checkSeedVocabulary(event); err != nil {
+			return AuditEntry{}, err
+		}
+		entry.Event = event
 	case "lock_break":
 		var record LockBreakRecord
 		if err := json.Unmarshal(line, &record); err != nil {

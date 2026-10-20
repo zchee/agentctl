@@ -501,6 +501,9 @@ func TestAuditNoLineCarriesTokenMaterial(t *testing.T) {
 	if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(breakRecord(t))); err != nil {
 		t.Fatalf("appendable: %v", err)
 	}
+	if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(seedEvent())); err != nil {
+		t.Fatalf("appendable: %v", err)
+	}
 
 	text := readText(t, AuditLogPath(paths))
 	for _, marker := range []string{"sk-ant-", "claudeAiOauth", "accessToken"} {
@@ -746,9 +749,14 @@ func TestAuditTheVocabularySerialisesToTheDocumentedTokens(t *testing.T) {
 			t.Errorf("break reason token %q, want %q", value, token)
 		}
 	}
-	for value, token := range map[KeychainWriteOutcome]string{WriteApplied: "applied", WriteUnknown: "unknown", WriteFailed: "failed", WriteDiscarded: "discarded"} {
+	for value, token := range map[KeychainWriteOutcome]string{WriteApplied: "applied", WriteUnknown: "unknown", WriteFailed: "failed", WriteDiscarded: "discarded", WriteOwnState: "own_state"} {
 		if string(value) != token {
 			t.Errorf("write outcome token %q, want %q", value, token)
+		}
+	}
+	for value, token := range map[OwnedFileDisposition]string{OwnedFileRemoved: "removed", OwnedFileKept: "kept"} {
+		if string(value) != token {
+			t.Errorf("owned-file token %q, want %q", value, token)
 		}
 	}
 	if string(TargetLive) != "live" || string(NamespaceTarget("0123abcd")) != "namespace:0123abcd" {
@@ -1582,5 +1590,231 @@ func TestAuditConcurrentAppendersNeverInterleaveHalfLines(t *testing.T) {
 	}
 	if len(seen) != writers {
 		t.Errorf("every writer's whole line survives: %d of %d", len(seen), writers)
+	}
+}
+
+// seedEvent is a confirmed seed whose owned file was removed.
+func seedEvent() *SeedEvent {
+	return &SeedEvent{
+		Target:           NamespaceTarget("0123abcd"),
+		ToDigest8:        "aabbccdd",
+		Outcome:          WriteApplied,
+		Seeded:           []string{"mcpOAuth", "pluginSecrets"},
+		SiblingsReadback: SiblingsEqual,
+		Transport:        TransportArgv,
+		OwnedFile:        OwnedFileRemoved,
+	}
+}
+
+func TestAuditASeedEntryRoundTripsForEachOutcome(t *testing.T) {
+	tests := map[string]struct {
+		event         *SeedEvent
+		wantOwnedFile any
+	}{
+		"success: applied, the owned file removed": {
+			event:         seedEvent(),
+			wantOwnedFile: "removed",
+		},
+		"success: applied, the owned file kept": {
+			event: func() *SeedEvent {
+				event := seedEvent()
+				event.OwnedFile = OwnedFileKept
+				return event
+			}(),
+			wantOwnedFile: "kept",
+		},
+		"success: unknown after a signal ended the write": {
+			event:         &SeedEvent{Target: NamespaceTarget("0123abcd"), ToDigest8: "aabbccdd", Outcome: WriteUnknown, Seeded: []string{"mcpOAuth"}, SiblingsReadback: SiblingsUnverified, Transport: TransportArgv, OwnedFile: OwnedFileKept, Signal: "SIGTERM"},
+			wantOwnedFile: "kept",
+		},
+		"success: failed": {
+			event:         &SeedEvent{Target: NamespaceTarget("0123abcd"), ToDigest8: "aabbccdd", Outcome: WriteFailed, Seeded: []string{"mcpOAuth"}, Transport: TransportArgv, OwnedFile: OwnedFileKept},
+			wantOwnedFile: "kept",
+		},
+		"success: discarded under the hold, no write issued": {
+			event: &SeedEvent{Target: NamespaceTarget("0123abcd"), ToDigest8: "aabbccdd", Outcome: WriteDiscarded},
+		},
+		"success: own_state under the hold, no write issued": {
+			event: &SeedEvent{Target: NamespaceTarget("0123abcd"), ToDigest8: "aabbccdd", Outcome: WriteOwnState},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths := newAuditStore(t)
+			entry := NewAuditEntry(tt.event)
+			line, err := auditEntryLine(entry)
+			if err != nil {
+				t.Fatalf("serializable: %v", err)
+			}
+			value := lineValue(t, line)
+			if got := value["event"]; got != "seed_write" {
+				t.Errorf("event = %v, want seed_write", got)
+			}
+			if got := value["outcome"]; got != string(tt.event.Outcome) {
+				t.Errorf("outcome = %v, want %s", got, tt.event.Outcome)
+			}
+			if _, present := value["from_digest8"]; present {
+				t.Errorf("a seed only creates, so it records no outgoing digest: %s", line)
+			}
+			if diff := gocmp.Diff(tt.wantOwnedFile, value["owned_file"]); diff != "" {
+				t.Errorf("owned_file is present exactly when a write was issued (-want +got):\n%s", diff)
+			}
+
+			decoded, err := decodeAuditLine([]byte(strings.TrimSuffix(line, "\n")))
+			if err != nil {
+				t.Fatalf("the line reads back: %v\n%s", err, line)
+			}
+			if diff := gocmp.Diff(entry, decoded); diff != "" {
+				t.Errorf("decoded entry (-want +got):\n%s", diff)
+			}
+
+			if _, err := AuditAppend(t.Context(), paths, entry); err != nil {
+				t.Fatalf("the log should be appendable: %v", err)
+			}
+			read, err := TailAuditLog(paths, 10)
+			if err != nil {
+				t.Fatalf("the log should be readable: %v", err)
+			}
+			if len(read.Unreadable) != 0 {
+				t.Fatalf("a seed line must never read as unreadable: %+v", read.Unreadable)
+			}
+			if diff := gocmp.Diff([]AuditEntry{entry}, read.Entries); diff != "" {
+				t.Errorf("entries through the log (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestAuditASeedSerialisesWithTheDocumentedFieldNames(t *testing.T) {
+	event := seedEvent()
+	event.Signal = "SIGTERM"
+	line, err := auditEntryLine(NewAuditEntry(event))
+	if err != nil {
+		t.Fatalf("serializable: %v", err)
+	}
+	want := []string{"ts", "monotonic_ms", "agctl_pid", "event", "target", "to_digest8", "outcome", "seeded", "siblings_readback", "transport", "owned_file", "signal"}
+	if diff := gocmp.Diff(want, topLevelKeys(t, line)); diff != "" {
+		t.Errorf("field names (-want +got):\n%s", diff)
+	}
+
+	bare, err := auditEntryLine(NewAuditEntry(&SeedEvent{Target: NamespaceTarget("0123abcd"), ToDigest8: "aabbccdd", Outcome: WriteDiscarded}))
+	if err != nil {
+		t.Fatalf("serializable: %v", err)
+	}
+	if diff := gocmp.Diff([]string{"ts", "monotonic_ms", "agctl_pid", "event", "target", "to_digest8", "outcome"}, topLevelKeys(t, bare)); diff != "" {
+		t.Errorf("an attempt that issued no write carries only the required members (-want +got):\n%s", diff)
+	}
+}
+
+func TestAuditASeedEntryTheLogCouldNotReadBackIsRefused(t *testing.T) {
+	// Every seed the append accepts must read back: one unreadable line
+	// refuses every undo. So each word the reader refuses is refused by
+	// the append first, and the reader refuses the same line should
+	// another writer have put it there.
+	tests := map[string]struct {
+		change func(*SeedEvent)
+		want   string
+		// encodeOnly marks a rule the append enforces and the reader,
+		// like the write kind's, does not: the reader reads it fine.
+		encodeOnly bool
+	}{
+		"error: an owned-file disposition without a write": {
+			change: func(e *SeedEvent) { e.Outcome, e.OwnedFile = WriteDiscarded, OwnedFileKept },
+			want:   "issued no write",
+		},
+		"error: own_state naming an owned-file disposition": {
+			change: func(e *SeedEvent) { e.Outcome, e.OwnedFile = WriteOwnState, OwnedFileRemoved },
+			want:   "issued no write",
+		},
+		"error: a write without an owned-file disposition": {
+			change: func(e *SeedEvent) { e.OwnedFile = "" },
+			want:   "must say what became of the owned file",
+		},
+		"error: an unknown write that says nothing of the file": {
+			change: func(e *SeedEvent) { e.Outcome, e.OwnedFile = WriteUnknown, "" },
+			want:   "must say what became of the owned file",
+		},
+		"error: an outcome the seed vocabulary does not have": {
+			change: func(e *SeedEvent) { e.Outcome = "seeded" },
+			want:   "unknown seed outcome",
+		},
+		"error: an unknown owned-file disposition": {
+			change: func(e *SeedEvent) { e.OwnedFile = "deleted" },
+			want:   "unknown owned-file disposition",
+		},
+		"error: an unknown readback": {
+			change: func(e *SeedEvent) { e.SiblingsReadback = "maybe" },
+			want:   "unknown siblings readback",
+		},
+		"error: an unknown transport": {
+			change: func(e *SeedEvent) { e.Transport = "stdin" },
+			want:   "unknown write transport",
+		},
+		"error: a target outside the vocabulary": {
+			change: func(e *SeedEvent) { e.Target = "" },
+			want:   "unknown audit target",
+		},
+		"error: a whole digest": {
+			change:     func(e *SeedEvent) { e.ToDigest8 = strings.Repeat("aabbccdd", 8) },
+			want:       "digest prefixes only",
+			encodeOnly: true,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths := newAuditStore(t)
+			event := seedEvent()
+			tt.change(event)
+			if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(event)); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("append = %v, want a refusal naming %q", err, tt.want)
+			}
+			if _, err := os.Lstat(AuditLogPath(paths)); err == nil {
+				t.Errorf("a refused entry must not create the log")
+			}
+
+			planted, err := json.Marshal(&auditSeedLine{
+				TS: "2026-10-21T00:00:00Z", Event: "seed_write",
+				Target:           event.Target,
+				ToDigest8:        event.ToDigest8,
+				Outcome:          event.Outcome,
+				Seeded:           event.Seeded,
+				SiblingsReadback: event.SiblingsReadback,
+				Transport:        event.Transport,
+				OwnedFile:        event.OwnedFile,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = decodeAuditLine(planted)
+			if tt.encodeOnly {
+				if err != nil {
+					t.Fatalf("the reader reads this line as it reads a write line's: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("decode = %v, want a refusal naming %q: %s", err, tt.want, planted)
+			}
+		})
+	}
+}
+
+func TestAuditTheSeedOnlyOutcomeIsNeverAWriteOutcome(t *testing.T) {
+	// own_state is a seed word. A write line carrying it is refused by the
+	// reader, as every earlier build refuses it, so the append refuses it
+	// too rather than leave a line that would block undo.
+	planted := `{"ts":"2026-10-21T00:00:00Z","monotonic_ms":0,"agctl_pid":1,"event":"write","target":"namespace:0123abcd","to_digest8":"aabbccdd","outcome":"own_state","direction":"forward"}`
+	if _, err := decodeAuditLine([]byte(planted)); err == nil || !strings.Contains(err.Error(), "unknown write outcome") {
+		t.Fatalf("decode = %v, want unknown write outcome", err)
+	}
+
+	paths := newAuditStore(t)
+	event := writeEvent("aabbccdd", nil)
+	event.Outcome = WriteOwnState
+	if _, err := AuditAppend(t.Context(), paths, NewAuditEntry(event)); err == nil || !strings.Contains(err.Error(), "only a seed entry") {
+		t.Fatalf("append = %v, want the write refused for its outcome", err)
+	}
+	if _, err := os.Lstat(AuditLogPath(paths)); err == nil {
+		t.Errorf("a refused entry must not create the log")
 	}
 }
