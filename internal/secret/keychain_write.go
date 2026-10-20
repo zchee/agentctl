@@ -221,10 +221,9 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 	state, waitErr := pass.WaitChildTimeout(token, w.budget)
 	defer stderr.wipe()
 
-	// Read after the wait: a signal that arrived during the write is the
-	// one that cancelled it.
-	fired, _ := w.controller.Fired()
-	if err := classifyWrite(ctx, fired, state, waitErr, w.budget, stderr); err != nil {
+	// The signal is read after the wait: a signal that arrived during the
+	// write is the one that cancelled it.
+	if err := classifyWrite(ctx, w.controller.Fired, state, waitErr, w.budget, stderr); err != nil {
 		if errors.Is(err, ErrKeychainOutcomeUnknown) {
 			// The leader is reaped by now. Whatever it left in its group
 			// must not outlive Write; an empty group answers ESRCH, which
@@ -241,15 +240,23 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 // whatever the wait handed back, because after a signal the wait usually
 // returns the leader's reaped, signal-ended state rather than nothing.
 //
-// fired is the termination signal the run's controller received, if any. A
-// cancelled run records it as the error's signal; a child ended by a signal
-// of its own records that one. A budget expiry, a cancellation no signal
-// caused, and an output held past the wait delay record none: the kill that
-// ended those children was this process's own.
-func classifyWrite(ctx context.Context, fired os.Signal, state *os.ProcessState, waitErr error, budget time.Duration, stderr *boundedBuffer) error {
+// fired reports the termination signal the run's controller received, if
+// any. A cancelled run records it as the error's signal; a child ended by a
+// signal of its own records that one. A budget expiry, a cancellation no
+// signal caused, and an output held past the wait delay record none: the
+// kill that ended those children was this process's own.
+//
+// The cancellation is read before the signal, and both once. The controller
+// stores the signal before it cancels the run, so a cancellation seen first
+// means the signal that caused it is already readable. Reading the signal
+// first would let one that lands between the two reads classify the write as
+// cancelled with no signal named.
+func classifyWrite(ctx context.Context, fired func() (os.Signal, bool), state *os.ProcessState, waitErr error, budget time.Duration, stderr *boundedBuffer) error {
+	cancelErr := ctx.Err()
+	sig, _ := fired()
 	switch {
-	case ctx.Err() != nil:
-		return &KeychainError{Class: errs.KeychainTimeout, Detail: "the run was cancelled while security was running", Transient: true, kind: writeOutcomeUnknown, signal: signalName(fired)}
+	case cancelErr != nil:
+		return &KeychainError{Class: errs.KeychainTimeout, Detail: "the run was cancelled while security was running", Transient: true, kind: writeOutcomeUnknown, signal: signalName(sig)}
 	case state == nil && waitErr == nil:
 		// The wait gave up at its bound and killed and reaped the child.
 		return &KeychainError{Class: errs.KeychainTimeout, Detail: fmt.Sprintf("security timed out after %d ms", budget.Milliseconds()), Transient: true, kind: writeOutcomeUnknown}

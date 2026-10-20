@@ -625,12 +625,49 @@ func TestKeychainWriteClassifyRecordsOnlyASignal(t *testing.T) {
 			defer stderr.wipe()
 			// A nil state with no wait error is the wait giving up at its
 			// bound; a live context makes it a budget expiry.
-			err := classifyWrite(tt.ctx, tt.fired, nil, nil, time.Second, stderr)
+			err := classifyWrite(tt.ctx, func() (os.Signal, bool) { return tt.fired, tt.fired != nil }, nil, nil, time.Second, stderr)
 			assertKind(t, err, tt.wantKind)
 			if got := KeychainWriteSignal(err); got != tt.wantSignal {
 				t.Errorf("KeychainWriteSignal = %q, want %q", got, tt.wantSignal)
 			}
 		})
+	}
+}
+
+// cancelObservedContext is an already-cancelled context that records when
+// its cancellation is first read.
+type cancelObservedContext struct {
+	context.Context
+	observed bool
+}
+
+func (c *cancelObservedContext) Err() error {
+	c.observed = true
+	return c.Context.Err()
+}
+
+// TestKeychainWriteClassifyNamesASignalThatLandsBetweenTheReads replays the
+// interleaving the controller allows: it stores the signal, then cancels the
+// run, so a reader may find no signal yet and a cancellation a moment later.
+// The signal source here turns non-nil only once the cancellation has been
+// read; a classification that reads the signal first names none.
+func TestKeychainWriteClassifyNamesASignalThatLandsBetweenTheReads(t *testing.T) {
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	ctx := &cancelObservedContext{Context: cancelled}
+	fired := func() (os.Signal, bool) {
+		if !ctx.observed {
+			return nil, false
+		}
+		return syscall.SIGTERM, true
+	}
+	stderr := newBoundedBuffer()
+	defer stderr.wipe()
+
+	err := classifyWrite(ctx, fired, nil, nil, time.Second, stderr)
+	assertKind(t, err, "outcome unknown")
+	if got := KeychainWriteSignal(err); got != "SIGTERM" {
+		t.Errorf("KeychainWriteSignal = %q, want %q: the signal that caused the observed cancellation was not named", got, "SIGTERM")
 	}
 }
 
