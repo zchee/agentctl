@@ -250,7 +250,7 @@ func showReport(ctx context.Context, paths *config.Paths, row *claude.AccountRow
 
 	if credentials := row.Credentials; credentials != nil {
 		out = append(out,
-			showLine("plan", opt(credentials.SubscriptionType)),
+			showLine("plan", optString(claude.PlanLabel(credentials))),
 			showLine("scopes", strings.Join(credentials.Scopes, " ")),
 			showLine("access expires", expiry(&credentials.ExpiresAtMillis)),
 			showLine("refresh expires", expiry(credentials.RefreshTokenExpiresAtMillis)),

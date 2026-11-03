@@ -149,6 +149,8 @@ func TestStatusReportMemberShapes(t *testing.T) {
 		`"generated_at": "2026-09-08T01:20:05Z"`,
 		`"windows": []`,
 		`"email": null`,
+		`"plan": null`,
+		`"rate_limit_tier": null`,
 		`"same_identity_as": null`,
 		`"occupied_by": null`,
 		`"mcp_oauth_entries": null`,
@@ -178,7 +180,7 @@ func TestStatusReportFieldOrderIsTheSchemaOrder(t *testing.T) {
 
 	// The spellings are an interface: consumers diff documents, so the
 	// member order must not drift between builds.
-	order := []string{`"version"`, `"generated_at"`, `"rows"`, `"id"`, `"account_uuid"`, `"organization_uuid"`, `"email"`, `"org_name"`, `"kind"`, `"source"`, `"state"`, `"state_label"`, `"lock_state"`, `"windows"`, `"credits"`, `"next_reset"`, `"session_reset"`, `"weekly_reset"`, `"note"`, `"same_identity_as"`, `"occupied_by"`, `"mcp_oauth_entries"`, `"hidden"`}
+	order := []string{`"version"`, `"generated_at"`, `"rows"`, `"id"`, `"account_uuid"`, `"organization_uuid"`, `"email"`, `"org_name"`, `"plan"`, `"rate_limit_tier"`, `"kind"`, `"source"`, `"state"`, `"state_label"`, `"lock_state"`, `"windows"`, `"credits"`, `"next_reset"`, `"session_reset"`, `"weekly_reset"`, `"note"`, `"same_identity_as"`, `"occupied_by"`, `"mcp_oauth_entries"`, `"hidden"`}
 	last := -1
 	for _, member := range order {
 		at := strings.Index(text, member)

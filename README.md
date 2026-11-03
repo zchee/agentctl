@@ -73,6 +73,12 @@ All entries below follow `agentctl claude`.
 
 `status` also accepts repeatable `--account ID`, `--refresh`, `--no-cache`, and `--timeout DUR`
 (default `10s`). `import` accepts repeatable `--claude-config-dir DIR` to select vendor stores.
+
+The Plan column is a display label derived from the stored plan and rate-limit tier:
+`max` + `default_claude_max_20x` reads `ultra`, `max` + `default_claude_max_5x` reads `max`,
+and other plans appear verbatim. The stored words are unchanged; `--json` carries `plan` and
+`rate_limit_tier`.
+
 Isolated `use`, `exec`, and `env` accept `--claude-config-dir DIR`, `--fresh-context`, and `--no-mcp`.
 Isolated `use` also accepts `--no-mcp-seed`; `use --live` and `use --undo` ignore both MCP flags.
 The directory override must be absolute and cannot be the live Claude configuration directory.

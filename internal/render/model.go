@@ -65,8 +65,10 @@ type StatusRow struct {
 	Account string
 	// Org is the organization's display name, or its UUID when unnamed.
 	Org string
-	// Plan is the subscription tier, as the credential recorded it.
+	// Plan is the subscription's display label.
 	Plan string
+	// RateLimitTier is the stored rate-limit tier, verbatim when known.
+	RateLimitTier *string
 	// State is the state column's text.
 	State string
 	// Note is a short explanation appended to the state, when there is

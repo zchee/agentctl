@@ -70,6 +70,14 @@
         },
         "email": { "type": ["string", "null"] },
         "org_name": { "type": ["string", "null"] },
+        "plan": {
+          "description": "The display label derived from the stored subscription and rate-limit tier, null when unknown. Additive and optional for earlier version 1 documents; stored words are unchanged.",
+          "type": ["string", "null"]
+        },
+        "rate_limit_tier": {
+          "description": "The stored rate-limit tier verbatim, null when absent. Additive and optional for earlier version 1 documents.",
+          "type": ["string", "null"]
+        },
         "kind": {
           "description": "Where the credentials live, and so whether agctl may write them. Only `owned` is ever refreshed. `foreign` is synthesized by discovery for a credential that belongs to something else — a third-party tool's keychain item, or a token in the environment — and is never recorded in the registry.",
           "enum": ["owned", "live", "config_dir", "foreign"]

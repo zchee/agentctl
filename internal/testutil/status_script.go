@@ -42,7 +42,7 @@ func init() {
 
 func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) != 1 {
-		ts.Fatalf("usage: statusfixture <empty|owned|expired-live|locked-live|unknown|sibling|identical|twins|identity|hanging>")
+		ts.Fatalf("usage: statusfixture <empty|owned|ultra|team|expired-live|locked-live|unknown|sibling|identical|twins|identity|hanging>")
 	}
 	kind := args[0]
 	root := ts.MkAbs(filepath.Join("status-cases", kind))
@@ -151,13 +151,21 @@ func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Check(os.MkdirAll(filepath.Dir(path), 0o700))
 		ts.Check(os.WriteFile(path, body, 0o600))
 	}
+	plan, tier := "max", "default_claude_max_5x"
+	switch kind {
+	case "ultra":
+		tier = "default_claude_max_20x"
+	case "team":
+		plan = "team"
+	}
 	blob := func(name, acct, org string, expiry int64) map[string]any {
 		return map[string]any{"claudeAiOauth": map[string]any{
 			"accessToken":      "sk-ant-oat01-SENTINEL-" + name,
 			"refreshToken":     "sk-ant-ort01-SENTINEL-" + name,
 			"expiresAt":        expiry,
 			"scopes":           []string{"user:inference", "user:profile"},
-			"subscriptionType": "max",
+			"subscriptionType": plan,
+			"rateLimitTier":    tier,
 			"tokenAccount":     map[string]any{"uuid": acct, "organizationUuid": org, "emailAddress": Email, "organizationName": "Acme"},
 		}}
 	}
@@ -177,7 +185,7 @@ func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	switch kind {
 	case "empty":
-	case "owned":
+	case "owned", "ultra", "team":
 		owned(Acct, Org, "owned")
 	case "expired-live":
 		item(LiveService, blob("live", Acct, Org, ExpiredAt()))

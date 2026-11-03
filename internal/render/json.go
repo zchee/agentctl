@@ -115,6 +115,10 @@ type JSONRow struct {
 	Email *string `json:"email"`
 	// OrgName is the organization's display name, when it is known.
 	OrgName *string `json:"org_name"`
+	// Plan is the display label derived from the stored subscription and tier.
+	Plan *string `json:"plan"`
+	// RateLimitTier is the stored rate-limit tier, verbatim when known.
+	RateLimitTier *string `json:"rate_limit_tier"`
 	// Kind says where the credentials live and whether agentctl may
 	// write them.
 	Kind string `json:"kind"`
@@ -130,7 +134,8 @@ type JSONRow struct {
 	Windows []JSONWindow `json:"windows"`
 	// Credits is what is known about extra-usage credits.
 	Credits JSONCredits `json:"credits"`
-	// NextReset is the soonest reset across every window, RFC 3339.
+	// NextReset is the soonest reset across every window shown in the table,
+	// RFC 3339.
 	NextReset *string `json:"next_reset"`
 	// SessionReset is when the five-hour session window rolls over, RFC
 	// 3339. Additive next to NextReset rather than a replacement for it:

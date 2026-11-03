@@ -149,6 +149,22 @@ status-check same-json plain.json folded.json
 exec schema status.v1.json folded.json
 status-check read-only
 
+# Display labels do not rewrite the stored plan or tier.
+statusfixture ultra
+exec agentctl claude status --account owner@example.com
+stdout 'owner@example.com.*\| ultra *\|'
+exec agentctl claude status --json --account owner@example.com
+stdout '"plan": "ultra"'
+stdout '"rate_limit_tier": "default_claude_max_20x"'
+status-check read-only
+statusfixture team
+exec agentctl claude status --account owner@example.com
+stdout 'owner@example.com.*\| team *\|'
+exec agentctl claude status --json --account owner@example.com
+stdout '"plan": "team"'
+stdout '"rate_limit_tier": "default_claude_max_5x"'
+status-check read-only
+
 # A hanging keychain subprocess is killed instead of holding the pass open.
 statusfixture hanging
 exec expectexit 2 agentctl claude status --timeout 1s

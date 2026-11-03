@@ -120,8 +120,10 @@ type rowOutcome struct {
 	account string
 	// org is the organization's display name, or its UUID when unnamed.
 	org string
-	// plan is the subscription tier, as the credential recorded it.
+	// plan is the subscription's display label.
 	plan string
+	// rateLimitTier is the stored rate-limit tier, verbatim when known.
+	rateLimitTier *string
 	// state is what the pass concluded about this row.
 	state claude.AccountState
 	// lockState is what the namespace lock did on this pass; only the
@@ -287,8 +289,9 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 		outcome.org = *row.Record.OrgName
 	}
 	credentials := row.Credentials
-	if credentials != nil && credentials.SubscriptionType != nil {
-		outcome.plan = *credentials.SubscriptionType
+	if credentials != nil {
+		outcome.plan = claude.PlanLabel(credentials)
+		outcome.rateLimitTier = credentials.RateLimitTier
 	}
 	// Counted from the discovery read, before any refresh replaces the
 	// credential: that read is the one whose document the row describes.
@@ -349,9 +352,8 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 			}
 			refreshed = append(refreshed, result.credentials)
 			credentials, networkAllowed = result.credentials, true
-			if credentials.SubscriptionType != nil {
-				outcome.plan = *credentials.SubscriptionType
-			}
+			outcome.plan = claude.PlanLabel(credentials)
+			outcome.rateLimitTier = credentials.RateLimitTier
 		}
 	}
 	refresh := func() refreshOutcome {
@@ -404,9 +406,8 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 		}
 		refreshed = append(refreshed, result.credentials)
 		credentials = result.credentials
-		if credentials.SubscriptionType != nil {
-			outcome.plan = *credentials.SubscriptionType
-		}
+		outcome.plan = claude.PlanLabel(credentials)
+		outcome.rateLimitTier = credentials.RateLimitTier
 	case expired:
 		// Not ours to refresh: report it and spend no request on it. An
 		// owned row that is expired and unrefreshable keeps the state
@@ -456,6 +457,8 @@ func (s *Status) runRow(ctx context.Context, index int, row claude.AccountRow, p
 				}
 				refreshed = append(refreshed, result.credentials)
 				credentials = result.credentials
+				outcome.plan = claude.PlanLabel(credentials)
+				outcome.rateLimitTier = credentials.RateLimitTier
 				continue
 			}
 			outcome.state = claude.StateOfNeedsLogin()
@@ -637,6 +640,7 @@ func (o *rowOutcome) statusRow() render.StatusRow {
 		Account:            o.account,
 		Org:                o.org,
 		Plan:               o.plan,
+		RateLimitTier:      o.rateLimitTier,
 		State:              o.state.Label(),
 		Note:               o.note,
 		Usage:              o.usage,
@@ -655,6 +659,7 @@ func (o *rowOutcome) jsonRow() render.JSONRow {
 		OrganizationUUID: o.record.OrganizationUUID,
 		Email:            o.record.Email,
 		OrgName:          o.record.OrgName,
+		RateLimitTier:    o.rateLimitTier,
 		Kind:             o.record.Kind.Name(),
 		Source:           o.source.Name(),
 		State:            o.state.Name(),
@@ -666,6 +671,9 @@ func (o *rowOutcome) jsonRow() render.JSONRow {
 		SessionReset:     render.SessionResetOf(o.usage),
 		WeeklyReset:      render.WeeklyResetOf(o.usage),
 		MCPOAuthEntries:  o.mcpOAuthEntries,
+	}
+	if o.plan != "" {
+		row.Plan = new(o.plan)
 	}
 	if o.note != "" {
 		row.Note = &o.note
