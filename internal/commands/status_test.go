@@ -17,6 +17,8 @@ package commands
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -25,6 +27,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/fixtures"
 	"github.com/zchee/agentctl/internal/cli"
@@ -161,6 +165,90 @@ func TestStatusFetchesAndRendersAFreshOwnedAccount(t *testing.T) {
 	}
 	if got := world.calls.Load(); got != 1 {
 		t.Errorf("usage calls after the cached pass = %d, want still 1", got)
+	}
+}
+
+func TestStatusDollarWindowsAndPlanLabels(t *testing.T) {
+	tests := map[string]struct {
+		plan, tier, wantPlan string
+	}{
+		"success: max twentyfold displays ultra":     {plan: "max", tier: "default_claude_max_20x", wantPlan: "ultra"},
+		"success: max fivefold displays max":         {plan: "max", tier: "default_claude_max_5x", wantPlan: "max"},
+		"success: team remains team with a max tier": {plan: "team", tier: "default_claude_max_5x", wantPlan: "team"},
+	}
+	body := []byte(`{"limits":[{"kind":"session","percent":21},{"kind":"weekly_all","percent":35}],"iguana_necktie":{"utilization":0.434444,"resets_at":"2026-11-05T07:59:00+00:00","limit_dollars":250,"used_dollars":1.08611,"remaining_dollars":248.91389,"locked_reason":null},"extra_usage":{"is_enabled":false}}`)
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			world := newStatusWorld(t, serveBody(http.StatusOK, body))
+			var credential map[string]map[string]jsontext.Value
+			if err := json.Unmarshal([]byte(world.fixture.Blob("access-fresh", "refresh-fresh", testutil.FreshAt())), &credential); err != nil {
+				t.Fatal(err)
+			}
+			for key, word := range map[string]string{"subscriptionType": tt.plan, "rateLimitTier": tt.tier} {
+				value, err := json.Marshal(word)
+				if err != nil {
+					t.Fatal(err)
+				}
+				credential["claudeAiOauth"][key] = value
+			}
+			blob, err := json.Marshal(credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			world.seedOwned(t, string(blob))
+			table, err := world.run(t, cli.ClaudeStatusOptions{Accounts: ownedOnly})
+			if err != nil {
+				t.Fatalf("render table: %v\n%s", err, table)
+			}
+			var accountRows []string
+			for line := range strings.SplitSeq(table, "\n") {
+				if strings.Contains(line, testutil.Email) {
+					accountRows = append(accountRows, line)
+				}
+			}
+			if len(accountRows) != 1 {
+				t.Fatalf("account table rows = %d, want 1:\n%s", len(accountRows), table)
+			}
+			cells := strings.Split(accountRows[0], "|")
+			if len(cells) != 10 {
+				t.Fatalf("account table cells = %d, want 10:\n%s", len(cells), table)
+			}
+			if diff := gocmp.Diff(tt.wantPlan, strings.TrimSpace(cells[2])); diff != "" {
+				t.Errorf("plan cell mismatch (-want +got):\n%s", diff)
+			}
+			for _, hidden := range []string{"iguana_necktie", "dollar credit", "$1.09", "$250.00"} {
+				if strings.Contains(table, hidden) {
+					t.Errorf("JSON-only dollar credit %q leaked into the table:\n%s", hidden, table)
+				}
+			}
+			text, err := world.run(t, cli.ClaudeStatusOptions{Accounts: ownedOnly, JSON: true})
+			if err != nil {
+				t.Fatalf("render JSON: %v\n%s", err, text)
+			}
+			testutil.ValidateSchema(t, "status.v1.json", []byte(text))
+			var report render.StatusReport
+			if err := json.Unmarshal([]byte(text), &report); err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Rows) != 1 {
+				t.Fatalf("rows = %d, want 1", len(report.Rows))
+			}
+			row := report.Rows[0]
+			if diff := gocmp.Diff(new(tt.wantPlan), row.Plan); diff != "" {
+				t.Errorf("JSON plan mismatch (-want +got):\n%s", diff)
+			}
+			if diff := gocmp.Diff(new(tt.tier), row.RateLimitTier); diff != "" {
+				t.Errorf("JSON tier mismatch (-want +got):\n%s", diff)
+			}
+			want := []render.JSONWindow{
+				{Kind: "session", Label: "session", Percent: new(21.0), PercentFloor: new(21)},
+				{Kind: "weekly_all", Label: "weekly", Percent: new(35.0), PercentFloor: new(35)},
+				{Kind: "dollar_credit", Label: "iguana_necktie (dollar credit)", Percent: new(0.434444), PercentFloor: new(0), ResetsAt: new("2026-11-05T07:59:00Z"), UsedDollars: new(1.08611), LimitDollars: new(250.0), RemainingDollars: new(248.91389)},
+			}
+			if diff := gocmp.Diff(want, row.Windows); diff != "" {
+				t.Errorf("JSON windows mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
