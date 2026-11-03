@@ -15,21 +15,112 @@
 package codex
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
 	gocmp "github.com/google/go-cmp/cmp"
 
+	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/config"
 	codexprovider "github.com/zchee/agentctl/internal/provider/codex"
+	"github.com/zchee/agentctl/internal/runtime/tty"
+	"github.com/zchee/agentctl/internal/tui"
 )
+
+func TestWatchRunStartupRefusals(t *testing.T) {
+	tests := map[string]struct {
+		interval time.Duration
+		factory  bool
+		want     string
+	}{
+		"error: interval below polling floor": {interval: cli.WatchFloor - time.Second, want: "below the"},
+		"error: absent status factory":        {interval: cli.WatchFloor, want: "status factory is not configured"},
+		"error: redirected terminal":          {interval: cli.WatchFloor, factory: true, want: "requires a terminal"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			file, err := os.CreateTemp(t.TempDir(), "redirected")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = file.Close() }()
+			watch := Watch{Input: file, Output: file}
+			if test.factory {
+				watch.NewStatus = func() *Status { return &Status{} }
+			}
+			err = watch.Run(t.Context(), cli.Globals{ConfigDir: filepath.Join(t.TempDir(), "config")}, cli.CodexWatchOptions{Interval: test.interval})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Watch.Run() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestWatchRunQuitsFromPTY(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = master.Close(); _ = slave.Close() }()
+	if err := pty.Setsize(master, &pty.Winsize{Rows: 24, Cols: 100}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERM", "xterm-256color")
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	quit := make(chan error, 1)
+	go func() {
+		var output strings.Builder
+		var waiter tty.Readiness
+		for ctx.Err() == nil {
+			ready, err := waiter.WaitReadable(master, 20*time.Millisecond)
+			if err != nil {
+				quit <- err
+				return
+			}
+			if !ready {
+				continue
+			}
+			buf := make([]byte, 8192)
+			n, err := master.Read(buf)
+			if err != nil {
+				quit <- err
+				return
+			}
+			output.Write(buf[:n])
+			if strings.Contains(output.String(), tui.HelpLine) {
+				_, err := master.Write([]byte("q"))
+				quit <- err
+				return
+			}
+		}
+		quit <- fmt.Errorf("watch did not render its first frame: %w; output=%q", ctx.Err(), output.String())
+	}()
+	root := t.TempDir()
+	watch := Watch{Input: slave, Output: slave, NewStatus: func() *Status {
+		return &Status{Env: &codexprovider.Env{Home: filepath.Join(root, "absent-home")}}
+	}}
+	err = watch.Run(ctx, cli.Globals{ConfigDir: filepath.Join(root, "config")}, cli.CodexWatchOptions{Interval: cli.WatchFloor})
+	if keyErr := <-quit; keyErr != nil {
+		t.Fatal(keyErr)
+	}
+	if err != nil {
+		t.Fatalf("Watch.Run() after quit = %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("watch ended by deadline instead of quit: %v", ctx.Err())
+	}
+}
 
 func TestWatchReadOnlyPass(t *testing.T) {
 	tests := map[string]struct {

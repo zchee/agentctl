@@ -19,10 +19,106 @@ package desktop
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gocmp "github.com/google/go-cmp/cmp"
 )
+
+func TestTestingWorldConstruction(t *testing.T) {
+	tests := map[string]struct {
+		fakeStat bool
+	}{
+		"success: the real device reader is the default": {},
+		"success: a fixture stat program is selected":    {fakeStat: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			table := filepath.Join(root, "processes.json")
+			if err := os.WriteFile(table, []byte(`{"records":[]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(processTableEnv, table)
+			t.Setenv(testRootEnv, root)
+			if tt.fakeStat {
+				bin := filepath.Join(root, "usr", "bin")
+				if err := os.MkdirAll(bin, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(bin, "stat"), []byte("#!/bin/sh\nprintf '12345\\n'\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dataDir := filepath.Join(root, "data")
+			world, err := testingWorld(dataDir)
+			if err != nil {
+				t.Fatalf("constructing an absolute test world: %v", err)
+			}
+			wantPaths := []string{filepath.Join(root, "usr", "bin", "osascript"), filepath.Join(root, "usr", "bin", "open"), filepath.Join(root, strings.TrimPrefix(AppBundle, "/")), dataDir}
+			gotPaths := []string{world.Osascript, world.Open, world.Bundle, world.Observer.DataDir}
+			if diff := gocmp.Diff(wantPaths, gotPaths); diff != "" {
+				t.Fatalf("test-world paths (-want +got):\n%s", diff)
+			}
+			if world.Observer.UID != uint32(os.Getuid()) || world.PollInterval != testPollPause || world.QuitPolls != QuitPolls || world.LaunchPolls != LaunchPolls {
+				t.Fatalf("test world has wrong uid or poll budgets: %+v", world)
+			}
+			rows, err := world.Observer.List(t.Context(), world.Observer.UID)
+			if err != nil || len(rows) != 0 {
+				t.Fatalf("fixture table listing = %+v, %v; want no rows", rows, err)
+			}
+			wantDevice, err := StatDevice(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.fakeStat {
+				wantDevice = 12345
+			}
+			device, err := world.DeviceOf(root)
+			if err != nil || device != wantDevice {
+				t.Fatalf("DeviceOf = %d, %v; want %d", device, err, wantDevice)
+			}
+		})
+	}
+}
+
+func TestFakeDeviceExecutesTheStatContract(t *testing.T) {
+	tests := map[string]struct {
+		body    string
+		missing bool
+		want    uint64
+		wantErr bool
+	}{
+		"success: stat receives flags and the unmodified path": {
+			body: `test "$#" -eq 3 && test "$1" = -f && test "$2" = %d && test "$3" = 'a path with spaces' || exit 9
+printf '  18446744073709551615\n'
+`, want: ^uint64(0),
+		},
+		"error: a failed stat program is reported":  {body: "exit 7\n", wantErr: true},
+		"error: a missing stat program is reported": {missing: true, wantErr: true},
+		"error: malformed output is rejected":       {body: "printf 'not-a-device\\n'\n", wantErr: true},
+		"error: overflowing output is rejected":     {body: "printf '18446744073709551616\\n'\n", wantErr: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			stat := filepath.Join(t.TempDir(), "stat")
+			if !tt.missing {
+				if err := os.WriteFile(stat, []byte("#!/bin/sh\n"+tt.body), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			device, err := fakeDevice(stat, "a path with spaces")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("fakeDevice error = %v, want error %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				if diff := gocmp.Diff(tt.want, device); diff != "" {
+					t.Fatalf("device (-want +got): %s", diff)
+				}
+			}
+		})
+	}
+}
 
 func TestTableLister(t *testing.T) {
 	t.Parallel()

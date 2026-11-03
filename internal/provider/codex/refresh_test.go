@@ -363,6 +363,92 @@ func TestRefreshDriverPreservesExternalWritesDuringPOST(t *testing.T) {
 	}
 }
 
+func TestRefreshCredentialChangedBeforePost(t *testing.T) {
+	tests := map[string]struct {
+		replacement string
+		kind        RefreshStepKind
+		reason      string
+	}{
+		"success: fresh replacement is adopted":         {replacement: "fresh", kind: RefreshStepAdopted, reason: "changed_before_post"},
+		"error: missing replacement needs login":        {replacement: "absent", kind: RefreshStepNeedsLogin, reason: "absent"},
+		"error: stale replacement defers refresh":       {replacement: "stale", kind: RefreshStepStale, reason: "changed_before_post"},
+		"error: unreadable replacement refuses refresh": {replacement: "unreadable", kind: RefreshStepFailed},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths, namespace, guard, auth := writerNamespace(t)
+			credentials := lockedRead(t, namespace)
+			grant, _ := credentials.RefreshDigest8()
+			store := refreshWriterStore(t, paths, guard)
+			var posts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				posts.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			driver := refreshDriver{ctx: t.Context(), namespace: namespace, store: store, guard: guard, permit: &PostPermit{transport: NewRefreshClient(server.URL, "changed-test")}}
+			switch test.replacement {
+			case "absent":
+				if err := os.Remove(auth); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable":
+				if err := namespace.Close(); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				replacement := writerCredentials(t, "test-external-refresh")
+				if test.replacement == "fresh" {
+					jwt := syntheticJWT(fmt.Sprintf(`{"exp":%d}`, time.Now().Add(time.Hour).Unix()))
+					replacement = bytes.ReplaceAll(replacement, []byte(`"agctl-test-access"`), fmt.Appendf(nil, "%q", jwt))
+				}
+				writeCodexFile(t, auth, replacement)
+			}
+			var step RefreshStep
+			if test.replacement == "unreadable" {
+				step = driver.changedBeforePost()
+			} else {
+				step = driver.send(credentials, grant, false)
+			}
+			if diff := gocmp.Diff(test.kind, step.Kind); diff != "" {
+				t.Fatalf("refresh step (-want +got):\n%s; step=%+v", diff, step)
+			}
+			if test.reason != "" && step.Reason != test.reason {
+				t.Fatalf("reason = %q, want %q", step.Reason, test.reason)
+			}
+			if test.kind == RefreshStepFailed && step.Reason == "" {
+				t.Fatal("read failure has no explanation")
+			}
+			if posts.Load() != 0 {
+				t.Fatalf("changed credential sent %d POSTs, want none", posts.Load())
+			}
+			if state := store.Load(t.Context()); state.Kind != RefreshStateAbsent {
+				t.Fatalf("no-send created refresh state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestRefreshUnknownSince(t *testing.T) {
+	ambiguous := time.Unix(100, 0).UTC()
+	sent := time.Unix(50, 0).UTC()
+	tests := map[string]struct {
+		state RefreshState
+		want  time.Time
+	}{
+		"success: ambiguous time takes precedence":     {state: RefreshState{AmbiguousSince: &ambiguous, Inflight: &Inflight{SentAt: sent}}, want: ambiguous},
+		"success: interrupted send uses inflight time": {state: RefreshState{Inflight: &Inflight{SentAt: sent}}, want: sent},
+		"success: no send has no timestamp":            {},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gocmp.Diff(test.want, refreshUnknownSince(test.state)); diff != "" {
+				t.Fatalf("unknown since (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestRefreshRetryRecordingAndFloorResetDoNotSend(t *testing.T) {
 	paths, namespace, guard, _ := writerNamespace(t)
 	store := refreshWriterStore(t, paths, guard)

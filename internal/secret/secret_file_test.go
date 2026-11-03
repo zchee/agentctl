@@ -127,6 +127,62 @@ func isErrorType[T error](err error) bool {
 	return ok
 }
 
+func TestSecretFileReadStrictDistinguishesAbsenceFromFailure(t *testing.T) {
+	tests := map[string]struct {
+		kind    string
+		present bool
+		wantIO  bool
+		outside bool
+	}{
+		"success: a regular credential is read":        {kind: "file", present: true},
+		"success: an absent credential remains absent": {},
+		"error: an unopenable file is not absent":      {kind: "unreadable", wantIO: true},
+		"error: an outside path is refused":            {kind: "file", outside: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := newSecretFileStore(t)
+			path := filepath.Join(store.codexNS, testAuth)
+			if tt.kind != "" {
+				mode := os.FileMode(0o600)
+				if tt.kind == "unreadable" {
+					mode = 0
+				}
+				if err := os.WriteFile(path, []byte("credential bytes"), mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			file := store.codexFile()
+			if tt.outside {
+				file = NewSecretFile(store.codexRoot, store.codexFD, testAuth, filepath.Join(store.configDir, testAuth))
+			}
+			outcome, err := file.ReadStrict(MaxCredentialsBytes)
+			switch {
+			case tt.outside:
+				if !isErrorType[*OutsideRootError](err) {
+					t.Fatalf("ReadStrict = %v, want OutsideRootError", err)
+				}
+			case tt.wantIO:
+				if !isErrorType[*errs.IOError](err) || !errors.Is(err, unix.EACCES) {
+					t.Fatalf("ReadStrict = %v, want permission IOError rather than absence", err)
+				}
+			case err != nil:
+				t.Fatalf("ReadStrict failed: %v", err)
+			}
+			if diff := gocmp.Diff(tt.present, outcome.Present); diff != "" {
+				t.Fatalf("present (-want +got): %s", diff)
+			}
+			if tt.present {
+				if diff := gocmp.Diff([]byte("credential bytes"), outcome.Bytes); diff != "" {
+					t.Fatalf("strict-read bytes (-want +got):\n%s", diff)
+				}
+			} else if len(outcome.Bytes) != 0 {
+				t.Fatalf("failed or absent read returned %d bytes", len(outcome.Bytes))
+			}
+		})
+	}
+}
+
 func TestSecretFileRefusesTargetsOutsideItsRoot(t *testing.T) {
 	store := newSecretFileStore(t)
 	tests := map[string]struct {

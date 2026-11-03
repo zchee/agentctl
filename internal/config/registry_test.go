@@ -29,6 +29,26 @@ import (
 	"github.com/zchee/agentctl/internal/lockfile"
 )
 
+func TestAccountKindNames(t *testing.T) {
+	tests := map[string]struct {
+		kind AccountKind
+		want string
+	}{
+		"success: owned":      {AccountKindOwned("/store/account", "abcdef01"), "owned"},
+		"success: live":       {AccountKindLive(), "live"},
+		"success: config dir": {AccountKindConfigDirReadOnly("/external", "service", true), "config_dir"},
+		"success: foreign":    {AccountKindForeign("other-tool"), "foreign"},
+		"success: unset":      {AccountKind{}, ""},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if diff := gocmp.Diff(tt.want, tt.kind.Name()); diff != "" {
+				t.Errorf("account kind name (-want +got): %s", diff)
+			}
+		})
+	}
+}
+
 func TestDocumentedTimings(t *testing.T) {
 	t.Parallel()
 

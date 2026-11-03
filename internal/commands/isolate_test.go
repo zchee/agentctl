@@ -15,6 +15,8 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +26,7 @@ import (
 	gocmp "github.com/google/go-cmp/cmp"
 
 	"github.com/zchee/agentctl/internal/config"
+	"github.com/zchee/agentctl/internal/errs"
 	"github.com/zchee/agentctl/internal/provider/claude"
 )
 
@@ -41,6 +44,90 @@ func isolateFixture(t *testing.T) (*config.Paths, *config.AccountRecord, *claude
 	ns := paths.NamespaceDir("account", "organization")
 	rec := &config.AccountRecord{AccountUUID: "account", OrganizationUUID: "organization", Kind: config.AccountKindOwned(ns, claude.SHA8(ns))}
 	return paths, rec, &env
+}
+
+func TestWriteSessionSeedPreservesExistingOccupants(t *testing.T) {
+	tests := map[string]struct {
+		occupant string
+		cancel   bool
+		wantIO   bool
+		wantConf bool
+	}{
+		"success: a regular seed is left unchanged": {occupant: "file"},
+		"error: cancellation creates nothing":       {cancel: true},
+		"error: a symlink is not replaced":          {occupant: "symlink", wantConf: true},
+		"error: a directory is not replaced":        {occupant: "directory", wantConf: true},
+		"error: a missing parent is an IO failure":  {occupant: "missing-parent", wantIO: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ".claude.json")
+			original := []byte("existing seed")
+			switch tt.occupant {
+			case "file":
+				if err := os.WriteFile(path, original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				target := filepath.Join(dir, "target")
+				if err := os.WriteFile(target, original, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "missing-parent":
+				path = filepath.Join(dir, "absent", ".claude.json")
+			}
+			before, statErr := os.Lstat(path)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.cancel {
+				cancel()
+			}
+			err := writeSessionSeed(ctx, path, []byte("replacement"))
+			switch {
+			case tt.cancel:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("writeSessionSeed error = %v, want cancellation", err)
+				}
+			case tt.wantIO:
+				if _, ok := errors.AsType[*errs.IOError](err); !ok {
+					t.Fatalf("writeSessionSeed error = %v, want IOError", err)
+				}
+			case tt.wantConf:
+				if _, ok := errors.AsType[*errs.ConfigError](err); !ok {
+					t.Fatalf("writeSessionSeed error = %v, want ConfigError", err)
+				}
+			case err != nil:
+				t.Fatalf("existing regular seed should be accepted: %v", err)
+			}
+			after, err := os.Lstat(path)
+			if os.IsNotExist(statErr) {
+				if !os.IsNotExist(err) {
+					t.Fatalf("failed write created an occupant: info=%v error=%v", after, err)
+				}
+				return
+			}
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatalf("existing occupant was replaced: before=%v after=%v error=%v", before, after, err)
+			}
+			if tt.occupant == "file" || tt.occupant == "symlink" {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := gocmp.Diff(original, data); diff != "" {
+					t.Fatalf("existing bytes changed (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
 }
 
 func TestEnsureSessionLayout(t *testing.T) {

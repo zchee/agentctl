@@ -63,6 +63,45 @@ func waitGone(t *testing.T, pid int) {
 	t.Fatalf("process %d is still alive", pid)
 }
 
+func TestBeginSpawnAdmission(t *testing.T) {
+	tests := map[string]struct {
+		controller       bool
+		cancelPass       bool
+		cancelController bool
+		wantOK           bool
+	}{
+		"success: no controller admits an active pass":   {wantOK: true},
+		"error: no controller refuses a cancelled pass":  {cancelPass: true},
+		"success: an active controller admits spawning":  {controller: true, wantOK: true},
+		"error: a cancelled controller refuses spawning": {controller: true, cancelController: true},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var controller *signals.Controller
+			if tt.controller {
+				_, controller = signals.Install(t.Context())
+				defer controller.Stop()
+				if tt.cancelController {
+					controller.Stop()
+				}
+			}
+			if tt.cancelPass {
+				cancel()
+			}
+			pass := coordinator.Standalone(ctx, controller, farDeadline())
+			release, ok := pass.BeginSpawn()
+			if ok != tt.wantOK || (release != nil) != tt.wantOK {
+				t.Fatalf("BeginSpawn = (release present %v, %v), want both %v", release != nil, ok, tt.wantOK)
+			}
+			if release != nil {
+				release()
+			}
+		})
+	}
+}
+
 func TestRunPassBoundedWorkers(t *testing.T) {
 	tests := map[string]struct {
 		jobs       int

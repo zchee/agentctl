@@ -15,8 +15,15 @@
 package codex
 
 import (
+	"encoding/base64"
+	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +31,102 @@ import (
 
 	"github.com/zchee/agentctl/internal/config"
 	codexprovider "github.com/zchee/agentctl/internal/provider/codex"
+	"github.com/zchee/agentctl/internal/usage"
 )
+
+func TestStatusRateLimitCache(t *testing.T) {
+	tests := map[string]struct{ prior bool }{
+		"success: hint persists without prior usage": {},
+		"success: hint preserves prior usage":        {prior: true},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths := config.NewPaths(t.TempDir())
+			if err := paths.EnsureCodexDirs(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			jwt := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(fmt.Appendf(nil, `{"exp":%d}`, time.Now().Add(time.Hour).Unix())) + ".rate-test"
+			auth := fmt.Appendf(nil, `{"auth_mode":"chatgpt","tokens":{"access_token":%q,"account_id":"rate-account"}}`, jwt)
+			if err := os.WriteFile(filepath.Join(home, "auth.json"), auth, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			record := config.CodexAccountRecord{ChatGPTUserID: "rate-user", ChatGPTAccountID: "rate-account", Kind: config.CodexKindHomeReadOnly(home)}
+			plan := RowPlan{Source: codexprovider.Source{Kind: codexprovider.SourceHomeReadOnly, Home: home, Record: &record}}
+			cachePath := usage.CachePathIn(paths.CodexCacheDir(), record.ChatGPTUserID, record.ChatGPTAccountID)
+			var prior *usage.CacheEntry
+			if test.prior {
+				entry := usage.NewCacheEntry(time.Now().Add(-time.Hour).UnixMilli(), []byte(`{"rate_limit":{"primary_window":{"used_percent":42,"limit_window_seconds":18000}}}`))
+				prior = &entry
+				if err := usage.StoreCache(t.Context(), cachePath, prior); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var gets atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("usage method = %s, want GET", r.Method)
+				}
+				if gets.Add(1) == 1 {
+					w.Header().Set("Retry-After", "60")
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				_, _ = w.Write([]byte(`{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000}}}`))
+			}))
+			defer server.Close()
+			shared := &passShared{paths: paths, client: codexprovider.NewUsageClient(server.URL, "rate-test", time.Second), options: passOptions{refresh: true, noCache: true}}
+			before := time.Now().UnixMilli()
+			first := runRow(t.Context(), plan, shared)
+			after := time.Now().UnixMilli()
+			if diff := gocmp.Diff(codexprovider.StateRateLimited, first.account.State.Kind); diff != "" {
+				t.Fatalf("first state (-want +got):\n%s", diff)
+			}
+			cached := usage.LoadCache(t.Context(), cachePath)
+			if cached == nil || cached.RateLimitedUntilMs == nil {
+				t.Fatalf("429 hint not persisted: %+v", cached)
+			}
+			if until := *cached.RateLimitedUntilMs; until < before+60_000 || until > after+60_000 {
+				t.Fatalf("retry deadline = %d, want [%d,%d]", until, before+60_000, after+60_000)
+			}
+			want := usage.NewCacheEntry(0, []byte("{}"))
+			if prior != nil {
+				want = *prior
+			}
+			want.RateLimitedUntilMs = cached.RateLimitedUntilMs
+			if diff := gocmp.Diff(want, *cached); diff != "" {
+				t.Fatalf("persisted usage (-want +got):\n%s", diff)
+			}
+			second := runRow(t.Context(), plan, shared)
+			if second.account.State.Kind != codexprovider.StateRateLimited || gets.Load() != 1 {
+				t.Fatalf("active hint: state=%s GET=%d, want rate limited and one GET", second.account.State.Kind, gets.Load())
+			}
+			cached.RateLimitedUntilMs = new(time.Now().Add(-time.Second).UnixMilli())
+			if err := usage.StoreCache(t.Context(), cachePath, cached); err != nil {
+				t.Fatal(err)
+			}
+			third := runRow(t.Context(), plan, shared)
+			if third.account.State.Kind != codexprovider.StateOK || gets.Load() != 2 {
+				t.Fatalf("expired hint: state=%s GET=%d, want OK and two GETs", third.account.State.Kind, gets.Load())
+			}
+			if cached := usage.LoadCache(t.Context(), cachePath); cached == nil || cached.RateLimitedUntilMs != nil {
+				t.Fatalf("success did not replace expired hint: %+v", cached)
+			}
+		})
+	}
+}
+
+func TestStoreRateLimitRefusesOverflow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	before := usage.NewCacheEntry(1234, []byte("{}"))
+	if err := usage.StoreCache(t.Context(), path, &before); err != nil {
+		t.Fatal(err)
+	}
+	storeRateLimit(t.Context(), path, &before, math.MaxInt64, time.Second)
+	if diff := gocmp.Diff(&before, usage.LoadCache(t.Context(), path)); diff != "" {
+		t.Fatalf("overflow changed existing cache (-want +got):\n%s", diff)
+	}
+}
 
 func TestStatusBudgets(t *testing.T) {
 	tests := map[string]struct {

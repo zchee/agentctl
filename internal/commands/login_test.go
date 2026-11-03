@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +44,47 @@ import (
 type pipeLoginTerminal struct{ LoginTerminal }
 
 func (p pipeLoginTerminal) OpenBrowser(context.Context, string) {}
+
+func TestLoginPriorDigestsReadsOnlyUsableCredentials(t *testing.T) {
+	tests := map[string]struct {
+		blob string
+		want *secret.Digests
+	}{
+		"success: valid credentials yield token digests": {
+			blob: `{"claudeAiOauth":{"accessToken":"access-before-login","refreshToken":"refresh-before-login","expiresAt":9999999999999}}`,
+			want: &secret.Digests{
+				AccessSHA256:  fmt.Sprintf("%x", sha256.Sum256([]byte("access-before-login"))),
+				RefreshSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("refresh-before-login"))),
+			},
+		},
+		"success: an absent credential has no prior digests": {},
+		"error: malformed JSON has no prior digests":         {blob: `{"claudeAiOauth":`},
+		"error: a malformed credential has no prior digests": {blob: `{"claudeAiOauth":{"accessToken":42}}`},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, secret.CredentialsFile)
+			if tt.blob != "" {
+				if err := os.WriteFile(path, []byte(tt.blob), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if diff := gocmp.Diff(tt.want, loginPriorDigests(dir)); diff != "" {
+				t.Fatalf("prior digests (-want +got):\n%s", diff)
+			}
+			if tt.blob != "" {
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := gocmp.Diff(tt.blob, string(after)); diff != "" {
+					t.Fatalf("digest read changed credential file (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
+}
 
 func TestLoginPersistsOnlyAfterAuthorization(t *testing.T) {
 	tests := map[string]struct {

@@ -27,6 +27,57 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestResolveLoginBinary(t *testing.T) {
+	tests := map[string]struct {
+		executable bool
+	}{
+		"success: skips missing directory and nonexecutable candidates": {executable: true},
+		"error: no usable executable":                                   {},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("AGENTCTL_CODEX_BIN", "")
+			if err := os.Unsetenv("AGENTCTL_CODEX_BIN"); err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			missing := filepath.Join(root, "missing")
+			directory := filepath.Join(root, "directory")
+			nonexecutable := filepath.Join(root, "nonexecutable")
+			executable := filepath.Join(root, "executable")
+			for _, dir := range []string{missing, directory, nonexecutable, executable} {
+				if err := os.Mkdir(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Mkdir(filepath.Join(directory, "codex"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(nonexecutable, "codex"), []byte("not executable"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := ""
+			if test.executable {
+				want = filepath.Join(executable, "codex")
+				if err := os.WriteFile(want, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", strings.Join([]string{"", missing, directory, nonexecutable, executable}, string(os.PathListSeparator)))
+			got, err := ResolveLoginBinary()
+			if test.executable && err != nil {
+				t.Fatalf("ResolveLoginBinary() = %v", err)
+			}
+			if !test.executable && (err == nil || !strings.Contains(err.Error(), "`codex` is not on PATH")) {
+				t.Fatalf("ResolveLoginBinary() error = %v, want missing executable refusal", err)
+			}
+			if diff := gocmp.Diff(want, got); diff != "" {
+				t.Fatalf("selected binary (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestAllowedLoginEnv(t *testing.T) {
 	tests := map[string]struct{ parent, want []string }{
 		"success: exact allowlist drops decoys": {[]string{"HOME=/home", "PATH=/bin", "TMPDIR=/tmp", "LANG=C", "TERM=xterm", "AWS_SECRET_ACCESS_KEY=decoy", "CODEX_API_KEY=decoy", "USER=user", "LOGNAME=user", "SHELL=/bin/sh", "CODEX_HOME=/live"}, []string{"HOME=/home", "PATH=/bin", "TMPDIR=/tmp", "LANG=C", "TERM=xterm", "CODEX_HOME=/scratch"}},

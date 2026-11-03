@@ -16,9 +16,11 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	json "encoding/json/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/zchee/agentctl/internal/cli"
 	"github.com/zchee/agentctl/internal/config"
 	provider "github.com/zchee/agentctl/internal/provider/codex"
+	"github.com/zchee/agentctl/internal/runtime/proc"
 	"github.com/zchee/agentctl/internal/secret"
 )
 
@@ -115,6 +118,104 @@ func TestDoctorReadOnly(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), "owned namespaces\n  none") {
 				t.Fatalf("table missing empty namespaces:\n%s", out.String())
+			}
+		})
+	}
+}
+
+func TestDoctorLockSectionReadOnly(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("process holder identity lookup requires macOS")
+	}
+	process, err := proc.Lookup(t.Context(), os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := process.StartIdentity()
+	if start == "" {
+		t.Fatal("running test process has no start identity")
+	}
+	tests := map[string]struct {
+		pid       uint32
+		start     *string
+		cancelled bool
+		want      string
+		note      bool
+	}{
+		"success: live holder":           {pid: uint32(os.Getpid()), start: &start, want: "held"},
+		"success: gone holder":           {pid: 0, start: &start, want: "dead (holder gone)"},
+		"success: recycled holder":       {pid: uint32(os.Getpid()), start: new("different-start"), want: "dead (pid recycled)"},
+		"error: missing holder identity": {pid: uint32(os.Getpid()), note: true},
+		"error: unverifiable holder":     {pid: uint32(os.Getpid()), start: &start, cancelled: true, note: true},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			paths := config.NewPaths(t.TempDir())
+			path, err := paths.CodexLockPath("doctor-user", "doctor-account")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			body := secret.LockBody{PID: test.pid, PIDStartTime: test.start, AcquiredAt: "2026-01-01T00:00:00Z"}
+			before, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, before, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := t.Context()
+			if test.cancelled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			var notes []string
+			got := doctorLockSection(ctx, paths, "doctor-user", "doctor-account", &notes)
+			var want *doctorLock
+			if test.want != "" {
+				want = &doctorLock{PID: body.PID, AcquiredAt: body.AcquiredAt, Holder: test.want}
+			}
+			if diff := gocmp.Diff(want, got); diff != "" {
+				t.Fatalf("lock report (-want +got):\n%s", diff)
+			}
+			var wantNotes []string
+			if test.note {
+				wantNotes = []string{"namespace lock: unknown holder identity"}
+			}
+			if diff := gocmp.Diff(wantNotes, notes); diff != "" {
+				t.Fatalf("lock notes (-want +got):\n%s", diff)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := gocmp.Diff(before, after); diff != "" {
+				t.Fatalf("doctor changed lock bytes (-want +got):\n%s", diff)
+			}
+			meta, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(info, meta) || info.Mode() != meta.Mode() || !info.ModTime().Equal(meta.ModTime()) {
+				t.Fatal("doctor changed lock metadata")
+			}
+			remaining, err := os.ReadDir(filepath.Dir(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(remaining) != len(entries) {
+				t.Fatalf("doctor changed lock directory: before=%v after=%v", entries, remaining)
 			}
 		})
 	}

@@ -17,6 +17,8 @@ package usage
 import (
 	"bytes"
 	"encoding/json/jsontext"
+	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -46,6 +48,125 @@ func storeDir(t *testing.T) *config.Paths {
 
 func cacheBody() jsontext.Value {
 	return jsontext.Value(`{"limits":[{"kind":"session","percent":21,"is_active":false}]}`)
+}
+
+func TestWriteAndSyncClosesDescriptorsAfterFailure(t *testing.T) {
+	tests := map[string]struct {
+		kind string
+		op   string
+	}{
+		"error: a read-only file rejects the write": {kind: "read-only", op: "write"},
+		"error: a directory rejects the write":      {kind: "directory", op: "write"},
+		"error: a pipe rejects sync after writing":  {kind: "pipe", op: "sync"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			cachePath := filepath.Join(dir, "previous.json")
+			prior := NewCacheEntry(1234, cacheBody())
+			if err := StoreCache(t.Context(), cachePath, &prior); err != nil {
+				t.Fatal(err)
+			}
+			var file, reader *os.File
+			var err error
+			switch tt.kind {
+			case "read-only":
+				file, err = os.Open(cachePath)
+			case "directory":
+				file, err = os.Open(dir)
+			case "pipe":
+				reader, file, err = os.Pipe()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = file.Close() })
+			if reader != nil {
+				t.Cleanup(func() { _ = reader.Close() })
+			}
+			data := []byte("replacement")
+			err = writeAndSync(file, data)
+			pathErr, ok := errors.AsType[*os.PathError](err)
+			if !ok || pathErr.Op != tt.op {
+				t.Fatalf("writeAndSync = %v, want a %q descriptor error", err, tt.op)
+			}
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("failed descriptor remains open: Stat error = %v", err)
+			}
+			if reader != nil {
+				written, err := io.ReadAll(reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := gocmp.Diff(data, written); diff != "" {
+					t.Fatalf("pipe bytes before sync failure (-want +got):\n%s", diff)
+				}
+			}
+			if diff := gocmp.Diff(&prior, LoadCache(t.Context(), cachePath)); diff != "" {
+				t.Fatalf("prior cache is no longer usable (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestFailedCacheStoresLeaveNoTemporaryAndPreservePriorEntries(t *testing.T) {
+	tests := map[string]struct {
+		unwritable bool
+	}{
+		"error: an unwritable parent refuses creation": {unwritable: true},
+		"error: a directory target refuses rename":     {},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			priorPath := filepath.Join(dir, "previous.json")
+			prior := NewCacheEntry(1234, cacheBody())
+			if err := StoreCache(t.Context(), priorPath, &prior); err != nil {
+				t.Fatal(err)
+			}
+			path := priorPath
+			if tt.unwritable {
+				if err := os.Chmod(dir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Chmod(dir, 0o700); err != nil {
+						t.Errorf("restoring directory permissions: %v", err)
+					}
+				})
+			} else {
+				path = filepath.Join(dir, "directory.json")
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next := NewCacheEntry(5678, jsontext.Value(`{"updated":true}`))
+			if err := StoreCache(t.Context(), path, &next); err == nil {
+				t.Fatal("StoreCache unexpectedly succeeded with an unwritable parent or directory target")
+			}
+			after, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var beforeNames, afterNames []string
+			for _, entry := range before {
+				beforeNames = append(beforeNames, entry.Name())
+			}
+			for _, entry := range after {
+				afterNames = append(afterNames, entry.Name())
+			}
+			if diff := gocmp.Diff(beforeNames, afterNames); diff != "" {
+				t.Fatalf("failed cache store left debris (-want +got):\n%s", diff)
+			}
+			if diff := gocmp.Diff(&prior, LoadCache(t.Context(), priorPath)); diff != "" {
+				t.Fatalf("prior cache is no longer usable (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestCachePathIsTheAccountAndOrganizationUnderTheCacheDir(t *testing.T) {

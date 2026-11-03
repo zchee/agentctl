@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	gocmp "github.com/google/go-cmp/cmp"
@@ -456,6 +457,47 @@ func TestRedactBodyReplacesTokenRunsBeforeTruncating(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestReadOAuthBody(t *testing.T) {
+	tests := map[string]struct {
+		body string
+		err  error
+		kind provider.FetchKind
+	}{
+		"success: empty body":                          {},
+		"success: complete body":                       {body: `{"access_token":"test-access"}`},
+		"success: body exactly at limit":               {body: strings.Repeat("x", MaxOAuthBodyBytes)},
+		"error: truncated body discards partial bytes": {body: "partial", err: io.ErrUnexpectedEOF, kind: provider.FetchParse},
+		"error: deadline discards partial bytes":       {body: "partial", err: fmt.Errorf("read: %w", context.DeadlineExceeded), kind: provider.FetchTransport},
+		"error: reader timeout discards partial bytes": {body: "partial", err: fmt.Errorf("read: %w", os.ErrDeadlineExceeded), kind: provider.FetchTransport},
+		"error: oversized body discards all bytes":     {body: strings.Repeat("x", MaxOAuthBodyBytes+1), kind: provider.FetchParse},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			var reader io.Reader = strings.NewReader(test.body)
+			if test.err != nil {
+				reader = io.MultiReader(reader, iotest.ErrReader(test.err))
+			}
+			got, err := readOAuthBody(reader)
+			if test.kind == "" {
+				if err != nil {
+					t.Fatalf("readOAuthBody() error = %v", err)
+				}
+				if diff := gocmp.Diff(test.body, string(got)); diff != "" {
+					t.Fatalf("response body (-want +got):\n%s", diff)
+				}
+				return
+			}
+			failure, ok := errors.AsType[*provider.FetchError](err)
+			if !ok || failure.Kind != test.kind {
+				t.Fatalf("readOAuthBody() error = %v, want FetchError kind %q", err, test.kind)
+			}
+			if got != nil {
+				t.Fatalf("failed read returned %d partial bytes, want nil", len(got))
+			}
+		})
+	}
 }
 
 func TestNewOAuthClientRefusesAnUnusableEndpoint(t *testing.T) {

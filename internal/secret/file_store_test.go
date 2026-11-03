@@ -75,6 +75,92 @@ func modeOf(t *testing.T, path string) os.FileMode {
 	return info.Mode().Perm()
 }
 
+func TestFileStoreRemovalReportsOnlyCompletedUnlinks(t *testing.T) {
+	wrappers := map[string]struct {
+		name   string
+		remove func(*config.Paths, string) (bool, error)
+	}{
+		"credentials": {CredentialsFile, RemoveCredentialsFile},
+		"adopted":     {AdoptedFile, RemoveAdoptedFile},
+	}
+	for wrapper, w := range wrappers {
+		t.Run(wrapper, func(t *testing.T) {
+			tests := map[string]struct {
+				occupant string
+				removed  bool
+				outside  bool
+				wantIO   bool
+				symlink  bool
+			}{
+				"success: an existing file is removed":    {occupant: "file", removed: true},
+				"success: an absent file is not removed":  {},
+				"error: an outside path is refused":       {occupant: "file", outside: true},
+				"error: a directory cannot be unlinked":   {occupant: "directory", wantIO: true},
+				"error: a symlinked namespace is refused": {occupant: "file", symlink: true},
+			}
+			for name, tt := range tests {
+				t.Run(name, func(t *testing.T) {
+					store := newFileStore(t)
+					ns := store.nsDir
+					if tt.outside {
+						ns = t.TempDir()
+					}
+					if tt.symlink {
+						if err := os.MkdirAll(filepath.Dir(ns), 0o700); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(t.TempDir(), ns); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := os.MkdirAll(ns, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					path := filepath.Join(ns, w.name)
+					switch tt.occupant {
+					case "file":
+						if err := os.WriteFile(path, []byte("unchanged"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					case "directory":
+						if err := os.Mkdir(path, 0o700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					before, _ := os.Lstat(path)
+					removed, err := w.remove(store.paths, ns)
+					if diff := gocmp.Diff(tt.removed, removed); diff != "" {
+						t.Errorf("removed (-want +got): %s; error=%v", diff, err)
+					}
+					switch {
+					case tt.outside:
+						if _, ok := errors.AsType[*OutsideRootError](err); !ok {
+							t.Fatalf("removal error = %v, want OutsideRootError", err)
+						}
+					case tt.symlink:
+						if _, ok := errors.AsType[*SymlinkRefusedError](err); !ok {
+							t.Fatalf("removal error = %v, want SymlinkRefusedError", err)
+						}
+					case tt.wantIO:
+						if _, ok := errors.AsType[*errs.IOError](err); !ok {
+							t.Fatalf("removal error = %v, want IOError", err)
+						}
+					case err != nil:
+						t.Fatalf("removal failed: %v", err)
+					}
+					after, statErr := os.Lstat(path)
+					if tt.outside || tt.wantIO || tt.symlink {
+						if statErr != nil || !os.SameFile(before, after) {
+							t.Fatalf("refused removal changed occupant: before=%v after=%v error=%v", before, after, statErr)
+						}
+					} else if !os.IsNotExist(statErr) {
+						t.Fatalf("target remains after removal: info=%v error=%v", after, statErr)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestFileStoreReadReportsTheFilesIdentityAlongsideItsBytes(t *testing.T) {
 	store := newFileStore(t)
 	json := blobJSON("access-1", "refresh-1")
