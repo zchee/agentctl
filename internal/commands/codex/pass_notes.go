@@ -36,13 +36,12 @@ const (
 
 type markerView struct {
 	kind     markerKind
-	since    time.Time
 	class    codexprovider.RefreshUnknownClass
 	resendAt *time.Time
 	reason   string
 }
 
-func unknownState(since time.Time, class codexprovider.RefreshUnknownClass, resendAt *time.Time, now time.Time) (codexprovider.State, string) {
+func unknownState(class codexprovider.RefreshUnknownClass, resendAt *time.Time, now time.Time) (codexprovider.State, string) {
 	eligible := resendAt != nil && !resendAt.After(now)
 	note := resendSpent
 	if eligible {
@@ -50,7 +49,7 @@ func unknownState(since time.Time, class codexprovider.RefreshUnknownClass, rese
 	} else if resendAt != nil {
 		note = "--resend is available after " + render.FormatInstant(*resendAt)
 	}
-	return codexprovider.State{Kind: codexprovider.StateRefreshUnknown, Since: since, Class: class.Label(), ResendEligible: eligible}, note
+	return codexprovider.State{Kind: codexprovider.StateRefreshUnknown, Class: class.Label()}, note
 }
 
 func stepState(step codexprovider.RefreshStep) (codexprovider.State, *string, bool) {
@@ -71,7 +70,7 @@ func stepState(step codexprovider.RefreshStep) (codexprovider.State, *string, bo
 		note = &reason
 	case codexprovider.RefreshStepOutcomeUnknown:
 		var text string
-		state, text = unknownState(step.Since, step.Class, step.ResendEligibleAt, time.Now())
+		state, text = unknownState(step.Class, step.ResendEligibleAt, time.Now())
 		note = &text
 	case codexprovider.RefreshStepStateUnavailable:
 		state = codexprovider.State{Kind: codexprovider.StateRefreshUnavailable, Reason: step.Reason}

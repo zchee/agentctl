@@ -59,7 +59,7 @@ func TestParseDumpFindsEveryServiceInTheFixture(t *testing.T) {
 	}
 }
 
-func TestParseDumpReadsTheAccountAndTimestamps(t *testing.T) {
+func TestParseDumpReadsTheAccount(t *testing.T) {
 	t.Parallel()
 
 	entries, err := parseDump(dumpFixture(t))
@@ -72,10 +72,8 @@ func TestParseDumpReadsTheAccountAndTimestamps(t *testing.T) {
 	// The hex form is followed by the printable rendering, and the trailing
 	// NUL security prints inside it is dropped.
 	want := ServiceEntry{
-		Service:    "Claude Code-credentials",
-		Account:    "example",
-		CreatedAt:  "20260908012005Z",
-		ModifiedAt: "20260908012005Z",
+		Service: "Claude Code-credentials",
+		Account: "example",
 	}
 	if diff := gocmp.Diff(want, entries[0]); diff != "" {
 		t.Errorf("live entry mismatch (-want +got):\n%s", diff)

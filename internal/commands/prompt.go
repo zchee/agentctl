@@ -16,6 +16,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -58,29 +59,37 @@ func (p TerminalPrompt) Confirm(ctx context.Context, question string) (bool, err
 			return false, errs.NewIO("could not write the confirmation prompt", err)
 		}
 	}
-	var answer strings.Builder
+	answer, err := readTerminalLine(ctx, p.In, "could not read the confirmation")
+	if err != nil {
+		return false, err
+	}
+	value := strings.TrimSpace(answer)
+	return strings.EqualFold(value, "y") || strings.EqualFold(value, "yes"), nil
+}
+
+// readTerminalLine polls for input so cancellation does not leave a blocked reader.
+func readTerminalLine(ctx context.Context, in *os.File, failure string) (string, error) {
+	var line strings.Builder
 	var readiness tty.Readiness
 	for {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return "", err
 		}
-		ready, err := readiness.WaitReadable(p.In, 250*time.Millisecond)
+		ready, err := readiness.WaitReadable(in, 250*time.Millisecond)
 		if err != nil {
-			return false, errs.NewIO("could not read the confirmation", err)
+			return "", errs.NewIO(failure, err)
 		}
 		if !ready {
 			continue
 		}
 		var b [1]byte
-		n, err := p.In.Read(b[:])
-		if err != nil && err != io.EOF {
-			return false, errs.NewIO("could not read the confirmation", err)
+		n, err := in.Read(b[:])
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", errs.NewIO(failure, err)
 		}
 		if n == 0 || b[0] == '\n' {
-			break
+			return line.String(), nil
 		}
-		answer.WriteByte(b[0])
+		line.WriteByte(b[0])
 	}
-	value := strings.TrimSpace(answer.String())
-	return strings.EqualFold(value, "y") || strings.EqualFold(value, "yes"), nil
 }

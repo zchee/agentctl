@@ -15,7 +15,6 @@
 package testutil
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -105,12 +104,9 @@ func ScriptCommands() map[string]func() {
 	}
 	return map[string]func(){
 		"flockhold":  wrap(flockholdMain),
-		"sigterm":    wrap(sigtermMain),
-		"drainpipes": wrap(drainpipesMain),
 		"mtime":      wrap(mtimeMain),
 		"waitfor":    wrap(waitforMain),
 		"schema":     wrap(schemaMain),
-		"golden":     wrap(goldenMain),
 		"expectexit": wrap(expectexitMain),
 		"proctable":  wrap(proctableMain),
 		"treesig":    wrap(treesigMain),
@@ -212,49 +208,6 @@ func flockholdMain(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// sigtermMain sends SIGTERM to the process id in args[0].
-func sigtermMain(args []string, _, stderr io.Writer) int {
-	if len(args) != 1 {
-		say(stderr, "usage: sigterm <pid>\n")
-		return 2
-	}
-	pid, err := strconv.Atoi(args[0])
-	if err != nil {
-		say(stderr, "sigterm: %v\n", err)
-		return 2
-	}
-	if err := unix.Kill(pid, unix.SIGTERM); err != nil {
-		say(stderr, "sigterm: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-// drainpipesMain runs the command in args with both of its pipes drained
-// concurrently and reports how much each stream carried, so a script can
-// assert a chatty child stayed live past the kernel's pipe buffer.
-func drainpipesMain(args []string, stdout, stderr io.Writer) int {
-	if len(args) < 1 {
-		say(stderr, "usage: drainpipes <command> [args...]\n")
-		return 2
-	}
-	cmd := exec.Command(args[0], args[1:]...)
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	err := cmd.Run()
-	say(stdout, "stdout:%d stderr:%d\n", outBuf.Len(), errBuf.Len())
-	if err == nil {
-		return 0
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
-		return exitErr.ExitCode()
-	}
-	say(stderr, "drainpipes: %v\n", err)
-	return 1
-}
-
 // mtimeMain prints args[0]'s modification time in nanoseconds since the
 // epoch, so a script can record it and prove it later unchanged.
 func mtimeMain(args []string, stdout, stderr io.Writer) int {
@@ -271,17 +224,11 @@ func mtimeMain(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// waitforMain polls until args[0] exists - or, with -gone, until it does
-// not - within a bounded budget (default 10s), the e2e counterpart of
-// the bounded polling the in-process harness uses.
+// waitforMain polls until args[0] exists within a bounded budget (default
+// 10s), the e2e counterpart of the bounded polling the in-process harness uses.
 func waitforMain(args []string, _, stderr io.Writer) int {
-	gone := false
-	if len(args) > 0 && args[0] == "-gone" {
-		gone = true
-		args = args[1:]
-	}
 	if len(args) < 1 || len(args) > 2 {
-		say(stderr, "usage: waitfor [-gone] <path> [budget]\n")
+		say(stderr, "usage: waitfor <path> [budget]\n")
 		return 2
 	}
 	budget := 10 * time.Second
@@ -295,17 +242,10 @@ func waitforMain(args []string, _, stderr io.Writer) int {
 	}
 	observed := WaitUntil(budget, func() bool {
 		_, err := os.Lstat(args[0])
-		if gone {
-			return err != nil
-		}
 		return err == nil
 	})
 	if !observed {
-		state := "appear"
-		if gone {
-			state = "disappear"
-		}
-		say(stderr, "waitfor: %s did not %s within %s\n", args[0], state, budget)
+		say(stderr, "waitfor: %s did not appear within %s\n", args[0], budget)
 		return 1
 	}
 	return 0
@@ -325,44 +265,6 @@ func schemaMain(args []string, _, stderr io.Writer) int {
 	}
 	if err := SchemaError(args[0], document); err != nil {
 		say(stderr, "schema: %v\n", err)
-		return 1
-	}
-	return 0
-}
-
-// goldenMain compares the file in args[1] against the named golden
-// oracle, exactly by default and under the end-of-file trim with -trim.
-func goldenMain(args []string, _, stderr io.Writer) int {
-	trim := false
-	if len(args) > 0 && args[0] == "-trim" {
-		trim = true
-		args = args[1:]
-	}
-	if len(args) != 2 {
-		say(stderr, "usage: golden [-trim] <name> <file>\n")
-		return 2
-	}
-	root, err := repoRoot()
-	if err != nil {
-		say(stderr, "golden: %v\n", err)
-		return 1
-	}
-	want, err := os.ReadFile(filepath.Join(root, "testdata", "golden", args[0]+".golden"))
-	if err != nil {
-		say(stderr, "golden: %v\n", err)
-		return 1
-	}
-	got, err := os.ReadFile(args[1])
-	if err != nil {
-		say(stderr, "golden: %v\n", err)
-		return 1
-	}
-	wantCmp, gotCmp := want, got
-	if trim {
-		wantCmp, gotCmp = normalizeEOF(want), normalizeEOF(got)
-	}
-	if !bytes.Equal(wantCmp, gotCmp) {
-		say(stderr, "golden: %s does not match %s.golden\n-- want --\n%s\n-- got --\n%s\n", args[1], args[0], wantCmp, gotCmp)
 		return 1
 	}
 	return 0

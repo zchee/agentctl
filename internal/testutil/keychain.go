@@ -267,7 +267,7 @@ func (f *Fixture) AssertKeychainReadOnly() {
 // starting it.
 func (f *Fixture) SecurityWriteArgvCommand(account, service, hex string) *exec.Cmd {
 	f.tb.Helper()
-	cmd := exec.CommandContext(testContext(f.tb), f.SecurityBin(), "add-generic-password", "-U", "-a", account, "-s", service, "-X", hex)
+	cmd := exec.CommandContext(f.tb.Context(), f.SecurityBin(), "add-generic-password", "-U", "-a", account, "-s", service, "-X", hex)
 	return f.Apply(cmd)
 }
 

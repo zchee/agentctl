@@ -108,10 +108,6 @@ type ServiceEntry struct {
 	Service string
 	// Account is the acct attribute, or empty when the item has none.
 	Account string
-	// CreatedAt is the cdat attribute as printed, or empty.
-	CreatedAt string
-	// ModifiedAt is the mdat attribute as printed, or empty.
-	ModifiedAt string
 }
 
 // KeychainClassUnsupported is the class carried by a platform with no
@@ -131,13 +127,6 @@ type KeychainError struct {
 	// bytes: the payload travels on stdout and is sealed into a [Secret]
 	// before any error is built.
 	Detail string
-	// Transient reports whether a later attempt might succeed. A locked
-	// keychain gets unlocked and a timeout is a busy machine; a missing
-	// binary and an absent platform transport will not fix themselves. A
-	// transient keychain failure is never answered by falling back to the
-	// credential file, because the two stores can hold different accounts'
-	// credentials and two readers of one refresh chain is how it dies.
-	Transient bool
 
 	// kind is set on a keychain write failure only: whether security(1)
 	// never started, may or may not have committed, or failed definitely.
@@ -176,13 +165,13 @@ const (
 // detail still matches its named value.
 var (
 	// ErrKeychainLocked matches a read refused by a locked keychain.
-	ErrKeychainLocked = &KeychainError{Class: errs.KeychainLocked, Transient: true}
+	ErrKeychainLocked = &KeychainError{Class: errs.KeychainLocked}
 	// ErrKeychainUnavailable matches a keychain that is not reachable at
 	// all, including a security(1) that could not be started.
-	ErrKeychainUnavailable = &KeychainError{Class: errs.KeychainUnavailable, Transient: true}
+	ErrKeychainUnavailable = &KeychainError{Class: errs.KeychainUnavailable}
 	// ErrKeychainTimeout matches a security(1) child that exceeded its
 	// budget and was killed.
-	ErrKeychainTimeout = &KeychainError{Class: errs.KeychainTimeout, Transient: true}
+	ErrKeychainTimeout = &KeychainError{Class: errs.KeychainTimeout}
 	// ErrItemNotFound matches a readable keychain that holds no item under
 	// the requested service name — the normal "needs login" answer.
 	ErrItemNotFound = &KeychainError{Class: errs.KeychainNotFound}

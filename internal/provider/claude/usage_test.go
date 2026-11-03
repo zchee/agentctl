@@ -55,9 +55,9 @@ func usageTS(t *testing.T, text string) time.Time {
 }
 
 // parsedFixture parses one fixture into a snapshot.
-func parsedFixture(t *testing.T, name string, keepRaw bool) *usage.UsageSnapshot {
+func parsedFixture(t *testing.T, name string) *usage.UsageSnapshot {
 	t.Helper()
-	snapshot, err := ParseUsage(fixture(t, name), usageTS(t, "2026-09-08T00:00:00Z"), keepRaw)
+	snapshot, err := ParseUsage(fixture(t, name), usageTS(t, "2026-09-08T00:00:00Z"), false)
 	if err != nil {
 		t.Fatalf("every fixture body is a JSON object: %v", err)
 	}
@@ -101,7 +101,7 @@ func testClient(server *httptest.Server) *UsageClient {
 func TestTheCapturedFixtureYieldsEveryWindow(t *testing.T) {
 	t.Parallel()
 
-	snapshot := parsedFixture(t, "usage-2026-09-08.json", false)
+	snapshot := parsedFixture(t, "usage-2026-09-08.json")
 	if len(snapshot.Windows) != 4 {
 		t.Fatalf("the capture describes three limits and one top-level window, got %d", len(snapshot.Windows))
 	}
@@ -133,15 +133,12 @@ func TestTheCapturedFixtureYieldsEveryWindow(t *testing.T) {
 	if !snapshot.Windows[0].ResetsAt.Equal(wantReset) {
 		t.Errorf("resets_at = %v, want %v; sub-second precision must survive", snapshot.Windows[0].ResetsAt, wantReset)
 	}
-	if got := snapshot.Windows[2].ScopeLabel; got != "Fable" {
-		t.Errorf("scope label = %q, want %q", got, "Fable")
-	}
 }
 
 func TestKnownFlatKeysAreIgnoredWhenLimitsIsPresent(t *testing.T) {
 	t.Parallel()
 
-	snapshot := parsedFixture(t, "usage-2026-09-08.json", false)
+	snapshot := parsedFixture(t, "usage-2026-09-08.json")
 	counts := map[usage.WindowClass]int{}
 	for _, window := range snapshot.Windows {
 		counts[window.Kind.Class]++
@@ -200,7 +197,7 @@ func TestTopLevelUsageWindows(t *testing.T) {
 		},
 		"success: known scoped keys do not duplicate limits": {
 			body: `{"limits":[{"kind":"weekly_scoped","scope":{"model":{"display_name":"Fable"}}}],"seven_day_fable":{"utilization":50,"resets_at":null}}`,
-			want: []usage.LimitWindow{{Kind: usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: "Fable"}, ScopeLabel: "Fable"}},
+			want: []usage.LimitWindow{{Kind: usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: "Fable"}}},
 		},
 	}
 	for name, tt := range tests {
@@ -220,7 +217,7 @@ func TestTopLevelUsageWindows(t *testing.T) {
 func TestTheLegacyKeysMapWhenLimitsIsEmpty(t *testing.T) {
 	t.Parallel()
 
-	snapshot := parsedFixture(t, "usage-legacy-only.json", false)
+	snapshot := parsedFixture(t, "usage-legacy-only.json")
 
 	var kinds []usage.WindowKind
 	var floors []int
@@ -244,9 +241,6 @@ func TestTheLegacyKeysMapWhenLimitsIsEmpty(t *testing.T) {
 	if diff := gocmp.Diff([]int{21, 35, 56}, floors); diff != "" {
 		t.Errorf("floors mismatch (-want +got):\n%s", diff)
 	}
-	if got := snapshot.Windows[2].ScopeLabel; got != "opus" {
-		t.Errorf("scope label = %q, want %q", got, "opus")
-	}
 }
 
 func TestNullLegacyWindowsAreDroppedNotRenderedAsZero(t *testing.T) {
@@ -254,7 +248,7 @@ func TestNullLegacyWindowsAreDroppedNotRenderedAsZero(t *testing.T) {
 
 	// seven_day_sonnet: null means "this account has no such window", not
 	// "this account is at 0%".
-	snapshot := parsedFixture(t, "usage-legacy-only.json", false)
+	snapshot := parsedFixture(t, "usage-legacy-only.json")
 	for _, window := range snapshot.Windows {
 		if window.Kind == (usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: "sonnet"}) {
 			t.Error("a null legacy window must not appear")
@@ -265,7 +259,7 @@ func TestNullLegacyWindowsAreDroppedNotRenderedAsZero(t *testing.T) {
 func TestAnUnrecognisedKindBecomesAVisibleUnknownWindow(t *testing.T) {
 	t.Parallel()
 
-	snapshot := parsedFixture(t, "usage-unknown-kind.json", false)
+	snapshot := parsedFixture(t, "usage-unknown-kind.json")
 	if len(snapshot.Windows) != 3 {
 		t.Fatalf("windows = %d, want 3", len(snapshot.Windows))
 	}
@@ -297,7 +291,7 @@ func TestABodyWithNoWindowAnywhereParsesToZeroWindows(t *testing.T) {
 
 	// Not an error: the caller turns this into the "no subscription
 	// limits" state.
-	snapshot := parsedFixture(t, "usage-empty-limits.json", false)
+	snapshot := parsedFixture(t, "usage-empty-limits.json")
 	if len(snapshot.Windows) != 0 {
 		t.Errorf("windows = %d, want 0", len(snapshot.Windows))
 	}
@@ -749,7 +743,7 @@ func TestBothRealFixturesRoundTripThroughRawUntouched(t *testing.T) {
 func TestRawIsAbsentUnlessItWasAskedFor(t *testing.T) {
 	t.Parallel()
 
-	if snapshot := parsedFixture(t, "usage-2026-09-08.json", false); snapshot.Raw != nil {
+	if snapshot := parsedFixture(t, "usage-2026-09-08.json"); snapshot.Raw != nil {
 		t.Error("raw must be nil when it was not asked for")
 	}
 }
@@ -788,9 +782,6 @@ func TestAScopedWindowWithoutADisplayNameStillAppears(t *testing.T) {
 	want := usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: "scoped"}
 	if windows[0].Kind != want {
 		t.Errorf("kind = %+v, want %+v", windows[0].Kind, want)
-	}
-	if windows[0].ScopeLabel != "" {
-		t.Errorf("scope label = %q, want empty", windows[0].ScopeLabel)
 	}
 }
 
@@ -846,39 +837,6 @@ func TestPercentAndFloorStayDistinctFromAbsence(t *testing.T) {
 	}
 	if windows[1].Percent != nil || windows[1].PercentFloor != nil {
 		t.Errorf("a non-number percent must stay absent, got %v / %v", windows[1].Percent, windows[1].PercentFloor)
-	}
-}
-
-func TestParseRetryAfterReadsBothFormsHTTPAllows(t *testing.T) {
-	t.Parallel()
-
-	now := usageTS(t, "2026-09-08T00:00:00Z")
-	tests := map[string]struct {
-		value   string
-		want    time.Duration
-		wantSet bool
-	}{
-		"success: a delay in seconds":            {value: "30", want: 30 * time.Second, wantSet: true},
-		"success: outer whitespace is trimmed":   {value: "  30  ", want: 30 * time.Second, wantSet: true},
-		"success: zero seconds is an answer":     {value: "0", want: 0, wantSet: true},
-		"success: an IMF-fixdate in the future":  {value: "Tue, 08 Sep 2026 00:02:00 GMT", want: 2 * time.Minute, wantSet: true},
-		"success: a date already past means now": {value: "Mon, 07 Sep 2026 00:00:00 GMT", want: 0, wantSet: true},
-		"error: an empty value is no hint":       {value: "", wantSet: false},
-		"error: prose is no hint":                {value: "soon", wantSet: false},
-		"error: a negative delay is no hint":     {value: "-5", wantSet: false},
-	}
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			got, ok := ParseRetryAfter(tt.value, now)
-			if ok != tt.wantSet {
-				t.Fatalf("ParseRetryAfter(%q) ok = %v, want %v", tt.value, ok, tt.wantSet)
-			}
-			if ok && got != tt.want {
-				t.Errorf("ParseRetryAfter(%q) = %v, want %v", tt.value, got, tt.want)
-			}
-		})
 	}
 }
 

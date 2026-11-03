@@ -126,7 +126,7 @@ func TestWatchRowAdapter(t *testing.T) {
 			if diff := gocmp.Diff(want, row.DetailLine(now)); diff != "" {
 				t.Fatal(diff)
 			}
-			if row.StateToken() != tt.state.Name() || !row.VisibleByDefault() || row.WatchTitle() != watchTitle || row.HiddenHint() != watchHiddenHint {
+			if !row.VisibleByDefault() {
 				t.Fatal("row metadata differs")
 			}
 			if diff := gocmp.Diff(render.UsageGauges(snapshot), row.Gauges()); diff != "" {

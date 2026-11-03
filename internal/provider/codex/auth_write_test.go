@@ -42,7 +42,7 @@ func writerNamespace(t *testing.T) (*config.Paths, *OwnedNamespace, *Lock, strin
 	if err := paths.EnsureCodexDirs(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	record := ownedTestRecord("user-one", "acct-one")
+	record := ownedTestRecord("user-one")
 	guard, err := AcquireCodex(t.Context(), paths, Owned(&record), time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +347,7 @@ func TestLoginReportRefusesBeforeCredentialRead(t *testing.T) {
 
 func TestNamespaceProofAndForeignRemoval(t *testing.T) {
 	paths, namespace, guard, path := writerNamespace(t)
-	other := ownedTestRecord("user-other", "acct-one")
+	other := ownedTestRecord("user-other")
 	if _, err := OpenOwnedNamespace(paths, Owned(&other), guard); err == nil {
 		t.Fatal("foreign namespace opened")
 	}

@@ -94,13 +94,6 @@ func NewConfig(message string) error {
 	return &ConfigError{Message: message}
 }
 
-// NewNotImplemented returns the [ConfigError] for a subcommand that is
-// accepted by the parser but not built yet, so the command exits [ExitFatal]
-// rather than pretending to have run.
-func NewNotImplemented(command string) error {
-	return &ConfigError{Message: fmt.Sprintf("`%s` is not implemented yet", command)}
-}
-
 // Error returns the configuration failure in the user's terms.
 func (e *ConfigError) Error() string {
 	return e.Message

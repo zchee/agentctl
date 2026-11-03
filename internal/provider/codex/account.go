@@ -16,7 +16,6 @@ package codex
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/zchee/agentctl/internal/usage"
@@ -58,10 +57,6 @@ const (
 	StateStale StateKind = "stale"
 	// StateRateLimited means the endpoint asked for a pause.
 	StateRateLimited StateKind = "rate_limited"
-	// StateRefreshDiscarded means a refresh response was discarded.
-	StateRefreshDiscarded StateKind = "refresh_discarded"
-	// StateIdentityDrift means the renewed token names a different workspace.
-	StateIdentityDrift StateKind = "identity_drift"
 	// StateRefreshUnknown means a sent refresh has no known outcome.
 	StateRefreshUnknown StateKind = "refresh_outcome_unknown"
 	// StateRefreshUnavailable means the marker cannot be read or written.
@@ -74,23 +69,18 @@ const (
 	StateUnauthorizedTerminal StateKind = "unauthorized_terminal"
 	// StateAdoptedDead means an adopted grant was rejected.
 	StateAdoptedDead StateKind = "adopted_grant_dead"
-	// StateDiscardedExternal means an external grant replaced the refresh response.
-	StateDiscardedExternal StateKind = "discarded_external"
 	// StateError is a content-free error sentence.
 	StateError StateKind = "error"
 )
 
 // State holds only derived, non-secret account status information.
 type State struct {
-	Kind              StateKind
-	Reason            string
-	Mode              string
-	Evidence          string
-	RefreshedRecently bool
-	RetryAfter        *uint64
-	Since             time.Time
-	Class             string
-	ResendEligible    bool
+	Kind       StateKind
+	Reason     string
+	Mode       string
+	Evidence   string
+	RetryAfter *uint64
+	Class      string
 }
 
 // Name returns the stable state token.
@@ -139,10 +129,6 @@ func (s State) Label() string {
 			return fmt.Sprintf("rate-limited (retry in %ds)", *s.RetryAfter)
 		}
 		return "rate-limited"
-	case StateRefreshDiscarded:
-		return "refresh discarded"
-	case StateIdentityDrift:
-		return "identity drift"
 	case StateRefreshUnknown:
 		return "refresh outcome unknown (" + s.Class + ")"
 	case StateRefreshUnavailable:
@@ -155,8 +141,6 @@ func (s State) Label() string {
 		return "unauthorized (refresh did not help)"
 	case StateAdoptedDead:
 		return "needs login (adopted grant dead)"
-	case StateDiscardedExternal:
-		return "refresh discarded (external writer)"
 	default:
 		return s.Reason
 	}
@@ -215,25 +199,6 @@ type Account struct {
 	Visible   bool
 }
 
-// TableRow is a renderer-neutral table projection.
-type TableRow struct {
-	Account          string
-	Plan             string
-	Kind             string
-	Session          *usage.LimitWindow
-	Weekly           *usage.LimitWindow
-	Extra            []usage.LimitWindow
-	Credits          string
-	State            string
-	VisibleByDefault bool
-}
-
-// Gauge is a renderer-neutral floored utilization percentage.
-type Gauge struct {
-	Label   string
-	Percent int
-}
-
 // Account returns the email when nonempty, otherwise the display id.
 func (a Account) Account() string {
 	if a.Email != nil && *a.Email != "" {
@@ -277,34 +242,6 @@ func (a Account) CreditsCell() string {
 	return "—"
 }
 
-// ToTableRow spends only the first session and weekly windows on fixed columns.
-func (a Account) ToTableRow() TableRow {
-	row := TableRow{Account: a.Account(), Kind: a.Kind.Name(), Session: a.Window(usage.WindowSession), Weekly: a.Window(usage.WindowWeeklyAll), Credits: a.CreditsCell(), State: a.StateCell(), VisibleByDefault: a.Visible}
-	if a.Plan != nil {
-		row.Plan = *a.Plan
-	}
-	session, weekly := false, false
-	if a.Usage != nil {
-		for _, entry := range a.Usage.Windows {
-			window := entry.Window
-			switch window.Kind.Class {
-			case usage.WindowSession:
-				if !session {
-					session = true
-					continue
-				}
-			case usage.WindowWeeklyAll:
-				if !weekly {
-					weekly = true
-					continue
-				}
-			}
-			row.Extra = append(row.Extra, window)
-		}
-	}
-	return row
-}
-
 // NextReset returns the earliest known window reset.
 func (a Account) NextReset() time.Time {
 	var next time.Time
@@ -319,60 +256,5 @@ func (a Account) NextReset() time.Time {
 	return next
 }
 
-// Gauges returns only described session and weekly percentages.
-func (a Account) Gauges() []Gauge {
-	var gauges []Gauge
-	for _, entry := range []struct {
-		kind  usage.WindowClass
-		label string
-	}{{usage.WindowSession, "5h"}, {usage.WindowWeeklyAll, "weekly"}} {
-		if window := a.Window(entry.kind); window != nil && window.PercentFloor != nil {
-			gauges = append(gauges, Gauge{Label: entry.label, Percent: *window.PercentFloor})
-		}
-	}
-	return gauges
-}
-
-// DetailLine renders state, note, and the soonest reset using the shared countdown.
-func (a Account) DetailLine(now time.Time) string {
-	var parts []string
-	if badge := Badge(a.State); badge != "" {
-		parts = append(parts, "["+badge+"]")
-	}
-	parts = append(parts, a.State.Label())
-	if a.Note != nil && *a.Note != "" {
-		parts = append(parts, "("+*a.Note+")")
-	}
-	if reset := a.NextReset(); !reset.IsZero() {
-		parts = append(parts, "next reset in "+usage.RenderCountdown(now, reset))
-	}
-	return strings.Join(parts, " · ")
-}
-
-// AccountTitle renders a selectable block heading.
-func (a Account) AccountTitle(selected bool) string {
-	marker := " "
-	if selected {
-		marker = "▸"
-	}
-	plan := "—"
-	if a.Plan != nil && *a.Plan != "" {
-		plan = *a.Plan
-	}
-	return fmt.Sprintf("%s %s · %s · %s ", marker, a.Account(), a.Kind.Name(), plan)
-}
-
-// BlockHeight includes the two borders and detail line.
-func (a Account) BlockHeight() int { return 3 + len(a.Gauges()) }
-
 // VisibleByDefault reports whether this row is shown without --all.
 func (a Account) VisibleByDefault() bool { return a.Visible }
-
-// StateToken returns the neutral state discriminator.
-func (a Account) StateToken() string { return a.State.Name() }
-
-// WatchTitle names this provider's display.
-func (Account) WatchTitle() string { return "agentctl codex watch" }
-
-// HiddenHint names the command that reveals hidden rows.
-func (Account) HiddenHint() string { return "agentctl codex status --all" }

@@ -213,17 +213,7 @@ func (p SessionProcess) emitUse(report *useReport, asJSON bool) error {
 func usePreservationLine(report *useReport) string {
 	var parts []string
 	if report.carriedMembers != nil {
-		members := make([]string, 0, len(*report.carriedMembers))
-		for _, member := range *report.carriedMembers {
-			switch {
-			case member.Entries == nil:
-				members = append(members, member.Name)
-			case *member.Entries == 1:
-				members = append(members, member.Name+" (1 entry)")
-			default:
-				members = append(members, fmt.Sprintf("%s (%d entries)", member.Name, *member.Entries))
-			}
-		}
+		members := useMemberDescriptions(*report.carriedMembers)
 		carried := "none"
 		if len(members) != 0 {
 			carried = strings.Join(members, ", ")
@@ -240,6 +230,22 @@ func usePreservationLine(report *useReport) string {
 		return ""
 	}
 	return "keychain item members: " + strings.Join(parts, "; ")
+}
+
+// useMemberDescriptions renders member names and entry counts, never their values.
+func useMemberDescriptions(carried []useCarriedMember) []string {
+	members := make([]string, 0, len(carried))
+	for _, member := range carried {
+		switch {
+		case member.Entries == nil:
+			members = append(members, member.Name)
+		case *member.Entries == 1:
+			members = append(members, member.Name+" (1 entry)")
+		default:
+			members = append(members, fmt.Sprintf("%s (%d entries)", member.Name, *member.Entries))
+		}
+	}
+	return members
 }
 
 func (p SessionProcess) emitUsePlan(subject *useSubject, incoming *config.AccountRecord, fromDigest8 *string, toDigest8 string, direction secret.WriteDirection, configPath *string) error {

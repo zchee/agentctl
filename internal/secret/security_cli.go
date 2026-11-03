@@ -178,13 +178,12 @@ type runOutput struct {
 // failure turns a non-zero exit into the classified error it stands for.
 func (o runOutput) failure() *KeychainError {
 	if o.code == exitLocked {
-		return &KeychainError{Class: errs.KeychainLocked, Transient: true}
+		return &KeychainError{Class: errs.KeychainLocked}
 	}
 	class := ClassifyStderr(o.stderr)
 	return &KeychainError{
-		Class:     class.KeychainClass(),
-		Detail:    strings.TrimSpace(o.stderr),
-		Transient: true,
+		Class:  class.KeychainClass(),
+		Detail: strings.TrimSpace(o.stderr),
 	}
 }
 
@@ -215,9 +214,8 @@ func (c *securityCLI) run(ctx context.Context, args []string, budget time.Durati
 		// reached stdout before the kill may be payload, so it is wiped.
 		memguard.WipeBytes(stdout.Bytes())
 		return runOutput{}, &KeychainError{
-			Class:     errs.KeychainTimeout,
-			Detail:    fmt.Sprintf("security timed out after %d ms", budget.Milliseconds()),
-			Transient: true,
+			Class:  errs.KeychainTimeout,
+			Detail: fmt.Sprintf("security timed out after %d ms", budget.Milliseconds()),
 		}
 	default:
 		var exitErr *exec.ExitError
@@ -329,17 +327,15 @@ func (c *securityCLI) Read(ctx context.Context, service string) (*Secret, error)
 			// leaves it for the user to look at rather than absent inviting
 			// an overwrite.
 			return nil, &KeychainError{
-				Class:     errs.KeychainClass("EmptyItem"),
-				Detail:    "the keychain item holds no bytes",
-				Transient: true,
+				Class:  errs.KeychainClass("EmptyItem"),
+				Detail: "the keychain item holds no bytes",
 			}
 		}
 		sealed, err := NewSecret(payload)
 		if err != nil {
 			return nil, &KeychainError{
-				Class:     errs.KeychainClass("SealFailed"),
-				Detail:    err.Error(),
-				Transient: true,
+				Class:  errs.KeychainClass("SealFailed"),
+				Detail: err.Error(),
 			}
 		}
 		return sealed, nil

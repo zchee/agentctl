@@ -191,7 +191,7 @@ func (c *UsageClient) Fetch(ctx context.Context, account provider.AccountRef) (*
 	case status == 401 || status == 403:
 		return nil, provider.NewFetchUnauthorized()
 	case status == 429:
-		if retryAfter, ok := ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()); ok {
+		if retryAfter, ok := provider.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()); ok {
 			return nil, provider.NewFetchRateLimitedAfter(retryAfter)
 		}
 		return nil, provider.NewFetchRateLimited()
@@ -250,38 +250,6 @@ func isTimeout(err error) bool {
 	}
 	netErr, ok := errors.AsType[net.Error](err)
 	return ok && netErr.Timeout()
-}
-
-// ParseRetryAfter reads a Retry-After header value.
-//
-// HTTP allows both a delay in seconds and an HTTP-date, and Anthropic has
-// been observed sending neither, one, or the other. A date already in the
-// past yields a zero duration — "you may retry now" — rather than false,
-// because the server did answer the question.
-func ParseRetryAfter(value string, now time.Time) (time.Duration, bool) {
-	text := strings.TrimSpace(value)
-	if text == "" {
-		return 0, false
-	}
-
-	if seconds, err := strconv.ParseUint(text, 10, 64); err == nil {
-		// A delay the duration type cannot hold is clamped rather than
-		// dropped: the server's answer was "a very long time", and the
-		// clamp still says that.
-		if seconds > uint64(math.MaxInt64/int64(time.Second)) {
-			return time.Duration(math.MaxInt64), true
-		}
-		return time.Duration(seconds) * time.Second, true
-	}
-
-	at, err := http.ParseTime(text)
-	if err != nil {
-		return 0, false
-	}
-	if remaining := at.Sub(now); remaining > 0 {
-		return remaining, true
-	}
-	return 0, true
 }
 
 // ParseUsage turns a usage response into a snapshot.
@@ -464,7 +432,7 @@ func moneyField(members []jsonMember, name, currency string, exponent uint8) *us
 // not finite or does not fit an int64: a saturated maximum appearing in a
 // money column is a worse answer than an em dash.
 func minorUnits(value jsontext.Value) (int64, bool) {
-	if exact, ok := asInt64(value); ok {
+	if exact, ok := provider.JSONInt64(value); ok {
 		return exact, true
 	}
 
@@ -570,7 +538,7 @@ func normalizeMembers(members []jsonMember) []usage.LimitWindow {
 			continue
 		}
 		kind := usage.WindowKind{Class: usage.WindowDollarCredit, Name: member.name}
-		if window, ok := legacyWindow(member.value, kind, ""); ok {
+		if window, ok := legacyWindow(member.value, kind); ok {
 			windows = append(windows, window)
 		}
 	}
@@ -617,11 +585,10 @@ func windowFromLimit(entry jsontext.Value) (usage.LimitWindow, bool) {
 		kind = usage.WindowKind{Class: usage.WindowUnknown, Name: kindText}
 	}
 
-	window := usage.LimitWindow{Kind: kind, ScopeLabel: scopeLabel}
+	window := usage.LimitWindow{Kind: kind}
 	if percent, ok := float64Field(members, "percent"); ok {
 		setPercent(&window, percent)
 	}
-	window.Severity, _ = stringField(members, "severity")
 	if text, ok := stringField(members, "resets_at"); ok {
 		window.ResetsAt = parseTimestamp(text)
 	}
@@ -641,12 +608,12 @@ func legacyWindows(members []jsonMember) []usage.LimitWindow {
 	var windows []usage.LimitWindow
 
 	if value, ok := field(members, "five_hour"); ok {
-		if window, ok := legacyWindow(value, usage.WindowKind{Class: usage.WindowSession}, ""); ok {
+		if window, ok := legacyWindow(value, usage.WindowKind{Class: usage.WindowSession}); ok {
 			windows = append(windows, window)
 		}
 	}
 	if value, ok := field(members, "seven_day"); ok {
-		if window, ok := legacyWindow(value, usage.WindowKind{Class: usage.WindowWeeklyAll}, ""); ok {
+		if window, ok := legacyWindow(value, usage.WindowKind{Class: usage.WindowWeeklyAll}); ok {
 			windows = append(windows, window)
 		}
 	}
@@ -657,7 +624,7 @@ func legacyWindows(members []jsonMember) []usage.LimitWindow {
 			continue
 		}
 		kind := usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: scope}
-		if window, ok := legacyWindow(member.value, kind, scope); ok {
+		if window, ok := legacyWindow(member.value, kind); ok {
 			windows = append(windows, window)
 		}
 	}
@@ -667,14 +634,14 @@ func legacyWindows(members []jsonMember) []usage.LimitWindow {
 
 // legacyWindow maps one flat legacy window object; a null or non-object
 // value is "this account has no such window", not a window at zero.
-func legacyWindow(value jsontext.Value, kind usage.WindowKind, scopeLabel string) (usage.LimitWindow, bool) {
+func legacyWindow(value jsontext.Value, kind usage.WindowKind) (usage.LimitWindow, bool) {
 	members, ok := objectMembers(value)
 	if !ok {
 		return usage.LimitWindow{}, false
 	}
 	// The flat shape predates is_active; claiming one of these windows is
 	// the active constraint would be an invention.
-	window := usage.LimitWindow{Kind: kind, ScopeLabel: scopeLabel}
+	window := usage.LimitWindow{Kind: kind}
 	if percent, ok := float64Field(members, "utilization"); ok {
 		setPercent(&window, percent)
 	}
@@ -825,28 +792,13 @@ func boolField(members []jsonMember, name string) (bool, bool) {
 	}
 }
 
-// asInt64 reads a JSON number as an exact integer: no fraction, no
-// exponent, within range. A float spelling takes the float path instead,
-// where it is rounded, so the two spellings the endpoint uses stay
-// distinguishable.
-func asInt64(value jsontext.Value) (int64, bool) {
-	if value.Kind() != '0' || bytes.ContainsAny(value, ".eE") {
-		return 0, false
-	}
-	number, err := strconv.ParseInt(string(value), 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return number, true
-}
-
 // int64Field returns the named member when it is an exact JSON integer.
 func int64Field(members []jsonMember, name string) (int64, bool) {
 	value, ok := field(members, name)
 	if !ok {
 		return 0, false
 	}
-	return asInt64(value)
+	return provider.JSONInt64(value)
 }
 
 // asFloat64 reads any JSON number.

@@ -236,7 +236,7 @@ func (p *Paths) EnsureDirs(ctx context.Context) error {
 		return err
 	}
 	for _, dir := range []string{p.configDir, p.NamespaceRoot(), p.LocksDir(), p.CacheRoot(), p.CacheDir()} {
-		if err := createDirMode(dir); err != nil {
+		if err := CreateDir(dir); err != nil {
 			return err
 		}
 	}
@@ -332,22 +332,22 @@ func (p *Paths) EnsureCodexDirs(ctx context.Context) error {
 		return err
 	}
 	for _, dir := range []string{p.configDir, p.CodexRoot(), p.CodexLocksDir(), p.CodexStateDir(), p.CodexScratchRoot(), p.CacheRoot(), p.CodexCacheDir()} {
-		if err := createDirMode(dir); err != nil {
+		if err := CreateDir(dir); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// createDirMode creates one directory — and any missing parents — at
+// CreateDir creates one directory — and any missing parents — at
 // [DirMode], tolerating levels that already exist and leaving their modes
 // alone.
-func createDirMode(dir string) error {
+func CreateDir(dir string) error {
 	if info, err := os.Stat(dir); err == nil && info.IsDir() {
 		return nil
 	}
 	if parent := filepath.Dir(dir); parent != dir {
-		if err := createDirMode(parent); err != nil {
+		if err := CreateDir(parent); err != nil {
 			return err
 		}
 	}

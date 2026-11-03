@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/zchee/agentctl/internal/provider"
-	"github.com/zchee/agentctl/internal/provider/claude"
 )
 
 // UsagePath is the fixed path under the usage base URL.
@@ -148,7 +147,7 @@ func (c *UsageClient) fetchAuthorized(ctx context.Context, authorization string,
 	case status == 401:
 		return nil, provider.NewFetchUnauthorized()
 	case status == 429:
-		if after, ok := claude.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()); ok {
+		if after, ok := provider.ParseRetryAfter(response.Header.Get("Retry-After"), time.Now()); ok {
 			return nil, provider.NewFetchRateLimitedAfter(after)
 		}
 		return nil, provider.NewFetchRateLimited()

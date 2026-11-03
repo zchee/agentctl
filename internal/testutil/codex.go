@@ -33,12 +33,6 @@ func (f *Fixture) CodexBin() string {
 	return filepath.Join(f.BinDir(), "fake-codex.sh")
 }
 
-// CodexLogPath returns where the fake codex records its argv, environment
-// and working directory once a test wires the script's log knob to it.
-func (f *Fixture) CodexLogPath() string {
-	return filepath.Join(f.root, "fake-codex.log")
-}
-
 // CodexHome returns a named home directory inside the fixture, created on
 // demand. The only such home a test may name: a test that wants the
 // fallback path puts its file under Home instead, which is inside the

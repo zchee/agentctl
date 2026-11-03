@@ -91,7 +91,7 @@ func tableReads(path string) (int, error) {
 // processes the fake desktop programs start and end:
 //
 //	proctable init <table>
-//	proctable add <table> <pid> <ppid> <path> [delay=N] [uid=N] [read_error=E] [gone] [nostart]
+//	proctable add <table> <pid> <ppid> <path> [delay=N] [uid=N] [read_error=E] [gone]
 //	proctable rm <table> <pid>...
 //	proctable reparent <table> <pid> <ppid>
 //	proctable nextpid <table>
@@ -195,8 +195,6 @@ func procAdd(path string, table *procTable, args []string) error {
 			rec.ReadError = value
 		case "gone":
 			rec.Gone = true
-		case "nostart":
-			rec.Start = ""
 		default:
 			return fmt.Errorf("unknown option %q", opt)
 		}

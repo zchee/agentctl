@@ -184,11 +184,6 @@ func (f *Fixture) CodexEndpoints(baseURL string) *Fixture {
 	return f
 }
 
-// Fault turns on fault injection.
-func (f *Fixture) Fault(names string) *Fixture {
-	return f.Set("AGENTCTL_FAULT", names)
-}
-
 // scrubbedExact lists the inherited variables every command starts
 // without. A value for any of these would point the binary back at the
 // real machine - the live store, the developer's own configuration - or

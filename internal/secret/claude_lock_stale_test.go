@@ -536,43 +536,6 @@ func TestTheRealHolderCheckNeverClaimsASweepItDidNotFinish(t *testing.T) {
 	}
 }
 
-func TestTheTwoSampleVariantOnlyClearsAnUnchangedModificationTime(t *testing.T) {
-	t.Parallel()
-
-	old := time.Unix(1_700_000_000, 0)
-	tests := map[string]struct {
-		steps  []mtimeStep
-		cancel bool
-		want   bool
-	}{
-		"success: an unchanged time across the interval reads unheld": {steps: []mtimeStep{{at: old, present: true}, {at: old, present: true}}, want: false},
-		"success: a rewritten artefact reads held":                    {steps: []mtimeStep{{at: old, present: true}, {at: old.Add(time.Nanosecond), present: true}}, want: true},
-		"success: an artefact missing at the first sample reads held": {steps: []mtimeStep{{}}, want: true},
-		"success: an artefact gone at the second sample reads held":   {steps: []mtimeStep{{at: old, present: true}, {}}, want: true},
-		"success: a cancelled wait proves nothing and reads held":     {steps: []mtimeStep{{at: old, present: true}, {at: old, present: true}}, cancel: true, want: true},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			ctx := t.Context()
-			clock := newFakeClock()
-			if tt.cancel {
-				cancellable, cancel := context.WithCancel(ctx)
-				clock.onSleep = func(*fakeClock, time.Duration) { cancel() }
-				ctx = cancellable
-			}
-			fs := newFakeLockFS()
-			fs.script(theSlot.Name, tt.steps...)
-
-			if got := SampleHolderAcrossInterval(ctx, theSlot, StaleSampleInterval, clock, fs); got != tt.want {
-				t.Errorf("SampleHolderAcrossInterval() = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
 // peerLockHolderEnv tells a re-executed copy of this test binary to act
 // as a lock holder instead of asserting anything: the directory it
 // serves commands for.

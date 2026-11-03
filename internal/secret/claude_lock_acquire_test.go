@@ -302,14 +302,14 @@ func TestPeerLocksDriftCheck(t *testing.T) {
 		position int
 		missing  bool
 		elapsed  time.Duration
-		code     int
+		wantErr  func(error) bool
 	}{
 		"success: exact budget is allowed": {elapsed: HoldBudget},
-		"error: budget exceeded":           {elapsed: HoldBudget + time.Nanosecond, code: 10},
-		"error: changed primary":           {position: 0, code: 10},
-		"error: changed legacy":            {position: 1, code: 10},
-		"error: changed storage":           {position: 2, code: 10},
-		"error: unreadable primary":        {missing: true, code: 10},
+		"error: budget exceeded":           {elapsed: HoldBudget + time.Nanosecond, wantErr: isErrorType[*BudgetExceededError]},
+		"error: changed primary":           {position: 0, wantErr: isErrorType[*CompromisedError]},
+		"error: changed legacy":            {position: 1, wantErr: isErrorType[*CompromisedError]},
+		"error: changed storage":           {position: 2, wantErr: isErrorType[*CompromisedError]},
+		"error: unreadable primary":        {missing: true, wantErr: isErrorType[*CompromisedError]},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -335,8 +335,8 @@ func TestPeerLocksDriftCheck(t *testing.T) {
 					}
 				}
 			}
-			if got := errs.ExitCode(LockRefusal(hold.DriftCheck())); got != tt.code {
-				t.Fatalf("exit=%d,want %d", got, tt.code)
+			if err := hold.DriftCheck(); tt.wantErr == nil && err != nil || tt.wantErr != nil && !tt.wantErr(err) {
+				t.Fatalf("DriftCheck() = %v, want matching refusal: %t", err, tt.wantErr != nil)
 			}
 		})
 	}
@@ -346,10 +346,10 @@ func TestPeerLocksWriteAdmission(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
 		elapsed time.Duration
-		code    int
+		wantErr bool
 	}{
 		"success: exact remaining window": {elapsed: 1800 * time.Millisecond},
-		"error: one nanosecond too late":  {elapsed: 1800*time.Millisecond + time.Nanosecond, code: 17},
+		"error: one nanosecond too late":  {elapsed: 1800*time.Millisecond + time.Nanosecond, wantErr: true},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -357,8 +357,9 @@ func TestPeerLocksWriteAdmission(t *testing.T) {
 			paths, subject, clock, seams := peerFixture(t)
 			hold := acquirePeerFixture(t, subject, paths, seams)
 			clock.advance(tt.elapsed, tt.elapsed)
-			if got := errs.ExitCode(LockRefusal(hold.WriteAdmission())); got != tt.code {
-				t.Fatalf("exit=%d,want %d", got, tt.code)
+			err := hold.WriteAdmission()
+			if (err != nil) != tt.wantErr || err != nil && !isErrorType[*WriteWindowClosedError](err) {
+				t.Fatalf("WriteAdmission() = %v, want closed window: %t", err, tt.wantErr)
 			}
 		})
 	}
@@ -534,18 +535,18 @@ func TestPeerLocksEmergencyRelease(t *testing.T) {
 func TestPeerLockAnchor(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
-		tree     Tree
-		linked   bool
-		outside  bool
-		env      string
-		wantCode int
+		tree    Tree
+		linked  bool
+		outside bool
+		env     string
+		wantErr func(error) bool
 	}{
 		"success: own store":                 {tree: TreeOwn},
 		"success: linked live store":         {tree: TreeLive, linked: true},
-		"error: linked own store":            {tree: TreeOwn, linked: true, wantCode: 1},
-		"error: outside own root":            {tree: TreeOwn, outside: true, wantCode: 10},
-		"error: namespaced live environment": {tree: TreeLive, env: "namespace", wantCode: 1},
-		"error: unknown tree":                {tree: Tree("unknown"), wantCode: 10},
+		"error: linked own store":            {tree: TreeOwn, linked: true, wantErr: isErrorType[*UnreachableError]},
+		"error: outside own root":            {tree: TreeOwn, outside: true, wantErr: isErrorType[*WrongTreeError]},
+		"error: namespaced live environment": {tree: TreeLive, env: "namespace", wantErr: isErrorType[*UnreachableError]},
+		"error: unknown tree":                {tree: Tree("unknown"), wantErr: isErrorType[*WrongTreeError]},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -566,8 +567,8 @@ func TestPeerLockAnchor(t *testing.T) {
 				}
 			}
 			anchor, err := OpenLockAnchor(subject, paths, &LiveStoreEnv{NamedStoreDir: subject.StoreDir, SecureStorageDir: tt.env})
-			if code := errs.ExitCode(LockRefusal(err)); code != tt.wantCode {
-				t.Fatalf("anchor error=%v,exit=%d,want %d", err, code, tt.wantCode)
+			if tt.wantErr == nil && err != nil || tt.wantErr != nil && !tt.wantErr(err) {
+				t.Fatalf("OpenLockAnchor() = %v, want matching refusal: %t", err, tt.wantErr != nil)
 			}
 			if anchor != nil {
 				defer anchor.Close()
@@ -631,29 +632,9 @@ func TestPeerLockAnchorSurvivesRename(t *testing.T) {
 	}
 }
 
-func TestLockRefusal(t *testing.T) {
+func TestBusyRefusal(t *testing.T) {
 	t.Parallel()
-	tests := map[string]struct {
-		err  error
-		code int
-	}{
-		"success: no error":                {},
-		"error: busy":                      {err: BusyRefusal(false, nil), code: 16},
-		"error: compromised":               {err: LockRefusal(&CompromisedError{Path: "lock"}), code: 10},
-		"error: budget":                    {err: LockRefusal(&BudgetExceededError{}), code: 10},
-		"error: closed write window":       {err: LockRefusal(&WriteWindowClosedError{}), code: 17},
-		"error: unreachable":               {err: LockRefusal(&UnreachableError{}), code: 1},
-		"error: other acquisition failure": {err: LockRefusal(&LockIOError{}), code: 10},
-	}
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if code := errs.ExitCode(tt.err); code != tt.code {
-				t.Fatalf("exit=%d,want %d", code, tt.code)
-			}
-		})
-	}
-	if !errors.Is(LockRefusal(context.Canceled), context.Canceled) {
-		t.Fatal("cancellation lost")
+	if code := errs.ExitCode(BusyRefusal(false, nil)); code != 16 {
+		t.Fatalf("exit=%d,want 16", code)
 	}
 }

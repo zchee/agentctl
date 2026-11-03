@@ -133,8 +133,8 @@ func TestGoldenCreditsCells(t *testing.T) {
 	}{
 		{"n/a", creditsUnavailable()},
 		{"off", creditsOff()},
-		{"capped", creditsOn(money(1234, "USD", 2), money(5000, "USD", 2), 25)},
-		{"uncapped", creditsOn(money(1234, "USD", 2), nil, -1)},
+		{"capped", creditsOn(money(1234), money(5000), 25)},
+		{"uncapped", creditsOn(money(1234), nil, -1)},
 		{"unmeasured", creditsOn(nil, nil, -1)},
 	}
 

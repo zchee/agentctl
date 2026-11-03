@@ -189,7 +189,7 @@ func (w *KeychainWriter) spawn(ctx context.Context, update *KeychainUpdate, payl
 	pass := coordinator.Standalone(ctx, w.controller, time.Now().Add(w.budget))
 	release, ok := pass.BeginSpawn()
 	if !ok {
-		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "a shutdown is in progress; no keychain update was issued", Transient: true, kind: writeNotStarted, shutdown: true}
+		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "a shutdown is in progress; no keychain update was issued", kind: writeNotStarted, shutdown: true}
 	}
 
 	// No CommandContext: the pass owns the kill, and a second killer would
@@ -256,20 +256,20 @@ func classifyWrite(ctx context.Context, fired func() (os.Signal, bool), state *o
 	sig, _ := fired()
 	switch {
 	case cancelErr != nil:
-		return &KeychainError{Class: errs.KeychainTimeout, Detail: "the run was cancelled while security was running", Transient: true, kind: writeOutcomeUnknown, signal: signalName(sig)}
+		return &KeychainError{Class: errs.KeychainTimeout, Detail: "the run was cancelled while security was running", kind: writeOutcomeUnknown, signal: signalName(sig)}
 	case state == nil && waitErr == nil:
 		// The wait gave up at its bound and killed and reaped the child.
-		return &KeychainError{Class: errs.KeychainTimeout, Detail: fmt.Sprintf("security timed out after %d ms", budget.Milliseconds()), Transient: true, kind: writeOutcomeUnknown}
+		return &KeychainError{Class: errs.KeychainTimeout, Detail: fmt.Sprintf("security timed out after %d ms", budget.Milliseconds()), kind: writeOutcomeUnknown}
 	case errors.Is(waitErr, exec.ErrWaitDelay):
 		// The child exited, but something still held its output past the
 		// wait delay, so its exit status is not the whole story.
-		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "security exited but did not release its output", Transient: true, kind: writeOutcomeUnknown}
+		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "security exited but did not release its output", kind: writeOutcomeUnknown}
 	case waitErr != nil:
 		// The reap's own failure. coordinator.ErrChildKilled lands here in
 		// principle, but cannot occur: a Standalone pass has no watchdog
 		// and no sweep that kills its children, and this writer is the
 		// child's only waiter.
-		return &KeychainError{Class: StderrOther.KeychainClass(), Detail: "security output could not be collected", Transient: true, kind: writeOutcomeUnknown}
+		return &KeychainError{Class: StderrOther.KeychainClass(), Detail: "security output could not be collected", kind: writeOutcomeUnknown}
 	case !state.Exited():
 		// A child reaped after a signal reports exit code -1; it may have
 		// committed first, so the readback decides the outcome.
@@ -277,7 +277,7 @@ func classifyWrite(ctx context.Context, fired func() (os.Signal, bool), state *o
 		if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 			ended = status.Signal()
 		}
-		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "security was ended by a signal", Transient: true, kind: writeOutcomeUnknown, signal: signalName(ended)}
+		return &KeychainError{Class: errs.KeychainUnavailable, Detail: "security was ended by a signal", kind: writeOutcomeUnknown, signal: signalName(ended)}
 	}
 
 	code := state.ExitCode()
@@ -289,11 +289,11 @@ func classifyWrite(ctx context.Context, fired func() (os.Signal, bool), state *o
 	switch code {
 	case exitNotFound:
 		// Unlike a read, an upsert cannot legitimately answer absent.
-		return &KeychainError{Class: errs.KeychainNotFound, Detail: detail, Transient: true, kind: writeFailed}
+		return &KeychainError{Class: errs.KeychainNotFound, Detail: detail, kind: writeFailed}
 	case exitLocked:
-		return &KeychainError{Class: errs.KeychainLocked, Detail: detail, Transient: true, kind: writeFailed}
+		return &KeychainError{Class: errs.KeychainLocked, Detail: detail, kind: writeFailed}
 	default:
-		return &KeychainError{Class: class.KeychainClass(), Detail: detail, Transient: true, kind: writeFailed}
+		return &KeychainError{Class: class.KeychainClass(), Detail: detail, kind: writeFailed}
 	}
 }
 

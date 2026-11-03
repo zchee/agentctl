@@ -99,14 +99,9 @@ type LimitWindow struct {
 	// PercentFloor is Percent floored to a whole number, for display, and
 	// nil exactly when Percent is.
 	PercentFloor *int
-	// Severity is the server's own severity label, or empty when it sent
-	// none.
-	Severity string
 	// ResetsAt is when the window rolls over; the zero time means the
 	// server never said.
 	ResetsAt time.Time
-	// ScopeLabel is the scope's display name, for a scoped window.
-	ScopeLabel string
 	// IsActive reports whether this is the window currently constraining
 	// the account.
 	IsActive bool

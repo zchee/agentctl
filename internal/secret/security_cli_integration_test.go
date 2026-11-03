@@ -197,10 +197,8 @@ func TestStandInListServicesUncachedTakesASecondDump(t *testing.T) {
 		t.Fatalf("listing #2 error = %v", err)
 	}
 	want := []ServiceEntry{{
-		Service:    "Codex Auth",
-		Account:    testutil.KeychainAccount,
-		CreatedAt:  "20260908012005Z",
-		ModifiedAt: "20260908012005Z",
+		Service: "Codex Auth",
+		Account: testutil.KeychainAccount,
 	}}
 	if diff := gocmp.Diff(want, second); diff != "" {
 		t.Errorf("listing #2 mismatch (-want +got):\n%s", diff)
@@ -284,16 +282,12 @@ func TestStandInHangingCallsAreKilledAtTheirBudget(t *testing.T) {
 	if !errors.Is(err, ErrKeychainTimeout) {
 		t.Fatalf("Read() error = %v, want %v: a hanging read is a timeout, not an absent item", err, ErrKeychainTimeout)
 	}
-	var kerr *KeychainError
-	if !errors.As(err, &kerr) || !kerr.Transient {
-		t.Errorf("Read() error = %#v, want a transient failure", err)
-	}
 	if got := KeychainItem("Claude Code-credentials").Classify(err); got.Kind != OutcomeTransient {
 		t.Errorf("Classify() = %+v, want transient: a timeout never falls through to the file", got)
 	}
 }
 
-func TestStandInMissingBinaryIsUnavailableAndNotTransient(t *testing.T) {
+func TestStandInMissingBinaryIsUnavailable(t *testing.T) {
 	fakeKeychain(t)
 	reader := newSecurityCLI("/nonexistent/security", testutil.KeychainAccount, testingChildEnv())
 
@@ -303,10 +297,6 @@ func TestStandInMissingBinaryIsUnavailableAndNotTransient(t *testing.T) {
 	}
 	if !errors.Is(err, ErrKeychainUnavailable) {
 		t.Fatalf("Read() error = %v, want %v", err, ErrKeychainUnavailable)
-	}
-	var kerr *KeychainError
-	if !errors.As(err, &kerr) || kerr.Transient {
-		t.Errorf("Read() error = %#v; a missing binary will not fix itself", err)
 	}
 }
 

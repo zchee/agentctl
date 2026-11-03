@@ -343,7 +343,7 @@ func (e *desktopEnv) repairMoveGuard(ctx context.Context) error {
 }
 
 // moveFailed reports a move inside repair that did not land: the intent
-// stays open and the layout is reported again.
+// stays open, and the next repair invocation is what reports the layout.
 func (e *desktopEnv) moveFailed(rep *desktopReport, err error) error {
 	rep.Journal = journalOpen
 	return refuse(desktopRepairInconsistent, "a move failed (%v); the intent stays open, run `agentctl claude desktop repair` again to see the layout", err)

@@ -88,8 +88,8 @@ func testSpec(prior *Digests) *PendingSpec {
 	return &PendingSpec{TargetName: testAuth, PendingName: testAuthPending, MetaName: testAuthMeta, Prior: prior}
 }
 
-// strayTmps lists the `<name>.tmp.*` files inside dir, sorted.
-func strayTmps(t *testing.T, dir, name string) []string {
+// strayTmps lists the auth.json.tmp.* files inside dir, sorted.
+func strayTmps(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -97,7 +97,7 @@ func strayTmps(t *testing.T, dir, name string) []string {
 	}
 	var found []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), name+".tmp.") {
+		if strings.HasPrefix(entry.Name(), testAuth+".tmp.") {
 			found = append(found, entry.Name())
 		}
 	}
@@ -212,7 +212,7 @@ func TestSecretFileRefusesAPendingSpecForAnotherTarget(t *testing.T) {
 	if _, err := file.Write(t.Context(), []byte("{}"), wrong, StopComplete); !isErrorType[*OutsideRootError](err) {
 		t.Fatalf("a spec naming another file must be refused, got %v", err)
 	}
-	if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+	if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 		t.Errorf("nothing may be staged, found %v", strays)
 	}
 	if _, err := os.Lstat(filepath.Join(store.codexNS, testAuth)); !errors.Is(err, os.ErrNotExist) {
@@ -269,7 +269,7 @@ func TestSecretFileWriteLandsAtomicallyAt0600AndReadsBack(t *testing.T) {
 		t.Fatalf("the secret should open: %v", err)
 	}
 
-	if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+	if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 		t.Errorf("no temporary may be left behind, found %v", strays)
 	}
 	for _, leftover := range []string{testAuthPending, testAuthMeta} {
@@ -310,7 +310,7 @@ func TestSecretFileRefusesASymlinkOrADirectoryAtTheTarget(t *testing.T) {
 	if _, err := file.Write(t.Context(), []byte("{}"), nil, StopComplete); !isErrorType[*NotRegularError](err) {
 		t.Errorf("a directory target must be refused, got %v", err)
 	}
-	if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+	if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 		t.Errorf("nothing may be staged, found %v", strays)
 	}
 }
@@ -351,7 +351,7 @@ func TestSecretFileStopPolicies(t *testing.T) {
 	if got := readText(t, target); got != "old" {
 		t.Errorf("the old file must still be in place, got %q", got)
 	}
-	if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+	if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 		t.Errorf("the staged file must be unlinked, found %v", strays)
 	}
 
@@ -417,7 +417,7 @@ func TestSecretFileFailedRenameWithASpecParksTheBytesUnderBothPolicies(t *testin
 			if _, present := meta["created_at"]; !present {
 				t.Errorf("the meta records when it was created: %v", meta)
 			}
-			if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+			if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 				t.Errorf("the temporary became the pending file, found %v", strays)
 			}
 		})
@@ -444,7 +444,7 @@ func TestSecretFileFailedRenameWithoutASpecIsAnErrorAndLeavesTheOldFile(t *testi
 			t.Errorf("`%s` must not exist, lstat err = %v", leftover, err)
 		}
 	}
-	if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+	if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 		t.Errorf("the caller still holds the bytes, found %v", strays)
 	}
 
@@ -484,7 +484,7 @@ func TestSecretFileFailedPendingSaveKeepsTheStagedGrantOnlyUnderComplete(t *test
 				t.Fatalf("a pending save that cannot land is an error, got %v", err)
 			}
 
-			strays := strayTmps(t, store.codexNS, testAuth)
+			strays := strayTmps(t, store.codexNS)
 			if tt.kept {
 				if len(strays) != 1 {
 					t.Fatalf("the staged grant is left for doctor to report, found %v", strays)
@@ -541,7 +541,7 @@ func TestSecretFileFailedMetaCreateKeepsTheStagedGrantOnlyUnderComplete(t *testi
 				t.Errorf("the meta is named: %v", err)
 			}
 
-			strays := strayTmps(t, store.codexNS, testAuth)
+			strays := strayTmps(t, store.codexNS)
 			if tt.kept {
 				if len(strays) != 1 {
 					t.Fatalf("the staged grant is kept, found %v", strays)
@@ -597,7 +597,7 @@ func TestSecretFileRefusesAnEscapingOrAliasedPendingSpec(t *testing.T) {
 			if _, err := file.Write(t.Context(), []byte("rotated"), spec, StopComplete); !isErrorType[*OutsideRootError](err) {
 				t.Errorf("want an OutsideRootError, got %v", err)
 			}
-			if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+			if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 				t.Errorf("nothing may be staged, found %v", strays)
 			}
 			if got := readText(t, target); got != "old" {
@@ -636,7 +636,7 @@ func TestSecretFileCrashBetweenFsyncAndRenameLeavesTheOldFileIntact(t *testing.T
 	if got := readText(t, target); got != "old" {
 		t.Errorf("the old file is intact after the crash, got %q", got)
 	}
-	strays := strayTmps(t, store.codexNS, testAuth)
+	strays := strayTmps(t, store.codexNS)
 	if len(strays) != 1 {
 		t.Fatalf("the crash leaves exactly the staged temporary, found %v", strays)
 	}
@@ -688,7 +688,7 @@ func TestSecretFileParkParksWithoutTouchingTheTarget(t *testing.T) {
 	if err != nil || !info.IsDir() {
 		t.Errorf("the target is not examined or replaced: %v", err)
 	}
-	if strays := strayTmps(t, store.codexNS, testAuth); len(strays) != 0 {
+	if strays := strayTmps(t, store.codexNS); len(strays) != 0 {
 		t.Errorf("the temporary became the pending file, found %v", strays)
 	}
 }

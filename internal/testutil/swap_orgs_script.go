@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
 )
@@ -42,13 +41,9 @@ func init() {
 			ts.Check(err)
 			ts.Check(os.WriteFile(path, body, 0o600))
 		}
-		owned := func(org, dir string) any {
-			spelling := ExportSpelling(dir)
-			return map[string]any{"account_uuid": account, "organization_uuid": org, "kind": map[string]any{"kind": "owned", "export_spelling": spelling, "export_sha8": Sha8(spelling)}, "forgotten": false, "created_at": time.Now().UTC().Format(time.RFC3339)}
-		}
-		write(filepath.Join(configDir, "config.json"), map[string]any{"version": 1, "accounts": []any{owned(org1, dir1), owned(org2, dir2)}, "forgotten_services": []string{}})
+		write(filepath.Join(configDir, "config.json"), map[string]any{"version": 1, "accounts": []any{swapOwnedRecord(account, org1, dir1), swapOwnedRecord(account, org2, dir2)}, "forgotten_services": []string{}})
 		blob := func(name, org string, expiry int64) any {
-			return map[string]any{"claudeAiOauth": map[string]any{"accessToken": "SENTINEL-access-" + name, "refreshToken": "SENTINEL-refresh-" + name, "expiresAt": expiry, "scopes": []string{"user:inference", "user:profile"}, "tokenAccount": map[string]any{"uuid": account, "organizationUuid": org, "emailAddress": nil, "organizationName": nil, "workspaceId": nil, "workspaceName": nil}}}
+			return swapCredential(name, account, org, expiry)
 		}
 		source := filepath.Join(dir1, ".credentials.json")
 		write(source, blob("org1", org1, FreshAt()))

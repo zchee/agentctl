@@ -216,12 +216,6 @@ func (a *LockAnchor) slot(of *lockArtefact) LockSlot {
 	return LockSlot{Dir: dir, Name: of.name, Shown: of.path}
 }
 
-// InStore returns a slot for one name inside the store directory, for a
-// caller that runs the break rule against a single artefact.
-func (a *LockAnchor) InStore(name, shown string) LockSlot {
-	return LockSlot{Dir: a.store, Name: name, Shown: shown}
-}
-
 // lockArtefact is one lock artefact's identity: where it lives, what it
 // is called there, and what it is called to a human.
 type lockArtefact struct {

@@ -324,7 +324,7 @@ func faultObjectReceiver(object types.Object, pkg, receiver, name string) bool {
 
 func faultHookField(object types.Object) bool {
 	field, ok := object.(*types.Var)
-	if !ok || !field.IsField() || field.Pkg() == nil || field.Pkg().Path() != faultModulePath+"/internal/secret" || (field.Name() != "Fault" && field.Name() != "Pause") {
+	if !ok || !field.IsField() || field.Pkg() == nil || field.Pkg().Path() != faultModulePath+"/internal/secret" || field.Name() != "Fault" {
 		return false
 	}
 	typ := field.Pkg().Scope().Lookup("Seams")

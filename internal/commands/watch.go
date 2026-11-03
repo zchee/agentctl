@@ -79,15 +79,12 @@ const (
 	watchHiddenHint = "agentctl claude status --all"
 )
 
-func (o rowOutcome) WatchTitle() string     { return watchTitle }
-func (o rowOutcome) HiddenHint() string     { return watchHiddenHint }
 func (o rowOutcome) Gauges() []render.Gauge { return render.UsageGauges(o.usage) }
 func (o rowOutcome) AccountTitle(selected bool) string {
 	return render.AccountTitle(selected, o.account, o.org, o.plan)
 }
 func (o rowOutcome) BlockHeight() int       { return render.BlockHeight(len(o.Gauges())) }
 func (o rowOutcome) VisibleByDefault() bool { return o.visibleByDefault }
-func (o rowOutcome) StateToken() string     { return o.state.Name() }
 func (o rowOutcome) DetailLine(now time.Time) string {
 	var badge string
 	switch o.state.Kind {

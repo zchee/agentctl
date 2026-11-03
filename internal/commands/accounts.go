@@ -242,7 +242,7 @@ func showReport(ctx context.Context, paths *config.Paths, row *claude.AccountRow
 	out = append(out,
 		showLine("source", row.Source.Name()),
 		showLine("state", row.State.Label()),
-		showLine("note", optString(row.Note)),
+		showLine("note", orDash(row.Note)),
 		showLine("forgotten", strconv.FormatBool(record.Forgotten)),
 		showLine("created", orDash(record.CreatedAt)),
 		showLine("location", location(record, liveService)),
@@ -250,7 +250,7 @@ func showReport(ctx context.Context, paths *config.Paths, row *claude.AccountRow
 
 	if credentials := row.Credentials; credentials != nil {
 		out = append(out,
-			showLine("plan", optString(claude.PlanLabel(credentials))),
+			showLine("plan", orDash(claude.PlanLabel(credentials))),
 			showLine("scopes", strings.Join(credentials.Scopes, " ")),
 			showLine("access expires", expiry(&credentials.ExpiresAtMillis)),
 			showLine("refresh expires", expiry(credentials.RefreshTokenExpiresAtMillis)),
@@ -346,15 +346,6 @@ func opt(value *string) string {
 		return render.EmptyCell
 	}
 	return *value
-}
-
-// optString returns value, or an em dash when it is empty: the display
-// of an optional field whose absence is spelled "" rather than nil.
-func optString(value string) string {
-	if value == "" {
-		return render.EmptyCell
-	}
-	return value
 }
 
 // present reports whether a path exists, without following a link to

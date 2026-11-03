@@ -69,7 +69,9 @@ func ownedRecord(t *testing.T, acct, org string) AccountRecord {
 	return rec
 }
 
-func codexRow(user, acct string) CodexAccountRecord {
+func codexRow() CodexAccountRecord {
+	const user = "user-01"
+	const acct = "acct-01"
 	email := user + "@example.com"
 	plan := "plus"
 	return CodexAccountRecord{ChatGPTUserID: user, ChatGPTAccountID: acct, Email: &email, PlanType: &plan, Kind: CodexKindLive(), CreatedAt: "2026-09-17T00:00:00Z"}
@@ -193,7 +195,7 @@ func TestARegistryWithoutCodexRowsSerializesExactlyAsItDidBeforeTheyExisted(t *t
 		t.Errorf("missing the derived version:\n%s", claudeOnly)
 	}
 
-	registry.CodexAccounts = append(registry.CodexAccounts, codexRow("user-01", "acct-01"))
+	registry.CodexAccounts = append(registry.CodexAccounts, codexRow())
 	withCodex, err := registry.document()
 	if err != nil {
 		t.Fatalf("document() = %v", err)
@@ -223,7 +225,7 @@ func TestTheVersionWrittenIsTheOneTheContentImpliesWhateverTheFieldHeld(t *testi
 		wantVersion string
 	}{
 		"success: a codex row raises a version-1 document to 2": {
-			registry:    &Registry{Version: RegistryVersion, CodexAccounts: []CodexAccountRecord{codexRow("user-01", "acct-01")}},
+			registry:    &Registry{Version: RegistryVersion, CodexAccounts: []CodexAccountRecord{codexRow()}},
 			wantVersion: `"version": 2`,
 		},
 		"success: a document with no codex rows goes back to 1 however it was stamped": {
@@ -253,7 +255,7 @@ func TestSavingStampsTheVersionOnDiskAndLoadingAcceptsBoth(t *testing.T) {
 	paths := testStore(t)
 	err := UpdateRegistry(t.Context(), paths, func(registry *Registry) {
 		registry.Upsert(ownedRecord(t, "acct-1", "org-1"))
-		registry.CodexAccounts = append(registry.CodexAccounts, codexRow("user-01", "acct-01"))
+		registry.CodexAccounts = append(registry.CodexAccounts, codexRow())
 	})
 	if err != nil {
 		t.Fatalf("UpdateRegistry() = %v", err)
@@ -266,7 +268,7 @@ func TestSavingStampsTheVersionOnDiskAndLoadingAcceptsBoth(t *testing.T) {
 	if loaded.Version != RegistryVersionCodex {
 		t.Errorf("version = %d, want %d", loaded.Version, RegistryVersionCodex)
 	}
-	if diff := gocmp.Diff([]CodexAccountRecord{codexRow("user-01", "acct-01")}, loaded.CodexAccounts); diff != "" {
+	if diff := gocmp.Diff([]CodexAccountRecord{codexRow()}, loaded.CodexAccounts); diff != "" {
 		t.Errorf("codex accounts mismatch (-want +got):\n%s", diff)
 	}
 
@@ -299,7 +301,7 @@ func TestAVersion1FileHoldingCodexRowsIsRefused(t *testing.T) {
 	if err := paths.EnsureDirs(t.Context()); err != nil {
 		t.Fatalf("EnsureDirs() = %v", err)
 	}
-	registry := &Registry{Version: RegistryVersionCodex, CodexAccounts: []CodexAccountRecord{codexRow("user-01", "acct-01")}}
+	registry := &Registry{Version: RegistryVersionCodex, CodexAccounts: []CodexAccountRecord{codexRow()}}
 	document, err := registry.document()
 	if err != nil {
 		t.Fatalf("document() = %v", err)

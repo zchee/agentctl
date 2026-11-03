@@ -310,7 +310,7 @@ func classifyTokenFailure(status int, header http.Header, body []byte) error {
 	}
 	kind := errs.NewHTTP(status)
 	if status == http.StatusTooManyRequests {
-		if retryAfter, ok := ParseRetryAfter(header.Get("Retry-After"), time.Now()); ok {
+		if retryAfter, ok := provider.ParseRetryAfter(header.Get("Retry-After"), time.Now()); ok {
 			kind = errs.NewHTTPRetryAfter(status, retryAfter)
 		}
 	}

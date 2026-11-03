@@ -45,7 +45,6 @@ type Claims struct {
 	ChatGPTAccountID *string
 	PlanType         *string
 	IsFedramp        bool
-	Exp              *int64
 }
 
 // ParseClaims decodes JWT labels without checking its signature, never quoting input in an error.
@@ -65,7 +64,7 @@ func ParseClaims(token []byte) (Claims, error) {
 	if json.Unmarshal(payload, &root) != nil || root == nil {
 		return Claims{}, ErrJWTJSON
 	}
-	result := Claims{Email: jsonString(root["email"]), Exp: jsonInteger(root["exp"])}
+	result := Claims{Email: jsonString(root["email"])}
 	var profile map[string]jsontext.Value
 	if json.Unmarshal(root["https://api.openai.com/profile"], &profile) == nil && result.Email == nil {
 		result.Email = jsonString(profile["email"])

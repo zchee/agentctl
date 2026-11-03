@@ -276,7 +276,6 @@ func (d *refreshDriver) evidenceGate() *RefreshStep {
 
 func (d *refreshDriver) send(credentials *LockedCredentials, grant string, resend bool) RefreshStep {
 	active := fault.Active()
-	active.PausePoint(fault.CodexBeforePostSnapshot)
 	snapshot, err := d.namespace.SnapshotForPost()
 	if err != nil {
 		return RefreshStep{Kind: RefreshStepFailed, Reason: err.Error()}
@@ -353,9 +352,6 @@ func (d *refreshDriver) settle(original *LockedCredentials, grant string, resend
 		class := RefreshUnknownAmbiguous
 		if outcome.Ambiguous == AmbiguousTLS {
 			class = RefreshUnknownTLS
-		}
-		if outcome.Ambiguous == AmbiguousWriteFailed {
-			class = RefreshUnknownWriteFailed
 		}
 		return d.unknown(grant, class, nil)
 	}

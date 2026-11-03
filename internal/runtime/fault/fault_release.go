@@ -35,16 +35,10 @@ const (
 	CodexAbortAfterPending = ""
 	// CodexAfterPostSnapshot is inert in a release build.
 	CodexAfterPostSnapshot = ""
-	// CodexBeforePostSnapshot is inert in a release build.
-	CodexBeforePostSnapshot = ""
 	// CodexErrorAfterRename is inert in a release build.
 	CodexErrorAfterRename = ""
-	// CodexLoginAfterWrite is inert in a release build.
-	CodexLoginAfterWrite = ""
 	// CodexLoginBeforeInstall is inert in a release build.
 	CodexLoginBeforeInstall = ""
-	// CodexRefreshStateBeforeRename is inert in a release build.
-	CodexRefreshStateBeforeRename = ""
 	// CodexRefreshStateDirSync is inert in a release build.
 	CodexRefreshStateDirSync = ""
 	// CodexRefreshStateFileSync is inert in a release build.

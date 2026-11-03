@@ -33,7 +33,7 @@ func TestCodexWatchGolden(t *testing.T) {
 	if diff := gocmp.Diff([]render.Gauge{{Label: "5h", Percent: 21}, {Label: "weekly", Percent: 35}}, row.Gauges()); diff != "" {
 		t.Fatalf("gauges (-want +got):\n%s", diff)
 	}
-	model := tui.New[render.CodexWatchRow](at.Add(30*time.Second), row.WatchTitle(), row.HiddenHint())
+	model := tui.New[render.CodexWatchRow](at.Add(30*time.Second), "agentctl codex watch", "agentctl codex status --all")
 	rows := make(tui.Rows[render.CodexWatchRow], len(accounts))
 	for i, account := range accounts {
 		rows[i] = render.CodexWatchRow{Account: account}

@@ -71,9 +71,8 @@ func (d *Doctor) Run(ctx context.Context, opts cli.CodexDoctorOptions) error {
 }
 
 type doctorListings struct {
-	codexAuth      []secret.ServiceEntry
-	codexAvailable bool
-	switcher       int
+	keyringListing
+	switcher int
 }
 
 func (d *Doctor) listings(ctx context.Context) doctorListings {
@@ -84,20 +83,7 @@ func (d *Doctor) listings(ctx context.Context) doctorListings {
 	defer cancel()
 	entries, err := d.Reader.ListServices(ctx, provider.KeyringService)
 	switcher, _ := d.Reader.ListServices(ctx, "codex-switcher:")
-	return doctorListings{codexAuth: entries, codexAvailable: err == nil, switcher: len(switcher)}
-}
-
-func (l doctorListings) probe(home string) provider.KeyringProbe {
-	if !l.codexAvailable {
-		return provider.KeyringUnknown
-	}
-	account := provider.KeyringAccount(home)
-	for _, entry := range l.codexAuth {
-		if entry.Service == provider.KeyringService && (entry.Account == "" || entry.Account == account) {
-			return provider.KeyringPresent
-		}
-	}
-	return provider.KeyringAbsent
+	return doctorListings{entries: entries, available: err == nil, switcher: len(switcher)}
 }
 
 func (d *Doctor) build(ctx context.Context, accounts []config.CodexAccountRecord) (doctorReport, error) {
@@ -206,7 +192,7 @@ func doctorStoreSection(ctx context.Context, home *string, listings doctorListin
 		}
 	}
 	if cfg.Store == provider.StoreAuto {
-		for _, entry := range listings.codexAuth {
+		for _, entry := range listings.entries {
 			if entry.Service == provider.KeyringService && entry.Account == "" {
 				store.CoarseMatch = true
 				break
@@ -321,7 +307,7 @@ func doctorRelative(at, now time.Time) string {
 }
 
 func doctorForeignSection(home *string, listings doctorListings, caused []string) doctorForeign {
-	foreign := doctorForeign{SwitcherItems: listings.switcher, CodexAuthItems: len(listings.codexAuth), UnexplainedRemovals: []string{}}
+	foreign := doctorForeign{SwitcherItems: listings.switcher, CodexAuthItems: len(listings.entries), UnexplainedRemovals: []string{}}
 	expected := ""
 	if home != nil {
 		expected = provider.KeyringAccount(*home)
@@ -329,7 +315,7 @@ func doctorForeignSection(home *string, listings doctorListings, caused []string
 			foreign.MultiAuthPresent = info.IsDir()
 		}
 	}
-	for _, entry := range listings.codexAuth {
+	for _, entry := range listings.entries {
 		if entry.Service != provider.KeyringService || entry.Account == "" || entry.Account == expected {
 			continue
 		}

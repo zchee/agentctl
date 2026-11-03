@@ -14,25 +14,49 @@
 
 package render
 
-import "github.com/zchee/agentctl/internal/provider/codex"
+import (
+	"time"
+
+	"github.com/zchee/agentctl/internal/provider/codex"
+	"github.com/zchee/agentctl/internal/usage"
+)
 
 // CodexWatchRow adapts a provider-neutral account to the terminal display.
 type CodexWatchRow struct{ codex.Account }
 
-// Gauges converts the described windows without inventing missing figures.
+// Gauges returns the described windows without inventing missing figures.
 func (r CodexWatchRow) Gauges() []Gauge {
-	source := r.Account.Gauges()
-	gauges := make([]Gauge, len(source))
-	for i, gauge := range source {
-		gauges[i] = Gauge{Label: gauge.Label, Percent: gauge.Percent}
+	gauges := make([]Gauge, 0, 2)
+	for _, entry := range []struct {
+		kind  usage.WindowClass
+		label string
+	}{{usage.WindowSession, "5h"}, {usage.WindowWeeklyAll, "weekly"}} {
+		if window := r.Window(entry.kind); window != nil && window.PercentFloor != nil {
+			gauges = append(gauges, Gauge{Label: entry.label, Percent: *window.PercentFloor})
+		}
 	}
 	return gauges
 }
 
-// WatchTitle names the command that owns this terminal display.
-func (CodexWatchRow) WatchTitle() string { return "agentctl codex watch" }
+// DetailLine renders state, note, and the soonest reset using the shared countdown.
+func (r CodexWatchRow) DetailLine(now time.Time) string {
+	var note string
+	if r.Note != nil {
+		note = *r.Note
+	}
+	return DetailLine(now, codex.Badge(r.State), r.State.Label(), note, r.NextReset())
+}
 
-// HiddenHint names the command that reveals the hidden accounts.
-func (CodexWatchRow) HiddenHint() string { return "agentctl codex status --all" }
+// AccountTitle renders a selectable block heading.
+func (r CodexWatchRow) AccountTitle(selected bool) string {
+	var plan string
+	if r.Plan != nil {
+		plan = *r.Plan
+	}
+	return AccountTitle(selected, r.Account.Account(), r.Kind.Name(), plan)
+}
+
+// BlockHeight includes the two borders and detail line.
+func (r CodexWatchRow) BlockHeight() int { return BlockHeight(len(r.Gauges())) }
 
 var _ TuiRow = CodexWatchRow{}

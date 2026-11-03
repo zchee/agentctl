@@ -489,8 +489,8 @@ func TestAnEmptyReportStillExplainsItself(t *testing.T) {
 	}
 }
 
-func money(amountMinor int64, currency string, exponent uint8) *usage.Money {
-	return &usage.Money{AmountMinor: amountMinor, Currency: currency, Exponent: exponent}
+func money(amountMinor int64) *usage.Money {
+	return &usage.Money{AmountMinor: amountMinor, Currency: "USD", Exponent: 2}
 }
 
 func TestTheCreditsCellCoversEveryStateTheColumnCanReach(t *testing.T) {
@@ -509,11 +509,11 @@ func TestTheCreditsCellCoversEveryStateTheColumnCanReach(t *testing.T) {
 			want:    "off",
 		},
 		"success: capped credits carry the used, the limit and the percent": {
-			credits: creditsOn(money(1234, "USD", 2), money(5000, "USD", 2), 25),
+			credits: creditsOn(money(1234), money(5000), 25),
 			want:    "$12.34 / $50.00 (25%)",
 		},
 		"success: an uncapped account says Unlimited and drops the percent": {
-			credits: creditsOn(money(1234, "USD", 2), nil, -1),
+			credits: creditsOn(money(1234), nil, -1),
 			want:    "$12.34 / Unlimited",
 		},
 		"success: credits on with no used figure are unavailable, not an unlimited nothing": {
@@ -521,7 +521,7 @@ func TestTheCreditsCellCoversEveryStateTheColumnCanReach(t *testing.T) {
 			want:    EmptyCell,
 		},
 		"success: the real capture's figures render to the cent": {
-			credits: creditsOn(money(21956, "USD", 2), money(500000, "USD", 2), 4),
+			credits: creditsOn(money(21956), money(500000), 4),
 			want:    "$219.56 / $5000.00 (4%)",
 		},
 	}

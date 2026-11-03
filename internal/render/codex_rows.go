@@ -56,12 +56,34 @@ func CodexStatusReportV2(accounts []codex.Account, now time.Time, hidden int, ra
 	return report
 }
 
-// CodexTableReport adapts neutral account projections to the shared table.
+// CodexTableReport projects accounts directly into the Codex table's rows.
 func CodexTableReport(accounts []codex.Account, now time.Time, zone *time.Location, all bool) CodexReport {
 	report := CodexReport{Now: now, Zone: zone, ShowAll: all, Rows: make([]CodexTableRow, 0, len(accounts))}
 	for _, account := range accounts {
-		row := account.ToTableRow()
-		report.Rows = append(report.Rows, CodexTableRow{Account: row.Account, Plan: row.Plan, Kind: row.Kind, Session: row.Session, Weekly: row.Weekly, Extra: row.Extra, Credits: row.Credits, State: row.State, VisibleByDefault: row.VisibleByDefault})
+		row := CodexTableRow{Account: account.Account(), Kind: account.Kind.Name(), Session: account.Window(usage.WindowSession), Weekly: account.Window(usage.WindowWeeklyAll), Credits: account.CreditsCell(), State: account.StateCell(), VisibleByDefault: account.Visible}
+		if account.Plan != nil {
+			row.Plan = *account.Plan
+		}
+		session, weekly := false, false
+		if account.Usage != nil {
+			for _, entry := range account.Usage.Windows {
+				window := entry.Window
+				switch window.Kind.Class {
+				case usage.WindowSession:
+					if !session {
+						session = true
+						continue
+					}
+				case usage.WindowWeeklyAll:
+					if !weekly {
+						weekly = true
+						continue
+					}
+				}
+				row.Extra = append(row.Extra, window)
+			}
+		}
+		report.Rows = append(report.Rows, row)
 	}
 	return report
 }

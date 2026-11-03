@@ -23,13 +23,13 @@ import (
 	gocmp "github.com/google/go-cmp/cmp"
 )
 
-// unsetenv removes key for the duration of the test; t.Setenv first, so the
-// original value is restored when the test ends.
-func unsetenv(t *testing.T, key string) {
+// unsetenv removes ConfigDirEnv for the duration of the test; t.Setenv first,
+// so the original value is restored when the test ends.
+func unsetenv(t *testing.T) {
 	t.Helper()
-	t.Setenv(key, "")
-	if err := os.Unsetenv(key); err != nil {
-		t.Fatalf("Unsetenv(%q) = %v", key, err)
+	t.Setenv(ConfigDirEnv, "")
+	if err := os.Unsetenv(ConfigDirEnv); err != nil {
+		t.Fatalf("Unsetenv(%q) = %v", ConfigDirEnv, err)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestResolvePrecedence(t *testing.T) {
 			if tt.env != "" {
 				t.Setenv(ConfigDirEnv, tt.env)
 			} else {
-				unsetenv(t, ConfigDirEnv)
+				unsetenv(t)
 			}
 
 			resolved, err := Resolve(tt.cli)
@@ -100,7 +100,7 @@ func TestResolveXDGConfigHome(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", home)
-			unsetenv(t, ConfigDirEnv)
+			unsetenv(t)
 			t.Setenv("XDG_CONFIG_HOME", tt.xdg)
 
 			resolved, err := Resolve("")
@@ -128,7 +128,7 @@ func TestResolveSymlinkedHomeKeepsItsSpelling(t *testing.T) {
 			}
 			t.Setenv("HOME", link)
 			t.Setenv("XDG_CONFIG_HOME", "")
-			unsetenv(t, ConfigDirEnv)
+			unsetenv(t)
 
 			resolved, err := Resolve("")
 			if err != nil {
@@ -159,7 +159,7 @@ func TestResolveReportsAMissingHomeOnlyWhenItIsNeeded(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("HOME", "")
 			t.Setenv("XDG_CONFIG_HOME", "")
-			unsetenv(t, ConfigDirEnv)
+			unsetenv(t)
 
 			resolved, err := Resolve(tt.cli)
 			if tt.wantErr {

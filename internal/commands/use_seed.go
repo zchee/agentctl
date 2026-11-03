@@ -529,17 +529,7 @@ func (r *useSeedReport) prose() string {
 	case r.Outcome == seedUnchanged, r.silent:
 		return ""
 	case r.Outcome == seedSeeded:
-		members := make([]string, 0, len(r.SeededMembers))
-		for _, member := range r.SeededMembers {
-			switch {
-			case member.Entries == nil:
-				members = append(members, member.Name)
-			case *member.Entries == 1:
-				members = append(members, member.Name+" (1 entry)")
-			default:
-				members = append(members, fmt.Sprintf("%s (%d entries)", member.Name, *member.Entries))
-			}
-		}
+		members := useMemberDescriptions(r.SeededMembers)
 		last := "removed the owned credential file"
 		switch {
 		case r.warning != "":

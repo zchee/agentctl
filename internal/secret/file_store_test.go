@@ -221,10 +221,6 @@ func TestFileStoreSnapshotReportsAbsenceRefusesLinksAndChangesWithTheFile(t *tes
 	if _, err := Snapshot(link); !isErrorType[*SymlinkRefusedError](err) {
 		t.Errorf("a symlink must be refused, not followed: %v", err)
 	}
-	followed, err := SnapshotFollowing(link)
-	if err != nil || followed == nil {
-		t.Errorf("the following variant reads through the link: %v", err)
-	}
 }
 
 func TestFileStoreWriteLandsAt0600In0700DirectoriesAndLeavesNoTemporary(t *testing.T) {
@@ -589,11 +585,11 @@ func plantLockDir(t *testing.T, store *fileStore, name string) string {
 	return path
 }
 
-func TestFileStoreRemoveDirUnderRootRemovesAnEmptyLockDirectory(t *testing.T) {
+func TestFileStoreRemoveDirUnderRemovesAnEmptyLockDirectory(t *testing.T) {
 	store := newFileStore(t)
 	lock := plantLockDir(t, store, ".oauth_refresh.lock")
 
-	if err := RemoveDirUnderRoot(store.paths, lock); err != nil {
+	if err := RemoveDirUnder(store.paths.NamespaceRoot(), lock); err != nil {
 		t.Fatalf("an empty lock directory is removable: %v", err)
 	}
 	if _, err := os.Lstat(lock); !errors.Is(err, os.ErrNotExist) {
@@ -604,7 +600,7 @@ func TestFileStoreRemoveDirUnderRootRemovesAnEmptyLockDirectory(t *testing.T) {
 	}
 }
 
-func TestFileStoreRemoveDirUnderRootRefusals(t *testing.T) {
+func TestFileStoreRemoveDirUnderRefusals(t *testing.T) {
 	tests := map[string]struct {
 		plant   func(t *testing.T, store *fileStore) string
 		wantErr func(error) bool
@@ -663,7 +659,7 @@ func TestFileStoreRemoveDirUnderRootRefusals(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := newFileStore(t)
 			path := tt.plant(t, store)
-			if err := RemoveDirUnderRoot(store.paths, path); !tt.wantErr(err) {
+			if err := RemoveDirUnder(store.paths.NamespaceRoot(), path); !tt.wantErr(err) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if _, err := os.Lstat(path); tt.survive && err != nil {
@@ -673,14 +669,14 @@ func TestFileStoreRemoveDirUnderRootRefusals(t *testing.T) {
 	}
 }
 
-func TestFileStoreRemoveDirUnderRootRefusesASymlinkedComponent(t *testing.T) {
+func TestFileStoreRemoveDirUnderRefusesASymlinkedComponent(t *testing.T) {
 	store := newFileStore(t)
 	elsewhere := plantDirectoryLink(t, store.tempDir, store.nsDir)
 	if err := os.Mkdir(filepath.Join(elsewhere, ".oauth_refresh.lock"), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	err := RemoveDirUnderRoot(store.paths, filepath.Join(store.nsDir, ".oauth_refresh.lock"))
+	err := RemoveDirUnder(store.paths.NamespaceRoot(), filepath.Join(store.nsDir, ".oauth_refresh.lock"))
 	if !isErrorType[*SymlinkRefusedError](err) {
 		t.Fatalf("a symlinked component must be refused, got %v", err)
 	}

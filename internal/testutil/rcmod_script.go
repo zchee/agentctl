@@ -139,7 +139,7 @@ func rcmodCmd(ts *testscript.TestScript, neg bool, args []string) {
 // seed starts a session. Keys: version (registry version, "none" for no
 // member), status (ok, silent, truncated, reject:<reason>), provenance
 // (live, explicit, isolated, gateway, token), drop (milliseconds after a
-// status answer before the bridge vanishes, or never, replace, vanish),
+// status answer before the bridge vanishes, or never, replace),
 // reconnect (reconnected, unavailable, expired, silent, unknown, wrongid,
 // wrongid-then, early, truncated, reject:<reason>), delay (milliseconds
 // before a reconnect answer) and listed (false when `remote-control` is not among
@@ -306,7 +306,7 @@ func (s *rcmodSession) answer(ctx context.Context, dir, id, action string) {
 			write(".ack.json", ack("accepted", ""))
 		}
 		write(".response.json", response(id, "ok"))
-		s.scheduleDrop(ctx, pause)
+		s.scheduleDrop(pause)
 	case "reconnect":
 		s.mu.Lock()
 		s.reconnects++
@@ -371,7 +371,7 @@ func (s *rcmodSession) answer(ctx context.Context, dir, id, action string) {
 // scheduleDrop plays Claude Code dropping the bridge after the credential
 // changed. It runs after each status answer, because the swap follows the
 // status round.
-func (s *rcmodSession) scheduleDrop(ctx context.Context, pause func(time.Duration) bool) {
+func (s *rcmodSession) scheduleDrop(pause func(time.Duration) bool) {
 	switch drop := s.behavior["drop"]; drop {
 	case "never":
 	case "replace":
@@ -382,12 +382,6 @@ func (s *rcmodSession) scheduleDrop(ctx context.Context, pause func(time.Duratio
 			s.mu.Unlock()
 			if err := s.writeRecord(fmt.Sprintf("rcmod-bridge-%s-%d", s.name, generation)); err != nil {
 				s.violation("the registry record could not be rewritten: %v", err)
-			}
-		}
-	case "vanish":
-		if pause(200*time.Millisecond) && ctx.Err() == nil {
-			if err := os.Remove(s.record); err != nil {
-				s.violation("the registry record could not be removed: %v", err)
 			}
 		}
 	default:

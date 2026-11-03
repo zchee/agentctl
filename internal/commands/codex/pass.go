@@ -288,7 +288,7 @@ func runRow(ctx context.Context, plan RowPlan, shared *passShared) rowPass {
 		pass.account = account
 		return pass
 	case markerUnknown:
-		state, note := unknownState(marker.since, marker.class, marker.resendAt, now)
+		state, note := unknownState(marker.class, marker.resendAt, now)
 		pushNote(&account.Note, note)
 		if credentials.AccessExpired(now, 0) {
 			account.State = codexprovider.State{Kind: codexprovider.StateNeedsLogin}
@@ -312,7 +312,7 @@ func runRow(ctx context.Context, plan RowPlan, shared *passShared) rowPass {
 	}
 	cached := usage.LoadCache(ctx, cachePath)
 	cachedUsage := usageFromCache(cached)
-	if !shared.options.refresh && !shared.options.noCache && plan.Retry == retryNone && cached != nil && cached.IsFresh(now.UnixMilli(), 300*time.Second) && cached.RateLimitedUntilMs == nil && cachedUsage != nil {
+	if !shared.options.refresh && !shared.options.noCache && plan.Retry == retryNone && cached != nil && cached.IsFresh(now.UnixMilli(), usage.CacheTTL) && cached.RateLimitedUntilMs == nil && cachedUsage != nil {
 		account.State = usageState(cachedUsage)
 		if kept != nil {
 			account.State = *kept
@@ -341,7 +341,6 @@ func runRow(ctx context.Context, plan RowPlan, shared *passShared) rowPass {
 		account.State = usageState(fetched)
 		if kept != nil {
 			account.State = *kept
-			kept = nil
 		}
 		applyUsage(&account, fetched)
 		pass.fetched = true
@@ -352,7 +351,7 @@ func runRow(ctx context.Context, plan RowPlan, shared *passShared) rowPass {
 		} else {
 			switch failure.Kind {
 			case provider.FetchUnauthorized:
-				account.State = codexprovider.State{Kind: codexprovider.StateUnauthorized, RefreshedRecently: plan.Retry == retryAfterSend}
+				account.State = codexprovider.State{Kind: codexprovider.StateUnauthorized}
 				switch {
 				case plan.Retry == retryVerify || plan.Retry == retryNone && plan.PrePass != nil && plan.PrePass.Step.Kind == codexprovider.RefreshStepRacedExternal:
 					account.State.Kind = codexprovider.StateAdoptedDead

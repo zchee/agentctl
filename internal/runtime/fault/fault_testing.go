@@ -41,16 +41,10 @@ const (
 	CodexAbortAfterPending = "codex_abort_after_pending"
 	// CodexAfterPostSnapshot pauses after recording the refresh marker.
 	CodexAfterPostSnapshot = "codex_after_post_snapshot"
-	// CodexBeforePostSnapshot pauses before taking the refresh snapshot.
-	CodexBeforePostSnapshot = "codex_before_post_snapshot"
 	// CodexErrorAfterRename fails after replacing the refreshed credential.
 	CodexErrorAfterRename = "codex_error_after_rename"
-	// CodexLoginAfterWrite stops a login before its registry update.
-	CodexLoginAfterWrite = "codex_login_after_write"
 	// CodexLoginBeforeInstall pauses before installing a verified login.
 	CodexLoginBeforeInstall = "codex_login_before_install"
-	// CodexRefreshStateBeforeRename pauses before replacing refresh state.
-	CodexRefreshStateBeforeRename = "codex_refresh_state_before_rename"
 	// CodexRefreshStateDirSync fails the refresh-state directory flush.
 	CodexRefreshStateDirSync = "codex_refresh_state_dir_sync"
 	// CodexRefreshStateFileSync fails the refresh-state file flush.

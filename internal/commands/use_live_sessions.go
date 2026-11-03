@@ -93,7 +93,7 @@ func useScanSessions(ctx context.Context, dir string) useSessionHints {
 		if json.Unmarshal(read.Bytes, &document) != nil || document.Bridge == nil || *document.Bridge == "" {
 			continue
 		}
-		pid := uint64(0)
+		var pid uint64
 		if document.PID != nil {
 			pid = uint64(*document.PID)
 		} else {

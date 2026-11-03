@@ -193,7 +193,7 @@ func (d *Doctor) configRow() string {
 		lock = filepath.Join(filepath.Dir(path), name)
 	}
 	tail, err := secret.TailAuditLog(d.Paths, math.MaxInt)
-	verdict := ""
+	var verdict string
 	if err != nil {
 		verdict = fmt.Sprintf("config writes unknown (%s)", doctorEscape(err.Error()))
 	} else {

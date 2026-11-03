@@ -93,6 +93,7 @@ func readHandlers(deps Dependencies, handlers *cli.Handlers) {
 		if err != nil {
 			return err
 		}
+		accounts.Reader = secret.NewReader()
 		ctx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
 		defer cancel()
 		return accounts.List(ctx, opts.All)
@@ -102,6 +103,7 @@ func readHandlers(deps Dependencies, handlers *cli.Handlers) {
 		if err != nil {
 			return err
 		}
+		accounts.Reader = secret.NewReader()
 		ctx, cancel := context.WithTimeout(ctx, secret.NamespaceLockWait)
 		defer cancel()
 		return accounts.Show(ctx, opts.ID)
@@ -117,5 +119,5 @@ func accountsFor(ctx context.Context, globals cli.Globals, out io.Writer) (*comm
 		return nil, err
 	}
 	env := claude.EnvFromProcess()
-	return &commands.Accounts{Paths: paths, Env: &env, Reader: secret.NewReader(), Out: out}, nil
+	return &commands.Accounts{Paths: paths, Env: &env, Out: out}, nil
 }

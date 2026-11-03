@@ -136,12 +136,12 @@ func TestKeychainErrorMatching(t *testing.T) {
 		want   bool
 	}{
 		"success: a locked failure matches its sentinel": {
-			err:    &KeychainError{Class: errs.KeychainLocked, Detail: "exit status 36", Transient: true},
+			err:    &KeychainError{Class: errs.KeychainLocked, Detail: "exit status 36"},
 			target: ErrKeychainLocked,
 			want:   true,
 		},
 		"success: a wrapped timeout still matches": {
-			err:    fmt.Errorf("resolve the live row: %w", &KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms", Transient: true}),
+			err:    fmt.Errorf("resolve the live row: %w", &KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms"}),
 			target: ErrKeychainTimeout,
 			want:   true,
 		},
@@ -151,7 +151,7 @@ func TestKeychainErrorMatching(t *testing.T) {
 			want:   true,
 		},
 		"error: a timeout is not a lock": {
-			err:    &KeychainError{Class: errs.KeychainTimeout, Transient: true},
+			err:    &KeychainError{Class: errs.KeychainTimeout},
 			target: ErrKeychainLocked,
 			want:   false,
 		},
@@ -177,7 +177,7 @@ func TestKeychainErrorMapsOntoThePartialExit(t *testing.T) {
 	// The read path's failures degrade a row; they never abort the run. The
 	// mapping travels through Unwrap into the errs vocabulary, so main needs
 	// no knowledge of this package.
-	err := fmt.Errorf("status pass: %w", &KeychainError{Class: errs.KeychainLocked, Transient: true})
+	err := fmt.Errorf("status pass: %w", &KeychainError{Class: errs.KeychainLocked})
 
 	var kerr *errs.KeychainError
 	if !errors.As(err, &kerr) {
@@ -199,15 +199,15 @@ func TestKeychainErrorMessageNamesTheClassAndDetail(t *testing.T) {
 		want string
 	}{
 		"success: class only": {
-			err:  &KeychainError{Class: errs.KeychainLocked, Transient: true},
+			err:  &KeychainError{Class: errs.KeychainLocked},
 			want: "keychain read failed: locked",
 		},
 		"success: class and detail": {
-			err:  &KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms", Transient: true},
+			err:  &KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms"},
 			want: "keychain read failed: timeout: security timed out after 2000 ms",
 		},
 		"success: a verbatim class": {
-			err:  &KeychainError{Class: errs.KeychainClass("UserCanceled"), Detail: "the user pressed Cancel", Transient: true},
+			err:  &KeychainError{Class: errs.KeychainClass("UserCanceled"), Detail: "the user pressed Cancel"},
 			want: "keychain read failed: UserCanceled: the user pressed Cancel",
 		},
 	}

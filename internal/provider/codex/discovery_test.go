@@ -73,14 +73,14 @@ func TestReadAuthOutcomes(t *testing.T) {
 	}
 }
 
-func ownedTestRecord(user, account string) config.CodexAccountRecord {
-	return config.CodexAccountRecord{ChatGPTUserID: user, ChatGPTAccountID: account, Kind: config.CodexKind{Owned: &config.CodexOwnedKind{ExportSpelling: "/not-a-write-target", Refresh: config.RefreshAuto}}}
+func ownedTestRecord(user string) config.CodexAccountRecord {
+	return config.CodexAccountRecord{ChatGPTUserID: user, ChatGPTAccountID: "acct-one", Kind: config.CodexKind{Owned: &config.CodexOwnedKind{ExportSpelling: "/not-a-write-target", Refresh: config.RefreshAuto}}}
 }
 
 func TestDiscoverySources(t *testing.T) {
 	root := t.TempDir()
 	paths := config.NewPaths(filepath.Join(root, "store"))
-	records := []config.CodexAccountRecord{ownedTestRecord("user-one", "acct-one"), {Kind: config.CodexKind{HomeReadOnly: &config.CodexHomeReadOnlyKind{Dir: "elsewhere"}}}, ownedTestRecord("user-forgotten", "acct-one"), ownedTestRecord(".locks", "acct-one"), {Kind: config.CodexKind{Live: true}}}
+	records := []config.CodexAccountRecord{ownedTestRecord("user-one"), {Kind: config.CodexKind{HomeReadOnly: &config.CodexHomeReadOnlyKind{Dir: "elsewhere"}}}, ownedTestRecord("user-forgotten"), ownedTestRecord(".locks"), {Kind: config.CodexKind{Live: true}}}
 	records[2].Forgotten = true
 	dir, err := paths.CodexNamespaceDir("user-one", "acct-one")
 	if err != nil {
@@ -101,7 +101,7 @@ func TestDiscoverySources(t *testing.T) {
 			var kinds []SourceKind
 			for _, source := range got {
 				kinds = append(kinds, source.Kind)
-				if source.Kind == SourceOwned && (source.Owned.User() != "user-one" || source.Evidence.Kind != DaemonArtefact) {
+				if source.Kind == SourceOwned && (source.Record == nil || source.Record.ChatGPTUserID != "user-one" || source.Evidence.Kind != DaemonArtefact) {
 					t.Fatalf("owned source=%+v", source)
 				}
 			}
@@ -117,7 +117,7 @@ func TestDiscoveryOrphans(t *testing.T) {
 	if got, err := Orphans(t.Context(), paths, nil, time.Unix(1800000000, 0)); err != nil || len(got) != 0 {
 		t.Fatalf("empty orphans=%v error=%v", got, err)
 	}
-	records := []config.CodexAccountRecord{ownedTestRecord("user-present", "acct-one"), ownedTestRecord("user-empty", "acct-one")}
+	records := []config.CodexAccountRecord{ownedTestRecord("user-present"), ownedTestRecord("user-empty")}
 	dir, err := paths.CodexNamespaceDir("user-present", "acct-one")
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -73,7 +72,7 @@ func runHelper(run func(args []string, stdout, stderr io.Writer) int, args ...st
 func TestScriptCommandsRegistersEveryHelper(t *testing.T) {
 	t.Parallel()
 
-	want := []string{"drainpipes", "expectexit", "flockhold", "golden", "mtime", "proctable", "schema", "sigterm", "treesig", "waitfor"}
+	want := []string{"expectexit", "flockhold", "mtime", "proctable", "schema", "treesig", "waitfor"}
 	commands := ScriptCommands()
 	got := make([]string, 0, len(commands))
 	for name := range commands {
@@ -226,48 +225,6 @@ func TestFlockholdReleaseFile(t *testing.T) {
 	}
 }
 
-func TestSigtermMain(t *testing.T) {
-	t.Parallel()
-
-	t.Run("success: the named process receives the signal", func(t *testing.T) {
-		t.Parallel()
-
-		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 30")
-		stdout, stderr := Capture(cmd)
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("start the child: %v", err)
-		}
-		code, _, helperStderr := runHelper(sigtermMain, strconv.Itoa(cmd.Process.Pid))
-		if code != 0 {
-			t.Fatalf("sigterm exited %d; stderr:\n%s", code, helperStderr)
-		}
-		if out := Finish(t, cmd, stdout, stderr); !out.Signaled {
-			t.Fatalf("the child was not ended by the signal: exit %d", out.Code)
-		}
-	})
-
-	t.Run("error: a non-numeric pid is a usage error", func(t *testing.T) {
-		t.Parallel()
-
-		if code, _, _ := runHelper(sigtermMain, "nope"); code != 2 {
-			t.Fatalf("sigterm nope did not report usage")
-		}
-	})
-}
-
-func TestDrainpipesMain(t *testing.T) {
-	t.Parallel()
-
-	script := `i=0; while [ $i -lt 2000 ]; do printf '%0100d\n' "$i" >&2; i=$((i+1)); done; echo done; exit 7`
-	code, stdout, _ := runHelper(drainpipesMain, "/bin/sh", "-c", script)
-	if code != 7 {
-		t.Fatalf("drainpipes propagated exit %d, want the child's 7", code)
-	}
-	if !strings.HasPrefix(stdout, "stdout:5 stderr:202000") {
-		t.Fatalf("drainpipes reported %q, want the drained byte counts", stdout)
-	}
-}
-
 func TestMtimeMain(t *testing.T) {
 	t.Parallel()
 
@@ -312,22 +269,6 @@ func TestWaitforMain(t *testing.T) {
 		}
 	})
 
-	t.Run("success: a removed file is observed gone", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "flag")
-		if err := os.WriteFile(path, nil, 0o600); err != nil {
-			t.Fatalf("write: %v", err)
-		}
-		go func() {
-			time.Sleep(60 * time.Millisecond)
-			_ = os.Remove(path)
-		}()
-		if code, _, stderr := runHelper(waitforMain, "-gone", path, "2s"); code != 0 {
-			t.Fatalf("waitfor -gone exited %d; stderr:\n%s", code, stderr)
-		}
-	})
-
 	t.Run("error: a file that never appears times out", func(t *testing.T) {
 		t.Parallel()
 
@@ -359,35 +300,6 @@ func TestSchemaMain(t *testing.T) {
 	}
 }
 
-func TestGoldenMain(t *testing.T) {
-	t.Parallel()
-
-	const name = "render__table__tests__all_rows"
-	dir := t.TempDir()
-
-	exact := filepath.Join(dir, "exact.txt")
-	if err := os.WriteFile(exact, ReadGolden(t, name), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	padded := filepath.Join(dir, "padded.txt")
-	if err := os.WriteFile(padded, append(ReadGolden(t, name), []byte("  \n")...), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	if code, _, stderr := runHelper(goldenMain, name, exact); code != 0 {
-		t.Fatalf("golden on identical bytes = %d; stderr:\n%s", code, stderr)
-	}
-	if code, _, _ := runHelper(goldenMain, name, padded); code != 1 {
-		t.Fatalf("golden on padded bytes = %d, want the exact mismatch", code)
-	}
-	if code, _, stderr := runHelper(goldenMain, "-trim", name, padded); code != 0 {
-		t.Fatalf("golden -trim on padded bytes = %d; stderr:\n%s", code, stderr)
-	}
-	if code, _, _ := runHelper(goldenMain, "no-such-golden", exact); code != 1 {
-		t.Fatalf("golden with an unknown oracle did not fail")
-	}
-}
-
 func TestEveryUsageMessageEndsWithARealNewline(t *testing.T) {
 	t.Parallel()
 
@@ -397,13 +309,10 @@ func TestEveryUsageMessageEndsWithARealNewline(t *testing.T) {
 	tests := map[string]struct {
 		run func(args []string, stdout, stderr io.Writer) int
 	}{
-		"success: flockhold":  {run: flockholdMain},
-		"success: sigterm":    {run: sigtermMain},
-		"success: drainpipes": {run: drainpipesMain},
-		"success: mtime":      {run: mtimeMain},
-		"success: waitfor":    {run: waitforMain},
-		"success: schema":     {run: schemaMain},
-		"success: golden":     {run: goldenMain},
+		"success: flockhold": {run: flockholdMain},
+		"success: mtime":     {run: mtimeMain},
+		"success: waitfor":   {run: waitforMain},
+		"success: schema":    {run: schemaMain},
 	}
 
 	for name, tt := range tests {

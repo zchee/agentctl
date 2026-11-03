@@ -124,7 +124,7 @@ func useIdentify(ctx context.Context, source claude.ProfileSource, item *claude.
 			return nil, nil, &useIdentityFailure{kind: claude.SwapTokenExpired}
 		}
 	}
-	if claimed := item.Identity(); claimed != nil && !useIdentitiesAgree(claimed, resolved) {
+	if claimed := item.Identity(); claimed != nil && !claude.IdentitiesAgree(claimed, resolved) {
 		return nil, nil, &useIdentityFailure{claimed: useDisplayIdentity(claimed), resolved: useDisplayIdentity(resolved), ownWrite: expired}
 	}
 	return resolved, profile, nil
@@ -147,10 +147,6 @@ func useIdentityByOwnWrite(tail secret.AuditTail, item8 string) *claude.Identity
 		return &claude.Identity{AccountUUID: event.IncomingIdentity.AccountUUID, OrganizationUUID: event.IncomingIdentity.OrganizationUUID}
 	}
 	return nil
-}
-
-func useIdentitiesAgree(a, b *claude.Identity) bool {
-	return a.AccountUUID == b.AccountUUID && (a.OrganizationUUID == nil || b.OrganizationUUID == nil || *a.OrganizationUUID == *b.OrganizationUUID)
 }
 
 func useDisplayIdentity(identity *claude.Identity) string {

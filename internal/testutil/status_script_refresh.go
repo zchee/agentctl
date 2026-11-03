@@ -170,8 +170,6 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 	usageBody, err := fixtures.FS.ReadFile("claude/usage-2026-09-08.json")
 	ts.Check(err)
 	var usageCalls, tokenCalls, profileCalls atomic.Int64
-	var profileMapped atomic.Bool
-	profileMapped.Store(kind != "unmapped-plan")
 	posted := make(chan struct{})
 	release := make(chan struct{})
 	var postedOnce, releaseOnce sync.Once
@@ -234,7 +232,7 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 				return
 			}
 			plan := "claude_pro"
-			if !profileMapped.Load() {
+			if kind == "unmapped-plan" {
 				plan = "future_plan"
 			}
 			tier := "default_claude_pro"
@@ -255,17 +253,11 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 3 {
 			ts.Fatalf("usage: refresh-calls <usage> <token> <profile>")
 		}
-		for i, got := range []int64{usageCalls.Load(), tokenCalls.Load(), profileCalls.Load()} {
-			want, err := strconv.ParseInt(args[i], 10, 64)
-			ts.Check(err)
-			if got != want {
-				ts.Fatalf("request class %d = %d, want %d", i, got, want)
-			}
-		}
+		checkRequestCounts(ts, args, []int64{usageCalls.Load(), tokenCalls.Load(), profileCalls.Load()}, "request class")
 	})
 	ts.SetCmd("refresh-action", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 1 {
-			ts.Fatalf("usage: refresh-action <expire|mapped|release|wait-post|terminate|peer>")
+			ts.Fatalf("usage: refresh-action <expire|release|wait-post|terminate|peer>")
 		}
 		switch args[0] {
 		case "session":
@@ -313,8 +305,6 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 					ts.Fatalf("pause was not reached")
 				}
 			}
-		case "mapped":
-			profileMapped.Store(true)
 		case "release":
 			releaseOnce.Do(func() { close(release) })
 		case "wait-post":
@@ -340,7 +330,7 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 	})
 	ts.SetCmd("refresh-check", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) == 0 {
-			ts.Fatalf("usage: refresh-check <stored|plan|no-pending|read-only|write|audit|lock-body|unlocked|row> [arguments]")
+			ts.Fatalf("usage: refresh-check <stored|plan|read-only|write|audit|lock-body|unlocked|row> [arguments]")
 		}
 		switch args[0] {
 		case "siblings":
@@ -440,12 +430,6 @@ func refreshFixture(ts *testscript.TestScript, neg bool, args []string) {
 			}
 			if kind == "tier-refused" && inner["rateLimitTier"] != nil {
 				ts.Fatalf("invalid tier was persisted")
-			}
-		case "no-pending":
-			for _, name := range []string{".credentials.json.pending", ".pending.meta"} {
-				if _, err := os.Lstat(filepath.Join(ns, name)); !os.IsNotExist(err) {
-					ts.Fatalf("pending material remains: %s (%v)", name, err)
-				}
 			}
 		case "keychain-calls":
 			if len(args) != 3 {

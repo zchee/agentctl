@@ -50,7 +50,6 @@ type Source struct {
 	Kind     SourceKind
 	Home     string
 	Record   *config.CodexAccountRecord
-	Owned    *OwnedRecord
 	Evidence Daemon
 }
 
@@ -76,7 +75,7 @@ func Discover(ctx context.Context, paths *config.Paths, accounts []config.CodexA
 			if err != nil {
 				return sources, err
 			}
-			sources = append(sources, Source{Kind: SourceOwned, Home: dir, Record: record, Owned: owned, Evidence: DaemonEvidence(ctx, dir)})
+			sources = append(sources, Source{Kind: SourceOwned, Home: dir, Record: record, Evidence: DaemonEvidence(ctx, dir)})
 		} else {
 			sources = append(sources, Source{Kind: SourceInvalidOwned, Record: record})
 		}

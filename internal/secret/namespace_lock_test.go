@@ -30,6 +30,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zchee/agentctl/internal/config"
+	"github.com/zchee/agentctl/internal/lockfile"
 )
 
 // holderEnv asks a re-executed copy of this test binary to hold an
@@ -254,9 +255,9 @@ func TestASymlinkedConfigurationDirectoryIsFollowedRatherThanRefused(t *testing.
 		t.Fatalf("Symlink() = %v", err)
 	}
 
-	guard, err := LockFile(t.Context(), filepath.Join(linked, ".config.lock"), soon())
+	guard, err := lockfile.Lock(t.Context(), filepath.Join(linked, ".config.lock"), soon())
 	if err != nil {
-		t.Fatalf("LockFile() = %v: a symlinked configuration directory is a supported layout", err)
+		t.Fatalf("lockfile.Lock() = %v: a symlinked configuration directory is a supported layout", err)
 	}
 	defer func() { _ = guard.Release() }()
 	if _, err := os.Stat(filepath.Join(real, ".config.lock")); err != nil {
@@ -401,9 +402,9 @@ func TestASecondProcessHoldingTheLockBlocksUntilItExits(t *testing.T) {
 	// The timeout path: the other process holds the lock, so a bounded
 	// wait retries and then reports busy.
 	start := time.Now()
-	_, err = LockFile(t.Context(), lockPath, time.Now().Add(600*time.Millisecond))
+	_, err = lockfile.Lock(t.Context(), lockPath, time.Now().Add(600*time.Millisecond))
 	if !errors.Is(err, ErrLockBusy) {
-		t.Fatalf("LockFile() = %v, want %v", err, ErrLockBusy)
+		t.Fatalf("lockfile.Lock() = %v, want %v", err, ErrLockBusy)
 	}
 	if elapsed := time.Since(start); elapsed < 500*time.Millisecond {
 		t.Errorf("the wait should have retried until the deadline, gave up after %v", elapsed)
@@ -417,9 +418,9 @@ func TestASecondProcessHoldingTheLockBlocksUntilItExits(t *testing.T) {
 	if err := holder.Wait(); err != nil {
 		t.Fatalf("the holder should exit cleanly: %v", err)
 	}
-	guard, err := LockFile(t.Context(), lockPath, time.Now().Add(NamespaceLockWait))
+	guard, err := lockfile.Lock(t.Context(), lockPath, time.Now().Add(NamespaceLockWait))
 	if err != nil {
-		t.Fatalf("LockFile() after the holder exited = %v", err)
+		t.Fatalf("lockfile.Lock() after the holder exited = %v", err)
 	}
 	defer func() { _ = guard.Release() }()
 }

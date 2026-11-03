@@ -91,9 +91,6 @@ func TestRunOutputFailureClassification(t *testing.T) {
 			if !errors.Is(err, tt.target) {
 				t.Fatalf("failure() = %v, want class %q", err, tt.target.Class)
 			}
-			if !err.Transient {
-				t.Errorf("failure() = %v is not transient; every classified exit is", err)
-			}
 			if tt.detail != "" && err.Detail != tt.detail {
 				t.Errorf("Detail = %q, want %q", err.Detail, tt.detail)
 			}
@@ -116,10 +113,6 @@ func TestUnsupportedReaderRefusesEverything(t *testing.T) {
 	sec, err := reader.Read(ctx, "anything")
 	if sec != nil || !errors.Is(err, ErrKeychainUnsupported) {
 		t.Errorf("Read() = (%v, %v), want (nil, %v)", sec, err, ErrKeychainUnsupported)
-	}
-	var kerr *KeychainError
-	if !errors.As(err, &kerr) || kerr.Transient {
-		t.Errorf("Read() error = %#v; an absent platform transport will not fix itself", err)
 	}
 }
 

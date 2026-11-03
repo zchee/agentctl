@@ -22,8 +22,8 @@ import (
 // parseDump parses security(1) dump-keychain output into one entry per item.
 //
 // The format is a run of records, each introduced by a class: line and
-// followed by an attributes: block of "key"<type>=value lines. Only four
-// attributes are kept — service, account and the two timestamps — and every
+// followed by an attributes: block of "key"<type>=value lines. Service and
+// account are kept, while timestamps are validated and discarded. Every
 // value is optional, because security prints <NULL> for anything unset.
 //
 // Items without a service name are dropped: they cannot be credential items,
@@ -62,10 +62,6 @@ func parseDump(text string) ([]ServiceEntry, error) {
 				current.service = value
 			case "acct":
 				current.account = value
-			case "cdat":
-				current.createdAt = value
-			case "mdat":
-				current.modifiedAt = value
 			}
 			break
 		}
@@ -80,10 +76,8 @@ func parseDump(text string) ([]ServiceEntry, error) {
 
 // partialEntry is an item being assembled from consecutive attribute lines.
 type partialEntry struct {
-	service    string
-	account    string
-	createdAt  string
-	modifiedAt string
+	service string
+	account string
 }
 
 // flushInto appends the assembled item and resets the assembly. An item
@@ -95,10 +89,8 @@ func (p *partialEntry) flushInto(entries *[]ServiceEntry) {
 		return
 	}
 	*entries = append(*entries, ServiceEntry{
-		Service:    taken.service,
-		Account:    taken.account,
-		CreatedAt:  taken.createdAt,
-		ModifiedAt: taken.modifiedAt,
+		Service: taken.service,
+		Account: taken.account,
 	})
 }
 

@@ -28,20 +28,8 @@ import (
 	"github.com/zchee/agentctl/internal/runtime/proc"
 )
 
-// The exit codes the lock protocol's refusals map onto. The command
-// layer's exit table names the same numbers; they are spelled here too
-// because this package sits below it and a refusal must carry its code
-// wherever it is built.
-const (
-	// refusedExitCode is the compromised-hold refusal and every other
-	// acquisition failure that is not an unreachable store.
-	refusedExitCode = 10
-	// busyExitCode means the peer's locks are held and were not broken.
-	busyExitCode = 16
-	// discardedExitCode means a credential had to be thrown away under
-	// the hold — here, because the write window had already closed.
-	discardedExitCode = 17
-)
+// busyExitCode means the peer's locks are held and were not broken.
+const busyExitCode = 16
 
 // WriteWindowClosedError reports that too little of the hold budget
 // remains for a write to start: a write takes up to the configuration
@@ -141,16 +129,6 @@ type HeldLocks struct {
 	released   bool
 }
 
-// StoreDir returns the store directory this hold is about.
-func (h *HeldLocks) StoreDir() string {
-	return h.anchor.StoreDir()
-}
-
-// Tree returns which tree the hold is in.
-func (h *HeldLocks) Tree() Tree {
-	return h.anchor.Tree()
-}
-
 // RecordPath returns the held-lock record's path, so diagnostics and
 // tests can name it.
 func (h *HeldLocks) RecordPath() string {
@@ -164,18 +142,6 @@ func (h *HeldLocks) Paths() []string {
 		paths = append(paths, one.artefact.path)
 	}
 	return paths
-}
-
-// Slot returns the slot for one held artefact by its recorded path, so
-// a caller can sample a lock it holds; false when the hold does not
-// carry that path.
-func (h *HeldLocks) Slot(path string) (LockSlot, bool) {
-	for i := range h.held {
-		if h.held[i].artefact.path == path {
-			return h.anchor.slot(&h.held[i].artefact), true
-		}
-	}
-	return LockSlot{}, false
 }
 
 // HoldElapsed returns how long the hold has lasted, from the first
@@ -630,34 +596,4 @@ func BusyRefusal(holderAlive bool, stoppedPIDs []int32) error {
 		reason = fmt.Sprintf("%s; stopped claude process(es) %v may or may not be the holder", reason, stoppedPIDs)
 	}
 	return errs.NewRefused(busyExitCode, reason)
-}
-
-// LockRefusal maps a lock failure onto the exit vocabulary.
-//
-// A compromised hold — drifted or unreadable held modification time, or
-// a hold past its budget — is the lettered refusal; an unreachable
-// store is fatal configuration; a closed write window discards; a
-// cancellation passes through for the signal exit; and every other
-// acquisition failure carries the refusal code with its own words.
-func LockRefusal(err error) error {
-	var (
-		compromised *CompromisedError
-		budget      *BudgetExceededError
-		window      *WriteWindowClosedError
-		unreachable *UnreachableError
-	)
-	switch {
-	case err == nil:
-		return nil
-	case errors.As(err, &compromised), errors.As(err, &budget):
-		return errs.NewRefusedLetter(refusedExitCode, "A")
-	case errors.As(err, &window):
-		return errs.NewRefused(discardedExitCode, err.Error())
-	case errors.As(err, &unreachable):
-		return errs.NewConfig(err.Error())
-	case errors.Is(err, context.Canceled):
-		return err
-	default:
-		return errs.NewRefused(refusedExitCode, err.Error())
-	}
 }

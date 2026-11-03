@@ -77,22 +77,6 @@ func Snapshot(path string) (*FileSnapshot, error) {
 	return &snap, nil
 }
 
-// SnapshotFollowing is [Snapshot] for a file this store only ever reads and
-// never writes, such as the vendor's own live configuration: symbolic
-// links are followed, because that file is commonly one, and refusing it
-// would blind the live row rather than protect anything.
-func SnapshotFollowing(path string) (*FileSnapshot, error) {
-	info, err := os.Stat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil, nil
-	case err != nil:
-		return nil, err
-	}
-	snap := snapshotOf(info)
-	return &snap, nil
-}
-
 // ReadFile opens a file with O_NOFOLLOW and reads it, applying the size
 // limit. The limit is the caller's, because the callers differ by orders
 // of magnitude: a credential blob, its metadata, and a configuration file
@@ -107,7 +91,7 @@ func ReadFile(path string, limit int64) (ReadOutcome, error) {
 
 // ReadFileFollowing is [ReadFile] for a file this store only ever reads:
 // the same regular-file and size rules, but a symbolic link is followed
-// rather than refused (see [SnapshotFollowing]).
+// rather than refused, because vendor configuration files are commonly links.
 func ReadFileFollowing(path string, limit int64) (ReadOutcome, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -531,11 +515,11 @@ func OpenNamespaceDir(paths *config.Paths, nsDir string) (int, error) {
 	// and they may not exist yet: a login creates the store on its first
 	// use. They are created by path; the walk below then refuses a link at
 	// the root, so a redirected root is caught either way.
-	if err := createDir0700(paths.ConfigDir()); err != nil {
+	if err := config.CreateDir(paths.ConfigDir()); err != nil {
 		return -1, err
 	}
 	root := paths.NamespaceRoot()
-	if err := createDir0700(root); err != nil {
+	if err := config.CreateDir(root); err != nil {
 		return -1, err
 	}
 
@@ -559,17 +543,7 @@ func OpenNamespaceDir(paths *config.Paths, nsDir string) (int, error) {
 // planted at a component from redirecting the whole protocol. The caller
 // closes the descriptor.
 func OpenDirUnder(anchor, dir string) (int, error) {
-	chain, found, err := openChain(anchor, dir, walkMustExist)
-	if err != nil {
-		return -1, err
-	}
-	if !found || len(chain) == 0 {
-		closeChain(chain)
-		return -1, errs.NewIO(fmt.Sprintf("`%s` is not there", dir), fs.ErrNotExist)
-	}
-	leaf := chain[len(chain)-1].fd
-	closeChain(chain[:len(chain)-1])
-	return leaf, nil
+	return openDirUnder(anchor, dir, dir, walkMustExist)
 }
 
 // CreateDirUnder is [OpenDirUnder], but creating the directory when it is
@@ -580,42 +554,26 @@ func OpenDirUnder(anchor, dir string) (int, error) {
 // creating that by path is the step this function exists to replace. The
 // caller closes the descriptor.
 func CreateDirUnder(anchor, dir string) (int, error) {
-	chain, found, err := openChain(anchor, dir, walkCreate)
+	return openDirUnder(anchor, dir, anchor, walkCreate)
+}
+
+func openDirUnder(anchor, dir, missing string, mode walkMode) (int, error) {
+	chain, found, err := openChain(anchor, dir, mode)
 	if err != nil {
 		return -1, err
 	}
 	if !found || len(chain) == 0 {
 		closeChain(chain)
-		return -1, errs.NewIO(fmt.Sprintf("`%s` is not there", anchor), fs.ErrNotExist)
+		return -1, errs.NewIO(fmt.Sprintf("`%s` is not there", missing), fs.ErrNotExist)
 	}
 	leaf := chain[len(chain)-1].fd
 	closeChain(chain[:len(chain)-1])
 	return leaf, nil
 }
 
-// RemoveDirUnderRoot removes one empty directory under the namespace root,
-// resolving the way to it without ever following a symbolic link.
-//
-// The lexical containment check compares spellings and cannot see a link
-// planted at a component: a path can spell a location under the root while
-// naming a live store in the user's home directory. So the parent is
-// walked down from the root one no-follow component at a time and the
-// artefact removed relative to the descriptor that walk produced.
-func RemoveDirUnderRoot(paths *config.Paths, path string) error {
-	// Stated here rather than left to the walk, which cannot answer until
-	// the root itself exists — and "is this mine to remove?" is not a
-	// question whose answer should depend on that.
-	if !paths.IsUnderNamespaceRoot(path) {
-		return &OutsideRootError{Path: path}
-	}
-	return RemoveDirUnder(paths.NamespaceRoot(), path)
-}
-
-// RemoveDirUnder is [RemoveDirUnderRoot] with the no-follow walk anchored
-// elsewhere, for the one removal outside the namespace root: a lock
-// directory a crashed process left in the store it was holding, where the
-// anchor is that store directory's parent, leaving both components the
-// record cannot vouch for to be walked and refused here.
+// RemoveDirUnder removes one empty directory below anchor, resolving its
+// parent one no-follow component at a time. Operating relative to that
+// descriptor prevents a planted link from redirecting the removal.
 //
 // Nothing recurses. AT_REMOVEDIR fails on a directory with anything inside
 // it, and that is reported: a lock directory holding a file is not the
@@ -654,29 +612,4 @@ func RemoveDirUnder(anchor, path string) error {
 	default:
 		return errs.NewIO(fmt.Sprintf("could not remove `%s`", path), err)
 	}
-}
-
-// createDir0700 creates one directory — and any missing parents — at 0700,
-// tolerating levels that already exist and leaving their modes alone,
-// which doctor reports on rather than silently tightening. Every level is
-// created individually rather than with one recursive call that would
-// apply the umask's wider default to intermediate levels.
-func createDir0700(dir string) error {
-	if info, err := os.Stat(dir); err == nil && info.IsDir() {
-		return nil
-	}
-	if parent := filepath.Dir(dir); parent != dir {
-		if err := createDir0700(parent); err != nil {
-			return err
-		}
-	}
-	if err := os.Mkdir(dir, config.DirMode); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
-				return nil
-			}
-		}
-		return errs.NewIO(fmt.Sprintf("could not create the directory `%s`", dir), err)
-	}
-	return nil
 }

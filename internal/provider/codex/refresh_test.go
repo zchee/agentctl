@@ -39,7 +39,7 @@ func driverContext(paths *config.Paths) RefreshContext {
 }
 
 func driverRecord() *OwnedRecord {
-	record := ownedTestRecord("user-one", "acct-one")
+	record := ownedTestRecord("user-one")
 	return Owned(&record)
 }
 
@@ -154,7 +154,7 @@ func TestRefreshDriverRefusalsNeverPOST(t *testing.T) {
 				jwt := syntheticJWT(fmt.Sprintf(`{"exp":%d}`, time.Now().Add(time.Hour).Unix()))
 				writeCodexFile(t, auth, bytes.ReplaceAll(writerCredentials(t, "agctl-test-refresh-old"), []byte(`"agctl-test-access"`), fmt.Appendf(nil, "%q", jwt)))
 			case "disabled":
-				record := ownedTestRecord("user-one", "acct-one")
+				record := ownedTestRecord("user-one")
 				record.Kind.Owned.Refresh = config.RefreshNever
 				owned = Owned(&record)
 			case "budget":

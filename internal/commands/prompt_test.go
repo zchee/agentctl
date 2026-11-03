@@ -28,6 +28,40 @@ import (
 	"github.com/zchee/agentctl/internal/errs"
 )
 
+func TestReadTerminalLine(t *testing.T) {
+	tests := map[string]struct {
+		input string
+		want  string
+	}{
+		"success: stops at newline":        {input: "first\nsecond\n", want: "first"},
+		"success: keeps whitespace":        {input: "  answer\r\n", want: "  answer\r"},
+		"success: keeps final line at EOF": {input: "answer", want: "answer"},
+		"success: empty EOF":               {},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			input, output, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = input.Close(); _ = output.Close() })
+			if _, err := output.WriteString(tt.input); err != nil {
+				t.Fatal(err)
+			}
+			if err := output.Close(); err != nil {
+				t.Fatal(err)
+			}
+			got, err := readTerminalLine(t.Context(), input, "could not read the test input")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := gocmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("line (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestTerminalPrompt(t *testing.T) {
 	tests := map[string]struct {
 		answer string

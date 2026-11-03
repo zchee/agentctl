@@ -28,7 +28,6 @@ import (
 	"github.com/awnumar/memguard"
 
 	"github.com/zchee/agentctl/internal/provider"
-	"github.com/zchee/agentctl/internal/provider/claude"
 )
 
 // TokenURL is the production refresh endpoint.
@@ -47,17 +46,7 @@ const (
 	AmbiguousServerBody AmbiguousClass = "server_body"
 	// AmbiguousTLS means a TLS failure could not prove absence of a send.
 	AmbiguousTLS AmbiguousClass = "tls"
-	// AmbiguousWriteFailed means a rotated credential could not be saved.
-	AmbiguousWriteFailed AmbiguousClass = "write_failed"
 )
-
-// Label returns the fixed word rendered in status and audit records.
-func (c AmbiguousClass) Label() string {
-	if c == AmbiguousTransport || c == AmbiguousServerBody {
-		return "ambiguous"
-	}
-	return string(c)
-}
 
 // PermanentClass is the server's dead-grant answer.
 type PermanentClass string
@@ -156,9 +145,6 @@ func NewRefreshClientFromEnv() *RefreshClient {
 	return NewRefreshClient(codexTokenURL(), provider.UserAgent(provider.Codex))
 }
 
-// TokenURL returns the configured endpoint.
-func (c *RefreshClient) TokenURL() string { return c.tokenURL }
-
 func refreshOAuth(ctx context.Context, credentials *LockedCredentials, token *InflightToken, client *RefreshClient) RefreshOutcome {
 	if token == nil || token.authorization == nil || token.authorization.claimed.Swap(true) {
 		return RefreshOutcome{Kind: RefreshPreSend, Reason: "the marker's send authorization was already consumed"}
@@ -193,7 +179,7 @@ func refreshOAuth(ctx context.Context, credentials *LockedCredentials, token *In
 		return RefreshOutcome{Kind: RefreshAmbiguous, Ambiguous: class}
 	}
 	var retryAfter *time.Duration
-	if wait, ok := claude.ParseRetryAfter(result.Header.Get("Retry-After"), time.Now()); ok {
+	if wait, ok := provider.ParseRetryAfter(result.Header.Get("Retry-After"), time.Now()); ok {
 		retryAfter = new(wait)
 	}
 	return classifyRefreshResponse(result.Status, retryAfter, result.Body, result.BodyComplete)

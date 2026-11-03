@@ -30,16 +30,6 @@ import (
 	"github.com/zchee/agentctl/internal/usage"
 )
 
-type codexFrameRow struct{ codex.Account }
-
-func (a codexFrameRow) Gauges() []render.Gauge {
-	var result []render.Gauge
-	for _, g := range a.Account.Gauges() {
-		result = append(result, render.Gauge{Label: g.Label, Percent: g.Percent})
-	}
-	return result
-}
-
 func accountRows(t *testing.T) []codex.Account {
 	t.Helper()
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
@@ -58,19 +48,15 @@ func TestAccountGoldenBytes(t *testing.T) {
 	}{"success: table": {"provider__codex__account__tests__codex_table", func(t *testing.T) string {
 		rows := accountRows(t)
 		rows = append(rows, codex.Account{Email: new("sibling@example.com"), State: codex.State{Kind: codex.StateStaleSibling}})
-		report := render.CodexReport{Now: time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC), Zone: time.FixedZone("UTC+9", 9*3600)}
-		for _, account := range rows {
-			r := account.ToTableRow()
-			report.Rows = append(report.Rows, render.CodexTableRow{Account: r.Account, Plan: r.Plan, Kind: r.Kind, Session: r.Session, Weekly: r.Weekly, Extra: r.Extra, Credits: r.Credits, State: r.State, VisibleByDefault: r.VisibleByDefault})
-		}
+		report := render.CodexTableReport(rows, time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC), time.FixedZone("UTC+9", 9*3600), false)
 		return render.RenderCodex(&report) + "\n"
 	}}, "success: watch": {"provider__codex__account__tests__codex_watch_two_rows", func(t *testing.T) string {
 		now := time.Date(2026, time.September, 16, 12, 0, 30, 0, time.UTC)
-		m := tui.New[codexFrameRow](now, codex.Account{}.WatchTitle(), codex.Account{}.HiddenHint())
+		m := tui.New[render.CodexWatchRow](now, "agentctl codex watch", "agentctl codex status --all")
 		m.Width, m.Height = 84, 16
-		var rows tui.Rows[codexFrameRow]
+		var rows tui.Rows[render.CodexWatchRow]
 		for _, row := range accountRows(t) {
-			rows = append(rows, codexFrameRow{row})
+			rows = append(rows, render.CodexWatchRow{Account: row})
 		}
 		m.Reduce(rows)
 		m.Reduce(tui.PassFinished{At: now.Add(-30 * time.Second), Next: now.Add(4*time.Minute + 30*time.Second)})
@@ -100,14 +86,15 @@ func TestAccountGoldenBytes(t *testing.T) {
 
 func TestAccountProjection(t *testing.T) {
 	a := accountRows(t)[0]
-	r := a.ToTableRow()
+	r := render.CodexTableReport([]codex.Account{a}, time.Time{}, time.UTC, false).Rows[0]
 	if len(r.Extra) != 1 || r.Extra[0].Label() != "GPT-5.3-Codex-Spark:primary (unknown kind)" {
 		t.Fatalf("extra=%+v", r.Extra)
 	}
-	if diff := gocmp.Diff([]codex.Gauge{{Label: "5h", Percent: 21}, {Label: "weekly", Percent: 35}}, a.Gauges()); diff != "" {
+	watch := render.CodexWatchRow{Account: a}
+	if diff := gocmp.Diff([]render.Gauge{{Label: "5h", Percent: 21}, {Label: "weekly", Percent: 35}}, watch.Gauges()); diff != "" {
 		t.Fatal(diff)
 	}
-	if a.BlockHeight() != 5 {
+	if watch.BlockHeight() != 5 {
 		t.Fatal("block height")
 	}
 	if a.Window(usage.WindowSession) == nil || a.Window(usage.WindowWeeklyAll) == nil {

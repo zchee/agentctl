@@ -428,34 +428,3 @@ func TestPartialFromShown(t *testing.T) {
 		})
 	}
 }
-
-func TestNewNotImplemented(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		command  string
-		contains []string
-	}{
-		"error: an unbuilt command names itself, says why, and is fatal": {
-			command:  "agentctl claude status",
-			contains: []string{"agentctl claude status", "not implemented"},
-		},
-	}
-
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			err := NewNotImplemented(tt.command)
-			if got := ExitCode(err); got != ExitFatal {
-				t.Errorf("ExitCode(%v) = %d, want %d: an unbuilt command must not exit 0 or 2", err, got, ExitFatal)
-			}
-			rendered := err.Error()
-			for _, sub := range tt.contains {
-				if !strings.Contains(rendered, sub) {
-					t.Errorf("message %q should contain %q", rendered, sub)
-				}
-			}
-		})
-	}
-}

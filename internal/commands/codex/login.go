@@ -176,9 +176,6 @@ func (l *Login) install(ctx context.Context, scratch *provider.LoginScratch, rep
 	if err := guard.Release(); err != nil {
 		return err
 	}
-	if active.Is(fault.CodexLoginAfterWrite) {
-		return errs.NewRefused(0, "stopped between the install and the registry update (injected by `"+fault.CodexLoginAfterWrite+"`)")
-	}
 	if err := l.record(ctx, identity, opts); err != nil {
 		return err
 	}

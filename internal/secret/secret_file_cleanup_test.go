@@ -139,7 +139,7 @@ func TestSecretFileSignalHelper(t *testing.T) {
 	ctx, controller := signals.Install(t.Context())
 	defer controller.Stop()
 	file.faults = &writeFaults{beforeRename: func() {
-		staged := strayTmps(t, ns, testAuth)
+		staged := strayTmps(t, ns)
 		if len(staged) != 1 {
 			t.Fatalf("staged = %v", staged)
 		}
@@ -176,7 +176,7 @@ func TestSecretFileWithdrawsTemporaryCleanupOnReturn(t *testing.T) {
 			store := newSecretFileStore(t)
 			file := store.codexFile()
 			var temporary string
-			file.faults = &writeFaults{beforeRename: func() { temporary = strayTmps(t, store.codexNS, testAuth)[0] }}
+			file.faults = &writeFaults{beforeRename: func() { temporary = strayTmps(t, store.codexNS)[0] }}
 			if tt.fail {
 				file.faults.renameErr = errors.New("rename refused")
 			}

@@ -103,7 +103,6 @@ func (s *RefreshStateStore) storeDurable(ctx context.Context, state RefreshState
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("could not close refresh-state temporary: %w", err)
 	}
-	active.PausePoint(fault.CodexRefreshStateBeforeRename)
 	if err := ctx.Err(); err != nil {
 		return err
 	}

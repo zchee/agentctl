@@ -80,19 +80,3 @@ func Acquire(ctx context.Context, locksDir, name string, deadline time.Time) (*L
 	}
 	return guard, nil
 }
-
-// LockFile takes an exclusive flock on path, creating the file if needed,
-// with [Acquire]'s waiting rules but no holder body.
-//
-// Unlike [Acquire], the parent directory is resolved normally: the one
-// caller is the registry's configuration lock, whose parent is the
-// configuration directory — a directory the user names, and one a dotfile
-// manager may well have made a symbolic link. Everything else in the
-// store follows that link, so refusing it only here would half-support a
-// layout rather than support or reject it.
-func LockFile(ctx context.Context, path string, deadline time.Time) (*LockGuard, error) {
-	if !config.IsSingleComponent(filepath.Base(path)) {
-		return nil, &LockUnavailableError{Reason: fmt.Sprintf("`%s` does not name a lock file", path)}
-	}
-	return lockfile.Lock(ctx, path, deadline)
-}

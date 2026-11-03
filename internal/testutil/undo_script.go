@@ -96,8 +96,7 @@ func undoSetup(ts *testscript.TestScript, neg bool, args []string) {
 	registryPath := filepath.Join(configDir, "config.json")
 	var registry map[string]any
 	ts.Check(json.Unmarshal([]byte(ts.ReadFile(registryPath)), &registry))
-	spelling := ExportSpelling(thirdDir)
-	registry["accounts"] = append(registry["accounts"].([]any), map[string]any{"account_uuid": third, "organization_uuid": Org, "kind": map[string]any{"kind": "owned", "export_spelling": spelling, "export_sha8": Sha8(spelling)}, "forgotten": false, "created_at": time.Now().UTC().Format(time.RFC3339)})
+	registry["accounts"] = append(registry["accounts"].([]any), swapOwnedRecord(third, Org, thirdDir))
 	write(registryPath, document(registry))
 	control := filepath.Join(root, "undo-profile-control")
 	write(control, nil)

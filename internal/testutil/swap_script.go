@@ -44,6 +44,15 @@ import (
 
 func init() { registerScriptCmd("swapfixture", swapFixture) }
 
+func swapCredential(name, account, org string, expiry int64) map[string]any {
+	return map[string]any{"claudeAiOauth": map[string]any{"accessToken": "SENTINEL-access-" + name, "refreshToken": "SENTINEL-refresh-" + name, "expiresAt": expiry, "scopes": []string{"user:inference", "user:profile"}, "tokenAccount": map[string]any{"uuid": account, "organizationUuid": org, "emailAddress": nil, "organizationName": nil, "workspaceId": nil, "workspaceName": nil}}}
+}
+
+func swapOwnedRecord(account, org, dir string) any {
+	spelling := ExportSpelling(dir)
+	return map[string]any{"account_uuid": account, "organization_uuid": org, "kind": map[string]any{"kind": "owned", "export_spelling": spelling, "export_sha8": Sha8(spelling)}, "forgotten": false, "created_at": time.Now().UTC().Format(time.RFC3339)}
+}
+
 func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	if neg || len(args) < 1 || len(args) > 2 {
 		ts.Fatalf("usage: swapfixture <scenario> [name]")
@@ -142,7 +151,7 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	document := func(value any) []byte { body, err := json.Marshal(value); ts.Check(err); return body }
 	blob := func(name, account string, expiry int64) []byte {
-		return document(map[string]any{"claudeAiOauth": map[string]any{"accessToken": "SENTINEL-access-" + name, "refreshToken": "SENTINEL-refresh-" + name, "expiresAt": expiry, "scopes": []string{"user:inference", "user:profile"}, "tokenAccount": map[string]any{"uuid": account, "organizationUuid": Org, "emailAddress": nil, "organizationName": nil, "workspaceId": nil, "workspaceName": nil}}})
+		return document(swapCredential(name, account, Org, expiry))
 	}
 	expires := FreshAt()
 	if test.expired {
@@ -206,16 +215,12 @@ func swapFixture(ts *testscript.TestScript, neg bool, args []string) {
 		incomingExport = filepath.Join(root, "incoming-export")
 		ts.Check(os.Symlink(incomingDir, incomingExport))
 	}
-	owned := func(account, dir string) any {
-		spelling := ExportSpelling(dir)
-		return map[string]any{"account_uuid": account, "organization_uuid": Org, "kind": map[string]any{"kind": "owned", "export_spelling": spelling, "export_sha8": Sha8(spelling)}, "forgotten": false, "created_at": time.Now().UTC().Format(time.RFC3339)}
-	}
 	registryPath := filepath.Join(configDir, "config.json")
-	records := []any{owned(owner, ownerDir), owned(incoming, incomingExport)}
+	records := []any{swapOwnedRecord(owner, Org, ownerDir), swapOwnedRecord(incoming, Org, incomingExport)}
 	if test.third {
 		third := "55555555-5555-4555-8555-555555555555"
 		thirdDir := filepath.Join(configDir, "claude", third, Org)
-		records = append(records, owned(third, thirdDir))
+		records = append(records, swapOwnedRecord(third, Org, thirdDir))
 		outgoingBlob = blob("third", third, FreshAt())
 		ts.Setenv("SWAP_THIRD_STORE", filepath.Join(thirdDir, ".credentials.json"))
 	}

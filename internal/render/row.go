@@ -23,13 +23,13 @@ import (
 
 // What the watch display needs from a row, whoever produced it.
 //
-// TuiRow is the whole of it: the questions below and two display
-// strings. Everything the watch frame draws — the gauges, the line
+// TuiRow is the whole of it. Everything the watch frame draws — the gauges, the line
 // under them, the block's title and height, whether the row is shown at
 // all — is an answer to one of them, so the frame code can be written
 // once and handed any provider's row without knowing which it has. The
-// helper functions beside the interface carry the shared answer bodies,
-// so two providers cannot drift apart on the shapes they both use.
+// helper functions beside the interface are reused by the Claude and Codex
+// adapters for detail lines, titles and block heights; each adapter chooses
+// its own gauges.
 
 // SelectedMarker is the marker in front of the selected account.
 const SelectedMarker = "▸"
@@ -48,14 +48,6 @@ type Gauge struct {
 
 // TuiRow is one row of a watch display.
 type TuiRow interface {
-	// WatchTitle is what the header calls this display, before the
-	// account count. A command name, not decoration: a display that
-	// inherited another provider's title would tell the user they are
-	// watching the other provider's accounts.
-	WatchTitle() string
-	// HiddenHint is the command the footer names for the rows this
-	// display hides, a command name for the same reason.
-	HiddenHint() string
 	// Gauges returns the gauges this row earns, in display order. A
 	// window the response did not describe earns no gauge rather than
 	// one at zero: a bar at zero is a claim that nothing has been used,
@@ -72,12 +64,6 @@ type TuiRow interface {
 	// VisibleByDefault reports whether the row appears without the flag
 	// that shows every row.
 	VisibleByDefault() bool
-	// StateToken is the row's state as one stable, machine-readable
-	// token: the neutral half of what DetailLine renders in prose. A
-	// caller that wants to decide something about a row — a colour, a
-	// count, an exit status — reads this rather than parsing the
-	// sentence.
-	StateToken() string
 }
 
 // UsageGauges returns the gauges a snapshot earns, in display order:

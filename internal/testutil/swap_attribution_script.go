@@ -63,7 +63,7 @@ func init() {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			account := ""
+			var account string
 			switch r.Header.Get("Authorization") {
 			case "Bearer SENTINEL-access-outgoing-attribution":
 				outgoingGET.Add(1)

@@ -37,7 +37,7 @@ func TestUsageGauges(t *testing.T) {
 		"success: credits earn a gauge only when on with a utilisation figure": {
 			snapshot: &usage.UsageSnapshot{
 				Windows: healthyWindows(t),
-				Credits: creditsOn(money(1234, "USD", 2), money(5000, "USD", 2), 25),
+				Credits: creditsOn(money(1234), money(5000), 25),
 			},
 			want: []Gauge{{"5h", 21}, {"weekly", 35}, {"Fable", 56}, {"credits", 25}},
 		},
@@ -49,7 +49,7 @@ func TestUsageGauges(t *testing.T) {
 		"success: credits on without a figure earn no gauge": {
 			snapshot: &usage.UsageSnapshot{
 				Windows: healthyWindows(t),
-				Credits: creditsOn(money(1234, "USD", 2), nil, -1),
+				Credits: creditsOn(money(1234), nil, -1),
 			},
 			want: []Gauge{{"5h", 21}, {"weekly", 35}, {"Fable", 56}},
 		},
@@ -70,7 +70,7 @@ func TestUsageGauges(t *testing.T) {
 					usage.LimitWindow{Kind: unknownWindowKind("unmeasured")},
 					usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "iguana_necktie"}, PercentFloor: new(50)},
 				),
-				Credits: creditsOn(money(1234, "USD", 2), nil, 25),
+				Credits: creditsOn(money(1234), nil, 25),
 			},
 			want: []Gauge{{"5h", 21}, {"weekly", 35}, {"Fable", 56}, {"credits", 25}},
 		},

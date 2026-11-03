@@ -16,7 +16,6 @@ package testutil
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os/exec"
 	"testing"
@@ -24,23 +23,6 @@ import (
 
 	"golang.org/x/sys/unix"
 )
-
-// testContext returns the test's context, so every subprocess the harness
-// starts dies with the test that started it.
-func testContext(tb testing.TB) context.Context {
-	switch t := tb.(type) {
-	case *testing.T:
-		return t.Context()
-	case *testing.B:
-		return t.Context()
-	default:
-		// Only tests and benchmarks run subprocesses here; anything else
-		// is a harness bug to surface, not to paper over with a context
-		// that outlives the caller.
-		tb.Fatalf("no test context for %T", tb)
-		return nil
-	}
-}
 
 // WaitUntil polls ready every 20 ms until it returns true or budget
 // elapses. It reports whether the condition was ever observed, so the

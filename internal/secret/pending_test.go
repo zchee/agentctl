@@ -109,12 +109,9 @@ func resolveDoc(t *testing.T, store *secretFileStore, takenOver bool, cred Pendi
 	return decision, write
 }
 
-func readMaybe(store *secretFileStore, name string) (string, bool) {
-	b, err := os.ReadFile(filepath.Join(store.codexNS, name))
-	if err != nil {
-		return "", false
-	}
-	return string(b), true
+func readMaybe(store *secretFileStore, name string) bool {
+	_, err := os.ReadFile(filepath.Join(store.codexNS, name))
+	return err == nil
 }
 
 func TestPendingAnUnchangedFileReplaysAndTheRotatedRefreshTokenIsNeverLost(t *testing.T) {
@@ -154,7 +151,7 @@ func TestPendingAnUnchangedFileReplaysAndTheRotatedRefreshTokenIsNeverLost(t *te
 		t.Errorf("the resolution reports what it replaced (-want +got):\n%s", diff)
 	}
 	for _, name := range []string{testAuthPending, testAuthMeta} {
-		if _, present := readMaybe(store, name); present {
+		if present := readMaybe(store, name); present {
 			t.Errorf("`%s` must be cleared after the replay", name)
 		}
 	}
@@ -182,7 +179,7 @@ func TestPendingAFileReplacedByAnotherCredentialDiscardsBothPendingFiles(t *test
 		t.Errorf("the newer grant is kept, got %q", got)
 	}
 	for _, name := range []string{testAuthPending, testAuthMeta} {
-		if _, present := readMaybe(store, name); present {
+		if present := readMaybe(store, name); present {
 			t.Errorf("`%s` must be removed", name)
 		}
 	}
@@ -218,7 +215,7 @@ func TestPendingAMissingOrUnparseableMetaOrPendingIsInvalid(t *testing.T) {
 				t.Errorf("the file is untouched, got %q", got)
 			}
 			for _, leftover := range []string{testAuthPending, testAuthMeta} {
-				if _, present := readMaybe(store, leftover); present {
+				if present := readMaybe(store, leftover); present {
 					t.Errorf("`%s` must be removed", leftover)
 				}
 			}
@@ -286,7 +283,7 @@ func TestPendingAnAbsentFileReplaysAFirstWriteAndDiscardsADerivedOne(t *testing.
 	if diff := gocmp.Diff(PendingDecision{Kind: PendingDiscarded, Reason: PendingFileRemoved}, decision); diff != "" {
 		t.Errorf("a derived pending is discarded (-want +got):\n%s", diff)
 	}
-	if _, present := readMaybe(derived, testAuth); present {
+	if present := readMaybe(derived, testAuth); present {
 		t.Errorf("the discard leaves needs-login, not a guessed credential")
 	}
 }
@@ -303,7 +300,7 @@ func TestPendingNothingPendingClearsALoneMetaAndReportsNoWrite(t *testing.T) {
 	if decision.Kind != PendingNone || write != nil {
 		t.Fatalf("a lone meta is still nothing pending: %+v, %+v", decision, write)
 	}
-	if _, present := readMaybe(store, testAuthMeta); present {
+	if present := readMaybe(store, testAuthMeta); present {
 		t.Errorf("the crash-window meta is removed")
 	}
 }
@@ -403,7 +400,7 @@ func TestPendingAnUnreadableTargetIsAnErrorNotADecision(t *testing.T) {
 				t.Fatalf("the target is never overwritten by a replay, got %v", err)
 			}
 			for _, kept := range []string{testAuthPending, testAuthMeta} {
-				if _, present := readMaybe(store, kept); !present {
+				if present := readMaybe(store, kept); !present {
 					t.Errorf("`%s` is kept for a later run", kept)
 				}
 			}
@@ -441,7 +438,7 @@ func TestPendingAnUnopenableFileKeepsEverythingUnderTheStrictRuleOnly(t *testing
 			t.Fatalf("chmod back: %v", err)
 		}
 		for _, name := range []string{testAuth, testAuthPending, testAuthMeta} {
-			if _, present := readMaybe(store, name); !present {
+			if present := readMaybe(store, name); !present {
 				t.Errorf("strict, 0000 %s: `%s` is kept", unopenable, name)
 			}
 		}
@@ -501,7 +498,7 @@ func TestPendingASpecWithAnEscapingOrAliasedNameIsRefusedBeforeAnythingIsTouched
 				t.Errorf("target untouched, got %q", got)
 			}
 			for _, kept := range []string{testAuthPending, testAuthMeta} {
-				if _, present := readMaybe(store, kept); !present {
+				if present := readMaybe(store, kept); !present {
 					t.Errorf("`%s` untouched", kept)
 				}
 			}
@@ -584,7 +581,7 @@ func TestPendingAMetaWrittenWithTheFixedMemberOrderStillReplays(t *testing.T) {
 		t.Errorf("the replay landed, got %q", got)
 	}
 	for _, name := range []string{testAuthPending, testAuthMeta} {
-		if _, present := readMaybe(store, name); present {
+		if present := readMaybe(store, name); present {
 			t.Errorf("`%s` must be cleared", name)
 		}
 	}

@@ -111,5 +111,5 @@ func readMarkerView(read codexprovider.RefreshStateRead, grant string, hasGrant 
 	if !state.Resent {
 		resendAt = new(codexprovider.ResendEligibleAt(since, class, state.RetryAfter))
 	}
-	return markerView{kind: markerUnknown, since: since, class: class, resendAt: resendAt}, floor
+	return markerView{kind: markerUnknown, class: class, resendAt: resendAt}, floor
 }

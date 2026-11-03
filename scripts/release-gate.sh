@@ -69,13 +69,10 @@ fault_points=(
 	codex_abort_after_marker
 	codex_abort_after_pending
 	codex_after_post_snapshot
-	codex_before_post_snapshot
 	codex_before_rename
 	codex_error_after_rename
 	codex_install_rename_fail
-	codex_login_after_write
 	codex_login_before_install
-	codex_refresh_state_before_rename
 	codex_refresh_state_dir_sync
 	codex_refresh_state_file_sync
 	codex_refresh_state_rename

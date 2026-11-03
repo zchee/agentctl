@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zchee/agentctl/internal/provider"
 	"github.com/zchee/agentctl/internal/usage"
 )
 
@@ -94,7 +95,7 @@ func Normalize(body jsontext.Value, fetchedAt time.Time, keepRaw bool) (*Usage, 
 	if out.HasRateLimit {
 		for _, slot := range []string{"primary_window", "secondary_window"} {
 			if window, err := usageObject(limit.get(slot)); err == nil {
-				out.Windows = append(out.Windows, Window{Window: normalizeWindow(window, durationKind(window), "", fetchedAt)})
+				out.Windows = append(out.Windows, Window{Window: normalizeWindow(window, durationKind(window), fetchedAt)})
 			}
 		}
 	}
@@ -124,7 +125,7 @@ func Normalize(body jsontext.Value, fetchedAt time.Time, keepRaw bool) (*Usage, 
 				continue
 			}
 			kind := usage.WindowKind{Class: usage.WindowUnknown, Name: base + ":" + strings.TrimSuffix(slot, "_window")}
-			out.Windows = append(out.Windows, Window{Window: normalizeWindow(window, kind, base, fetchedAt), LimitName: name, MeteredFeature: feature, NormalModelSlug: model})
+			out.Windows = append(out.Windows, Window{Window: normalizeWindow(window, kind, fetchedAt), LimitName: name, MeteredFeature: feature, NormalModelSlug: model})
 		}
 	}
 	if credits, err := usageObject(object.get("credits")); err == nil {
@@ -182,8 +183,8 @@ func Normalize(body jsontext.Value, fetchedAt time.Time, keepRaw bool) (*Usage, 
 	return out, nil
 }
 
-func normalizeWindow(object usageMembers, kind usage.WindowKind, scope string, fetchedAt time.Time) usage.LimitWindow {
-	window := usage.LimitWindow{Kind: kind, ScopeLabel: scope}
+func normalizeWindow(object usageMembers, kind usage.WindowKind, fetchedAt time.Time) usage.LimitWindow {
+	window := usage.LimitWindow{Kind: kind}
 	if value := object.get("used_percent"); value.Kind() == '0' {
 		if percent, err := strconv.ParseFloat(string(value), 64); err == nil {
 			if clamped, ok := usage.ClampPercent(percent); ok {
@@ -194,11 +195,11 @@ func normalizeWindow(object usageMembers, kind usage.WindowKind, scope string, f
 			}
 		}
 	}
-	if second, ok := usageInteger(object.get("reset_at")); ok {
+	if second, ok := provider.JSONInt64(object.get("reset_at")); ok {
 		window.ResetsAt = usageTimestamp(second)
 	}
 	if window.ResetsAt.IsZero() {
-		if after, ok := usageInteger(object.get("reset_after_seconds")); ok {
+		if after, ok := provider.JSONInt64(object.get("reset_after_seconds")); ok {
 			second := fetchedAt.Unix()
 			if (after <= 0 || second <= math.MaxInt64-after) && (after >= 0 || second >= math.MinInt64-after) {
 				window.ResetsAt = usageTimestamp(second + after)
@@ -217,7 +218,7 @@ func usageTimestamp(second int64) time.Time {
 }
 
 func durationKind(window usageMembers) usage.WindowKind {
-	seconds, ok := usageInteger(window.get("limit_window_seconds"))
+	seconds, ok := provider.JSONInt64(window.get("limit_window_seconds"))
 	if !ok {
 		return usage.WindowKind{Class: usage.WindowUnknown, Name: "unknown duration"}
 	}
@@ -336,12 +337,4 @@ func usageBool(value jsontext.Value) (bool, bool) {
 	default:
 		return false, false
 	}
-}
-
-func usageInteger(value jsontext.Value) (int64, bool) {
-	if value.Kind() != '0' || bytes.ContainsAny(value, ".eE") {
-		return 0, false
-	}
-	number, err := strconv.ParseInt(string(value), 10, 64)
-	return number, err == nil
 }

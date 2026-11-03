@@ -79,29 +79,7 @@ func (p LoginTerminal) ReadLine(ctx context.Context, prompt string) (string, err
 			return "", errs.NewIO("could not write the login prompt", err)
 		}
 	}
-	var line strings.Builder
-	var readiness tty.Readiness
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		ready, err := readiness.WaitReadable(p.In, claude.LoopbackPollInterval)
-		if err != nil {
-			return "", errs.NewIO("could not read the pasted authorization code", err)
-		}
-		if !ready {
-			continue
-		}
-		var b [1]byte
-		n, err := p.In.Read(b[:])
-		if err != nil && !errors.Is(err, io.EOF) {
-			return "", errs.NewIO("could not read the pasted authorization code", err)
-		}
-		if n == 0 || b[0] == '\n' {
-			return line.String(), nil
-		}
-		line.WriteByte(b[0])
-	}
+	return readTerminalLine(ctx, p.In, "could not read the pasted authorization code")
 }
 
 // Login owns one authorization exchange and the store it may write afterwards.

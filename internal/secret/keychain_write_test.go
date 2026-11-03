@@ -362,8 +362,8 @@ func TestKeychainWriteClassifiesExitsAndPreservesOldGrant(t *testing.T) {
 
 			err := writer.Write(t.Context(), "target", newUpdate(t, "target", "new grant"))
 			ke, ok := errors.AsType[*KeychainError](err)
-			if !ok || ke.Class != tt.class || !ke.Transient {
-				t.Fatalf("error = %v, want transient %s", err, tt.class)
+			if !ok || ke.Class != tt.class {
+				t.Fatalf("error = %v, want class %s", err, tt.class)
 			}
 			assertKind(t, err, "failed")
 			assertNoStderrText(t, err)
@@ -412,8 +412,8 @@ func TestKeychainWriteExitZeroNeedsACleanWait(t *testing.T) {
 				return
 			}
 			ke, ok := errors.AsType[*KeychainError](err)
-			if !ok || ke.Class != errs.KeychainUnavailable || !ke.Transient {
-				t.Fatalf("error = %v, want transient unavailable", err)
+			if !ok || ke.Class != errs.KeychainUnavailable {
+				t.Fatalf("error = %v, want unavailable", err)
 			}
 			assertKind(t, err, "outcome unknown")
 			if errors.Is(err, ErrKeychainTimeout) {
@@ -548,8 +548,8 @@ func TestKeychainWriteSignalEndedLeaderIsAnUnknownOutcome(t *testing.T) {
 			}
 
 			ke, ok := errors.AsType[*KeychainError](err)
-			if !ok || ke.Class != tt.class || !ke.Transient {
-				t.Fatalf("error = %v, want transient %s", err, tt.class)
+			if !ok || ke.Class != tt.class {
+				t.Fatalf("error = %v, want class %s", err, tt.class)
 			}
 			assertKind(t, err, "outcome unknown")
 			if got := errors.Is(err, ErrKeychainTimeout); got != tt.cancelFirst {
@@ -793,7 +793,7 @@ func TestKeychainWriteNotStarted(t *testing.T) {
 		writer.bin = "/nonexistent/security"
 		err := writer.Write(t.Context(), "target", newUpdate(t, "target", "blob"))
 		ke, ok := errors.AsType[*KeychainError](err)
-		if !ok || ke.Class != errs.KeychainUnavailable || ke.Transient {
+		if !ok || ke.Class != errs.KeychainUnavailable {
 			t.Fatalf("write = %v, want permanent unavailable", err)
 		}
 		assertKind(t, err, "not started")
@@ -834,7 +834,7 @@ func TestKeychainWriteE2BIG(t *testing.T) {
 
 	err := writer.spawn(t.Context(), update, payload)
 	ke, ok := errors.AsType[*KeychainError](err)
-	if !ok || ke.Class != errs.KeychainCredentialTooLarge || ke.Transient {
+	if !ok || ke.Class != errs.KeychainCredentialTooLarge {
 		t.Fatalf("spawn = %v, want the permanent credential-too-large class", err)
 	}
 	assertKind(t, err, "not started")

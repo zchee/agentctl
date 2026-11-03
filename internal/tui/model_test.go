@@ -33,8 +33,6 @@ type fixtureRow struct {
 	hidden                bool
 }
 
-func (fixtureRow) WatchTitle() string            { return "agentctl claude watch" }
-func (fixtureRow) HiddenHint() string            { return "agentctl claude status --all" }
 func (r fixtureRow) Gauges() []render.Gauge      { return r.bars }
 func (r fixtureRow) DetailLine(time.Time) string { return r.detail }
 func (r fixtureRow) AccountTitle(selected bool) string {
@@ -42,11 +40,10 @@ func (r fixtureRow) AccountTitle(selected bool) string {
 }
 func (r fixtureRow) BlockHeight() int       { return render.BlockHeight(len(r.bars)) }
 func (r fixtureRow) VisibleByDefault() bool { return !r.hidden }
-func (fixtureRow) StateToken() string       { return "ok" }
 
 func fixtureModel() *Model[fixtureRow] {
 	now := time.Date(2026, time.September, 8, 12, 0, 30, 0, time.UTC)
-	return New[fixtureRow](now, fixtureRow{}.WatchTitle(), fixtureRow{}.HiddenHint())
+	return New[fixtureRow](now, "agentctl claude watch", "agentctl claude status --all")
 }
 
 func fixtureRows() Rows[fixtureRow] {

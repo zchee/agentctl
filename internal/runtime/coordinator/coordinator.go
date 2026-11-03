@@ -149,18 +149,6 @@ func (p *PassCtx) Context() context.Context {
 	return p.ctx
 }
 
-// Deadline returns the instant after which the pass must stop doing new
-// work.
-func (p *PassCtx) Deadline() time.Time {
-	return p.deadline
-}
-
-// Remaining returns how long is left before the deadline, saturating at
-// zero.
-func (p *PassCtx) Remaining() time.Duration {
-	return max(time.Until(p.deadline), 0)
-}
-
 // ShouldStop reports whether the job should stop, because the pass was
 // cancelled or the deadline has passed.
 func (p *PassCtx) ShouldStop() bool {
@@ -243,9 +231,8 @@ func (e *registered) reaped() bool {
 
 // settle blocks until the entry's reaper has finished, so a caller that
 // killed the child hands back a reaped process, never a zombie.
-func (e *registered) settle() (*os.ProcessState, error) {
+func (e *registered) settle() {
 	<-e.done
-	return e.cmd.ProcessState, e.waitErr
 }
 
 // finish translates a reaped child's wait result for the caller: an exit
@@ -289,7 +276,7 @@ func (p *PassCtx) WaitChild(token ChildToken) (*os.ProcessState, error) {
 			delete(p.children.live, token)
 			p.children.mu.Unlock()
 			_ = entry.cmd.Process.Kill()
-			_, _ = entry.settle()
+			entry.settle()
 			return nil, ErrPassCancelled
 		}
 		p.children.mu.Unlock()
@@ -324,7 +311,7 @@ func (p *PassCtx) WaitChildTimeout(token ChildToken, timeout time.Duration) (*os
 			delete(p.children.live, token)
 			p.children.mu.Unlock()
 			_ = entry.cmd.Process.Kill()
-			_, _ = entry.settle()
+			entry.settle()
 			return nil, nil
 		}
 		p.children.mu.Unlock()
@@ -345,7 +332,7 @@ func (t *childTable) killAll() {
 		_ = entry.cmd.Process.Kill()
 	}
 	for _, entry := range taken {
-		_, _ = entry.settle()
+		entry.settle()
 	}
 }
 

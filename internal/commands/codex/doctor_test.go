@@ -132,7 +132,7 @@ func TestDoctorForeignAttribution(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			found := doctorForeignSection(nil, doctorListings{codexAuth: []secret.ServiceEntry{{Service: provider.KeyringService, Account: tt.account}}}, tt.caused)
+			found := doctorForeignSection(nil, doctorListings{entries: []secret.ServiceEntry{{Service: provider.KeyringService, Account: tt.account}}}, tt.caused)
 			if diff := gocmp.Diff([]int{tt.unexplained, tt.unnameable, tt.commands}, []int{found.UnexplainedItems, found.UnnameableItems, len(found.UnexplainedRemovals)}); diff != "" {
 				t.Fatalf("foreign attribution:\n%s", diff)
 			}

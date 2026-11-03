@@ -166,8 +166,7 @@ type ForeignKind struct {
 }
 
 // AccountKind says where an account's credentials live and whether
-// agentctl may write them. Exactly one variant is set; [NewAccountKind]
-// constructors keep that true.
+// agentctl may write them. Exactly one variant is set by the kind constructors.
 type AccountKind struct {
 	// Owned is set for an account created by `agentctl claude login`.
 	Owned *OwnedKind

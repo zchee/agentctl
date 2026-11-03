@@ -130,9 +130,6 @@ type Seams struct {
 	Cleanup CleanupRegistry
 	// Fault is the injected fault hook, or nil for none.
 	Fault func(name string) bool
-	// Pause is an optional named pause hook for the caller. Acquisition
-	// itself has no pause points.
-	Pause func(name string)
 }
 
 // RealSeams returns the production seams over the given clock, including
@@ -319,28 +316,6 @@ func ResolveStale(ctx context.Context, subject LockSubject, at LockSlot, profile
 	default:
 		return BreakAttempt{Decision: DecisionFailed, FailureMessage: removal.Error()}
 	}
-}
-
-// SampleHolderAcrossInterval is the two-sample variant of the stale
-// proof, for a consumer that reports and removes through its own
-// permit: two stats one interval apart, and only an unchanged
-// modification time across the whole interval reads as "nothing is
-// holding this". A changed time, a vanished artefact, an unreadable
-// stat and a cancelled wait all read as held, because none of them
-// proves absence.
-func SampleHolderAcrossInterval(ctx context.Context, at LockSlot, interval time.Duration, clock Clock, fs LockFS) bool {
-	first, present := fs.Mtime(at)
-	if !present {
-		return true
-	}
-	if err := clock.Sleep(ctx, interval); err != nil {
-		return true
-	}
-	second, present := fs.Mtime(at)
-	if !present {
-		return true
-	}
-	return !second.Equal(first)
 }
 
 // vanishedBreak is a lock that disappeared: nothing was there and

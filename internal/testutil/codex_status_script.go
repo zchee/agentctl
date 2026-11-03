@@ -15,12 +15,9 @@
 package testutil
 
 import (
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	json "encoding/json/v2"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,17 +109,15 @@ func codexStatusFixture(ts *testscript.TestScript, neg bool, args []string) {
 		write(filepath.Join(ns, "auth.json"), doc)
 	}
 	switch kind {
-	case "owned", "owned-expired", "never", "accounts":
+	case "owned", "owned-expired", "accounts":
 	case "empty":
-	case "empty-home":
-		ts.Check(os.MkdirAll(live, 0o700))
 	case "torn":
 		ts.Check(os.WriteFile(filepath.Join(ns, "auth.json"), []byte(`{"tokens":{"access_to`), 0o600))
 		ts.Check(os.MkdirAll(live, 0o700))
 		ts.Check(os.WriteFile(filepath.Join(live, "auth.json"), []byte(`{"tokens":{"access_to`), 0o600))
 	case "twins":
 		write(filepath.Join(live, "auth.json"), codexStatusAuth(ts, codexStatusLiveAccount, false, false))
-	case "live", "live-expired", "fedramp":
+	case "live", "fedramp":
 		write(filepath.Join(live, "auth.json"), doc)
 	case "apikey", "apikey-never":
 		write(filepath.Join(live, "auth.json"), map[string]any{"OPENAI_API_KEY": "agentctl-test-codex-ak-0001"})
@@ -275,13 +270,13 @@ func codexStatusFixture(ts *testscript.TestScript, neg bool, args []string) {
 			ts.Fatalf("unknown account setup %q", args[0])
 		}
 	})
-	manifests := map[string][]codexStatusEntry{}
+	manifests := map[string][]codexImportEntry{}
 	ts.SetCmd("codex-manifest", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 2 {
 			ts.Fatalf("usage: codex-manifest <save|check> <directory>")
 		}
 		dir := ts.MkAbs(args[1])
-		entries, err := codexStatusManifest(dir)
+		entries, err := codexImportManifest(dir)
 		ts.Check(err)
 		switch args[0] {
 		case "save":
@@ -334,45 +329,6 @@ func codexStatusFixture(ts *testscript.TestScript, neg bool, args []string) {
 		}
 	})
 	ts.SetCmd("codex-status-check", codexStatusCheck)
-}
-
-type codexStatusEntry struct {
-	Name           string
-	Mode           fs.FileMode
-	Size, Modified int64
-	Digest         string
-}
-
-func codexStatusManifest(dir string) ([]codexStatusEntry, error) {
-	var entries []codexStatusEntry
-	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path == dir {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		value := codexStatusEntry{Name: relative, Mode: info.Mode(), Size: info.Size(), Modified: info.ModTime().UnixNano()}
-		if info.Mode().IsRegular() {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			digest := sha256.Sum256(data)
-			value.Digest = hex.EncodeToString(digest[:])
-		}
-		entries = append(entries, value)
-		return nil
-	})
-	return entries, err
 }
 
 func waitCodexMarker(path string, budget time.Duration) error {

@@ -780,7 +780,7 @@ func useDesktopTreeSig(t *testing.T, dir string) string {
 func TestFollowUpDesktopRefusesAStaleConsent(t *testing.T) {
 	start := time.Date(2026, 10, 13, 7, 0, 0, 0, time.UTC)
 	uid := uint32(os.Getuid())
-	running := func(context.Context, uint32) ([]rdesktop.Record, error) {
+	var running rdesktop.Lister = func(context.Context, uint32) ([]rdesktop.Record, error) {
 		return []rdesktop.Record{{PID: 500, PPID: 1, UID: uid, Start: start, Path: rdesktop.MainPath}}, nil
 	}
 	tests := map[string]struct {

@@ -117,23 +117,23 @@ func (n *namespaceDir) file(name string) *secret.SecretFile {
 	return secret.NewSecretFile(n.root, n.fd, name, filepath.Join(n.shown, name))
 }
 
-func (n *namespaceDir) current() (ResolvedKind, *Credentials, *secret.FileSnapshot, error) {
+func (n *namespaceDir) current() (ResolvedKind, *Credentials, error) {
 	read, err := n.file(authFile).ReadStrict(secret.MaxCredentialsBytes)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
 	if !read.Present {
-		return ResolvedAbsent, nil, nil, nil
+		return ResolvedAbsent, nil, nil
 	}
 	defer memguard.WipeBytes(read.Bytes)
 	credentials, err := ParseCredentials(read.Bytes)
 	if err != nil {
 		if e, ok := errors.AsType[*CredentialsError](err); ok && e.Kind == "truncated" {
-			return ResolvedTorn, nil, nil, nil
+			return ResolvedTorn, nil, nil
 		}
-		return "", nil, nil, fmt.Errorf("`%s`: %w", filepath.Join(n.shown, authFile), err)
+		return "", nil, fmt.Errorf("`%s`: %w", filepath.Join(n.shown, authFile), err)
 	}
-	return ResolvedCredentials, credentials, &read.Snap, nil
+	return ResolvedCredentials, credentials, nil
 }
 
 // NamespaceRead contains a document bound to the original lock or an absent/torn result.
@@ -227,7 +227,7 @@ func (n *OwnedNamespace) Read() (NamespaceRead, error) {
 		return NamespaceRead{}, err
 	}
 	defer done()
-	kind, credentials, _, err := n.ns.current()
+	kind, credentials, err := n.ns.current()
 	if err != nil {
 		return NamespaceRead{}, err
 	}
@@ -238,9 +238,8 @@ func (n *OwnedNamespace) Read() (NamespaceRead, error) {
 	return read, nil
 }
 
-// PostSnapshot records file identity and grant prefixes without retaining token bytes.
+// PostSnapshot records grant prefixes without retaining token bytes.
 type PostSnapshot struct {
-	snap    secret.FileSnapshot
 	digests *secret.Digests
 }
 
@@ -256,14 +255,6 @@ func (s *PostSnapshot) RefreshDigest8() (string, bool) {
 	return *value, true
 }
 
-// SizeAndMtimeNS returns the snapshot's file size and modification timestamp.
-func (s *PostSnapshot) SizeAndMtimeNS() (int64, int64) {
-	if s == nil {
-		return 0, 0
-	}
-	return s.snap.Size, s.snap.MtimeNS
-}
-
 // SnapshotForPost reads the current file identity; absent and torn files return nil.
 func (n *OwnedNamespace) SnapshotForPost() (*PostSnapshot, error) {
 	done, err := n.begin()
@@ -271,11 +262,11 @@ func (n *OwnedNamespace) SnapshotForPost() (*PostSnapshot, error) {
 		return nil, err
 	}
 	defer done()
-	_, credentials, snap, err := n.ns.current()
+	_, credentials, err := n.ns.current()
 	if err != nil || credentials == nil {
 		return nil, err
 	}
-	return &PostSnapshot{snap: *snap, digests: credentials.Digests()}, nil
+	return &PostSnapshot{digests: credentials.Digests()}, nil
 }
 
 type codexPendingCredential struct{}
@@ -350,7 +341,7 @@ func WriteAuth(ctx context.Context, paths *config.Paths, login *VerifiedLogin, g
 	if login.state.consumed.Swap(true) {
 		return nil, Identity{}, errInvalidProof
 	}
-	kind, before, _, currentErr := ns.current()
+	kind, before, currentErr := ns.current()
 	overwrote := currentErr != nil || kind != ResolvedAbsent
 	var beforeDigests *secret.Digests
 	if before != nil {
@@ -383,7 +374,7 @@ func (n *OwnedNamespace) Write(ctx context.Context, credentials *LockedCredentia
 	if err := n.checkCredentials(credentials); err != nil {
 		return CodexWrite{}, err
 	}
-	kind, before, _, err := n.ns.current()
+	kind, before, err := n.ns.current()
 	if err != nil {
 		return CodexWrite{}, err
 	}
@@ -432,7 +423,7 @@ func (n *OwnedNamespace) Park(ctx context.Context, credentials *LockedCredential
 	if err := n.checkCredentials(credentials); err != nil {
 		return CodexWrite{}, err
 	}
-	_, before, _, _ := n.ns.current()
+	_, before, _ := n.ns.current()
 	var beforeDigests *secret.Digests
 	if before != nil {
 		beforeDigests = before.Digests()
@@ -525,7 +516,7 @@ func (n *OwnedNamespace) RemoveNamedFiles() (*WriteReceipt, error) {
 	if len(foreign) > 0 {
 		return nil, fmt.Errorf("`%s` holds entries agentctl did not create (%q); nothing was removed", n.ns.shown, foreign)
 	}
-	_, before, _, _ := n.ns.current()
+	_, before, _ := n.ns.current()
 	var beforeDigests *secret.Digests
 	if before != nil {
 		beforeDigests = before.Digests()

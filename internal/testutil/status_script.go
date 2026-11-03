@@ -136,13 +136,7 @@ func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) != 3 {
 			ts.Fatalf("usage: usage-calls <usage-count> <token-count> <profile-count>")
 		}
-		for i, got := range []int64{usageCalls.Load(), tokenCalls.Load(), profileCalls.Load()} {
-			want, err := strconv.ParseInt(args[i], 10, 64)
-			ts.Check(err)
-			if got != want {
-				ts.Fatalf("request count %d = %d, want %d", i, got, want)
-			}
-		}
+		checkRequestCounts(ts, args, []int64{usageCalls.Load(), tokenCalls.Load(), profileCalls.Load()}, "request count")
 	})
 	ts.SetCmd("status-check", func(ts *testscript.TestScript, neg bool, args []string) {
 		if neg || len(args) == 0 {
@@ -240,6 +234,16 @@ func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	write(filepath.Join(root, "config", "config.json"), map[string]any{"version": 1, "accounts": records, "forgotten_services": []string{}})
 	ts.Check(os.WriteFile(filepath.Join(root, "dump"), []byte(dumpListing(services...)), 0o600))
+}
+
+func checkRequestCounts(ts *testscript.TestScript, args []string, counts []int64, label string) {
+	for i, got := range counts {
+		want, err := strconv.ParseInt(args[i], 10, 64)
+		ts.Check(err)
+		if got != want {
+			ts.Fatalf("%s %d = %d, want %d", label, i, got, want)
+		}
+	}
 }
 
 func checkStatusScript(ts *testscript.TestScript, args []string, resets [3]time.Time) {

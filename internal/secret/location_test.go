@@ -64,17 +64,17 @@ func TestLocationClassify(t *testing.T) {
 		},
 		"success: a locked keychain asks for an unlock, not a retry": {
 			loc:  keychain,
-			err:  &KeychainError{Class: errs.KeychainLocked, Transient: true},
+			err:  &KeychainError{Class: errs.KeychainLocked},
 			want: Outcome{Kind: OutcomeLocked},
 		},
 		"success: a keychain timeout is transient and says how long it waited": {
 			loc:  keychain,
-			err:  &KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms", Transient: true},
+			err:  &KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms"},
 			want: Outcome{Kind: OutcomeTransient, Reason: "keychain read failed: timeout: security timed out after 2000 ms"},
 		},
 		"success: an unreachable keychain is transient": {
 			loc:  keychain,
-			err:  &KeychainError{Class: errs.KeychainUnavailable, Detail: "unable to open the keychain", Transient: true},
+			err:  &KeychainError{Class: errs.KeychainUnavailable, Detail: "unable to open the keychain"},
 			want: Outcome{Kind: OutcomeTransient, Reason: "keychain read failed: unavailable: unable to open the keychain"},
 		},
 		"success: a spawn failure is transient for the row, never the file": {
@@ -89,12 +89,12 @@ func TestLocationClassify(t *testing.T) {
 		},
 		"success: a verbatim class is transient": {
 			loc:  keychain,
-			err:  &KeychainError{Class: errs.KeychainClass("UserCanceled"), Detail: "the user pressed Cancel", Transient: true},
+			err:  &KeychainError{Class: errs.KeychainClass("UserCanceled"), Detail: "the user pressed Cancel"},
 			want: Outcome{Kind: OutcomeTransient, Reason: "keychain read failed: UserCanceled: the user pressed Cancel"},
 		},
 		"success: a wrapped keychain failure still classifies": {
 			loc:  keychain,
-			err:  fmt.Errorf("resolve the live row: %w", &KeychainError{Class: errs.KeychainLocked, Transient: true}),
+			err:  fmt.Errorf("resolve the live row: %w", &KeychainError{Class: errs.KeychainLocked}),
 			want: Outcome{Kind: OutcomeLocked},
 		},
 		"success: a corrupt blob is transient rather than absent": {
@@ -147,11 +147,11 @@ func TestKeychainFailuresNeverFallThroughToTheFile(t *testing.T) {
 	keychain := KeychainItem("Claude Code-credentials")
 	failures := []error{
 		&KeychainError{Class: errs.KeychainNotFound},
-		&KeychainError{Class: errs.KeychainLocked, Transient: true},
-		&KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms", Transient: true},
-		&KeychainError{Class: errs.KeychainUnavailable, Transient: true},
+		&KeychainError{Class: errs.KeychainLocked},
+		&KeychainError{Class: errs.KeychainTimeout, Detail: "security timed out after 2000 ms"},
+		&KeychainError{Class: errs.KeychainUnavailable},
 		&KeychainError{Class: KeychainClassUnsupported},
-		&KeychainError{Class: errs.KeychainClass("AuthFailed"), Transient: true},
+		&KeychainError{Class: errs.KeychainClass("AuthFailed")},
 		fmt.Errorf("something unclassified"),
 	}
 	for _, err := range failures {

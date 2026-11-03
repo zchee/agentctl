@@ -149,10 +149,10 @@ func waitInBackground(cmd *exec.Cmd) <-chan error {
 	return done
 }
 
-// itemHolds reports whether the fixture's own item for service holds want.
-func itemHolds(f *Fixture, service, want string) bool {
-	data, err := os.ReadFile(f.KeychainItemPath(service))
-	return err == nil && string(data) == want
+// itemHolds reports whether the fixture's own svc-1 item holds "hello".
+func itemHolds(f *Fixture) bool {
+	data, err := os.ReadFile(f.KeychainItemPath("svc-1"))
+	return err == nil && string(data) == "hello"
 }
 
 func TestSecurityWriteArgvStoresAnAllowedItem(t *testing.T) {
@@ -163,7 +163,7 @@ func TestSecurityWriteArgvStoresAnAllowedItem(t *testing.T) {
 	if code := out.ExitCode(t); code != 0 {
 		t.Fatalf("the write exited %d; stderr:\n%s", code, out.Stderr)
 	}
-	if !itemHolds(f, "svc-1", "hello") {
+	if !itemHolds(f) {
 		t.Fatalf("the stored item does not hold the decoded payload")
 	}
 
@@ -333,7 +333,7 @@ func TestSecurityWriteArgvDelaysBeforeStoring(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < delay {
 		t.Fatalf("the delayed write returned after %v, want at least %v", elapsed, delay)
 	}
-	if !itemHolds(f, "svc-1", "hello") {
+	if !itemHolds(f) {
 		t.Fatalf("the delayed write did not store the decoded payload")
 	}
 }
@@ -379,7 +379,7 @@ func TestSecurityWriteArgvDelaysAfterStoring(t *testing.T) {
 
 	// The item is committed while the stand-in is still running, which is
 	// what lets a timeout land after the write.
-	if !WaitUntil(5*time.Second, func() bool { return itemHolds(f, "svc-1", "hello") }) {
+	if !WaitUntil(5*time.Second, func() bool { return itemHolds(f) }) {
 		t.Fatalf("the item was never stored")
 	}
 	select {
@@ -392,7 +392,7 @@ func TestSecurityWriteArgvDelaysAfterStoring(t *testing.T) {
 		t.Fatalf("kill the stand-in's group: %v", err)
 	}
 	<-done
-	if !itemHolds(f, "svc-1", "hello") {
+	if !itemHolds(f) {
 		t.Fatalf("the stored item changed after the kill")
 	}
 }
@@ -417,7 +417,7 @@ func TestSecurityWriteArgvHoldPipesOutlivesTheLeader(t *testing.T) {
 	if !cmd.ProcessState.Exited() || cmd.ProcessState.ExitCode() != 0 {
 		t.Fatalf("the leader ended with %v, want exit 0", cmd.ProcessState)
 	}
-	if !itemHolds(f, "svc-1", "hello") {
+	if !itemHolds(f) {
 		t.Fatalf("the item was not stored before the leader exited")
 	}
 
@@ -454,7 +454,7 @@ func TestSecurityWriteArgvPidfileHeartbeat(t *testing.T) {
 	if beats, ok := readCount(pidfile + ".heartbeat"); !ok || beats != 15 {
 		t.Fatalf("heartbeat holds %d (readable %t), want 15", beats, ok)
 	}
-	if !itemHolds(f, "svc-1", "hello") {
+	if !itemHolds(f) {
 		t.Fatalf("the write did not store the decoded payload")
 	}
 }
@@ -677,7 +677,7 @@ func TestFakeSecurityReadsDelayCountsAsDecimal(t *testing.T) {
 				if tt.wantBeats != 0 && (!ok || beats != tt.wantBeats) {
 					t.Fatalf("the heartbeat holds %d (readable %t), want %d", beats, ok, tt.wantBeats)
 				}
-				if !itemHolds(f, "svc-1", "hello") {
+				if !itemHolds(f) {
 					t.Fatalf("the write did not store the decoded payload")
 				}
 			})
@@ -846,7 +846,7 @@ func TestFakeSecurityConfinesEveryPathKnobToTheFixtureRoot(t *testing.T) {
 					t.Fatalf("the fake created the root's prefix sibling: %v", err)
 				}
 				if tt.wantExit == 0 {
-					if !itemHolds(f, "svc-1", "hello") {
+					if !itemHolds(f) {
 						t.Fatalf("a confined write did not store its item")
 					}
 					logPath := f.SecurityLogPath()
