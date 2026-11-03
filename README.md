@@ -74,6 +74,10 @@ All entries below follow `agentctl claude`.
 `status` also accepts repeatable `--account ID`, `--refresh`, `--no-cache`, and `--timeout DUR`
 (default `10s`). `import` accepts repeatable `--claude-config-dir DIR` to select vendor stores.
 
+The label given at `login --label` appears beside the email in the Account cell of `status` and
+`accounts list`, as `owner@example.com (work)`; `--json` carries it as `label`, null when none was
+given. `accounts show` prints it on its own line and accepts it as the id.
+
 The Plan column is a display label derived from the stored plan and rate-limit tier:
 `max` + `default_claude_max_20x` reads `ultra`, `max` + `default_claude_max_5x` reads `max`,
 and other plans appear verbatim. The stored words are unchanged; `--json` carries `plan` and
