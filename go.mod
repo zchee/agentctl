@@ -3,12 +3,12 @@ module github.com/zchee/agentctl
 go 1.27
 
 require (
-	charm.land/bubbletea/v2 v2.1.0
+	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/awnumar/memguard v0.23.0
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/exp/golden v0.1.0
-	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20261012121918-43427fdbad12
+	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20261101151554-27ecf3e4d454
 	github.com/creack/pty v1.1.24
 	github.com/google/go-cmp v0.7.0
 	github.com/rogpeppe/go-internal v1.16.0
