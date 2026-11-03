@@ -77,7 +77,12 @@ All entries below follow `agentctl claude`.
 The Plan column is a display label derived from the stored plan and rate-limit tier:
 `max` + `default_claude_max_20x` reads `ultra`, `max` + `default_claude_max_5x` reads `max`,
 and other plans appear verbatim. The stored words are unchanged; `--json` carries `plan` and
-`rate_limit_tier`.
+`rate_limit_tier`. Top-level usage-response objects with `utilization` and `resets_at`, except
+known legacy windows, `extra_usage`, and `spend`, are parsed and visible only in `--json` as windows
+of kind `dollar_credit`, labelled by their keys verbatim, carrying `used_dollars`, `limit_dollars`,
+`remaining_dollars`, and `locked_reason`. They are not shown in the table or `watch` because Claude
+Code itself does not surface them yet. Unknown kinds inside `limits[]` still appear as continuation
+rows named verbatim.
 
 Isolated `use`, `exec`, and `env` accept `--claude-config-dir DIR`, `--fresh-context`, and `--no-mcp`.
 Isolated `use` also accepts `--no-mcp-seed`; `use --live` and `use --undo` ignore both MCP flags.

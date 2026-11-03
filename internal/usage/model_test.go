@@ -290,6 +290,7 @@ func TestUsageSnapshotSelectsWindowsByKindAndScope(t *testing.T) {
 			window(t, WindowKind{Class: WindowWeeklyScoped, Name: "Fable"}, 56.0, "2026-09-10T20:00:00Z"),
 			window(t, WindowKind{Class: WindowWeeklyScoped, Name: "opus"}, 12.0, ""),
 			window(t, WindowKind{Class: WindowUnknown, Name: "monthly_foo"}, 7.0, ""),
+			window(t, WindowKind{Class: WindowDollarCredit, Name: "iguana_necktie"}, 0.434444, ""),
 		},
 		Credits: CreditsState{Class: CreditsUnavailable},
 	}
@@ -324,16 +325,42 @@ func TestUsageSnapshotSelectsWindowsByKindAndScope(t *testing.T) {
 	}
 }
 
-func TestNextResetAbsentWhenNoWindowResets(t *testing.T) {
+func TestNextReset(t *testing.T) {
 	t.Parallel()
 
-	snapshot := UsageSnapshot{
-		FetchedAt: ts(t, "2026-09-08T00:00:00Z"),
-		Windows:   []LimitWindow{window(t, WindowKind{Class: WindowSession}, 0.0, "")},
-		Credits:   CreditsState{Class: CreditsUnavailable},
+	tests := map[string]struct {
+		windows []LimitWindow
+		want    time.Time
+		wantOK  bool
+	}{
+		"success: no window resets": {
+			windows: []LimitWindow{window(t, WindowKind{Class: WindowSession}, 0.0, "")},
+		},
+		"success: earlier dollar credit reset is ignored": {
+			windows: []LimitWindow{
+				window(t, WindowKind{Class: WindowDollarCredit, Name: "iguana_necktie"}, 0.434444, "2026-09-08T01:00:00Z"),
+				window(t, WindowKind{Class: WindowSession}, 21.0, "2026-09-08T03:30:00Z"),
+				window(t, WindowKind{Class: WindowWeeklyAll}, 35.0, "2026-09-10T20:00:00Z"),
+			},
+			want:   ts(t, "2026-09-08T03:30:00Z"),
+			wantOK: true,
+		},
+		"success: a dollar credit window alone reports no reset": {
+			windows: []LimitWindow{
+				window(t, WindowKind{Class: WindowDollarCredit, Name: "iguana_necktie"}, 0.434444, "2026-09-08T01:00:00Z"),
+			},
+		},
 	}
-	if next, ok := snapshot.NextReset(); ok {
-		t.Errorf("NextReset() = %v, true; want absent", next)
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			snapshot := UsageSnapshot{Windows: tt.windows}
+			next, ok := snapshot.NextReset()
+			if ok != tt.wantOK || !next.Equal(tt.want) {
+				t.Errorf("NextReset() = %v, %v; want %v, %v", next, ok, tt.want, tt.wantOK)
+			}
+		})
 	}
 }
 
@@ -344,10 +371,11 @@ func TestWindowLabels(t *testing.T) {
 		kind WindowKind
 		want string
 	}{
-		"success: session window":                {kind: WindowKind{Class: WindowSession}, want: "session"},
-		"success: all-model weekly window":       {kind: WindowKind{Class: WindowWeeklyAll}, want: "weekly"},
-		"success: scoped weekly names its scope": {kind: WindowKind{Class: WindowWeeklyScoped, Name: "opus"}, want: "opus (weekly)"},
-		"success: unknown kind is kept verbatim": {kind: WindowKind{Class: WindowUnknown, Name: "monthly_foo"}, want: "monthly_foo (unknown kind)"},
+		"success: session window":                       {kind: WindowKind{Class: WindowSession}, want: "session"},
+		"success: all-model weekly window":              {kind: WindowKind{Class: WindowWeeklyAll}, want: "weekly"},
+		"success: scoped weekly names its scope":        {kind: WindowKind{Class: WindowWeeklyScoped, Name: "opus"}, want: "opus (weekly)"},
+		"success: dollar credit keeps the key verbatim": {kind: WindowKind{Class: WindowDollarCredit, Name: "iguana_necktie"}, want: "iguana_necktie (dollar credit)"},
+		"success: unknown kind is kept verbatim":        {kind: WindowKind{Class: WindowUnknown, Name: "monthly_foo"}, want: "monthly_foo (unknown kind)"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

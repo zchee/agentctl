@@ -524,7 +524,13 @@ func spendReportsCredits(spend []jsonMember) bool {
 // The limits[] array wins whenever it is present and non-empty. The flat
 // legacy keys are consulted only as a fallback, so an account served both
 // shapes is read through the newer one — which is the one that carries
-// is_active and the scope display names.
+// is_active and the scope display names. Other top-level objects carrying
+// both utilization and resets_at are appended as dollar-credit windows,
+// except extra_usage and spend. They are retained for JSON only because
+// Claude Code does not surface them in its usage UI. If a future response
+// also lists the same cap in limits[] under a real kind, both records are
+// retained: only known legacy keys are excluded, and no fuzzy
+// deduplication is attempted.
 func Normalize(body jsontext.Value) []usage.LimitWindow {
 	members, ok := objectMembers(body)
 	if !ok {
@@ -535,20 +541,40 @@ func Normalize(body jsontext.Value) []usage.LimitWindow {
 
 // normalizeMembers is [Normalize] past the object check.
 func normalizeMembers(members []jsonMember) []usage.LimitWindow {
+	var windows []usage.LimitWindow
 	if limits, ok := field(members, "limits"); ok {
-		if entries, ok := asArray(limits); ok && len(entries) > 0 {
-			var windows []usage.LimitWindow
+		if entries, ok := asArray(limits); ok {
 			for _, entry := range entries {
 				if window, ok := windowFromLimit(entry); ok {
 					windows = append(windows, window)
 				}
 			}
-			if len(windows) > 0 {
-				return windows
-			}
 		}
 	}
-	return legacyWindows(members)
+	if len(windows) == 0 {
+		windows = legacyWindows(members)
+	}
+	for _, member := range members {
+		if member.name == "five_hour" || member.name == "seven_day" ||
+			strings.HasPrefix(member.name, "seven_day_") || member.name == "extra_usage" || member.name == "spend" {
+			continue
+		}
+		object, ok := objectMembers(member.value)
+		if !ok {
+			continue
+		}
+		if _, ok := field(object, "utilization"); !ok {
+			continue
+		}
+		if _, ok := field(object, "resets_at"); !ok {
+			continue
+		}
+		kind := usage.WindowKind{Class: usage.WindowDollarCredit, Name: member.name}
+		if window, ok := legacyWindow(member.value, kind, ""); ok {
+			windows = append(windows, window)
+		}
+	}
+	return windows
 }
 
 // windowFromLimit maps one limits[] entry.
@@ -655,6 +681,16 @@ func legacyWindow(value jsontext.Value, kind usage.WindowKind, scopeLabel string
 	if text, ok := stringField(members, "resets_at"); ok {
 		window.ResetsAt = parseTimestamp(text)
 	}
+	if dollars, ok := float64Field(members, "used_dollars"); ok {
+		window.UsedDollars = &dollars
+	}
+	if dollars, ok := float64Field(members, "limit_dollars"); ok {
+		window.LimitDollars = &dollars
+	}
+	if dollars, ok := float64Field(members, "remaining_dollars"); ok {
+		window.RemainingDollars = &dollars
+	}
+	window.LockedReason, _ = stringField(members, "locked_reason")
 	return window, true
 }
 

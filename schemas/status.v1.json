@@ -136,7 +136,7 @@
         },
         "credits": { "$ref": "#/$defs/credits" },
         "next_reset": {
-          "description": "The soonest window reset across this row, RFC 3339.",
+          "description": "The soonest reset across every window shown in the table for this row, RFC 3339.",
           "type": ["string", "null"],
           "format": "date-time"
         },
@@ -173,8 +173,8 @@
       "required": ["kind", "label", "percent", "percent_floor", "resets_at", "is_active"],
       "properties": {
         "kind": {
-          "description": "`unknown` is a window this build does not recognise; its `label` carries the server's own kind string verbatim.",
-          "enum": ["session", "weekly_all", "weekly_scoped", "unknown"]
+          "description": "`unknown` is a limits[] kind this build does not recognise; its label carries the server's kind string verbatim. `dollar_credit` is a top-level usage-window object retained in JSON only, with its key in the label; it is not shown in the table or watch.",
+          "enum": ["session", "weekly_all", "weekly_scoped", "unknown", "dollar_credit"]
         },
         "label": {
           "description": "The window's display label, which is where a scoped window's scope appears.",
@@ -199,6 +199,22 @@
         "is_active": {
           "description": "Whether this is the window currently constraining the account.",
           "type": "boolean"
+        },
+        "used_dollars": {
+          "description": "The consumed dollar amount, null when absent. Additive and optional for earlier version 1 documents.",
+          "type": ["number", "null"]
+        },
+        "limit_dollars": {
+          "description": "The dollar ceiling, null when absent. Additive and optional for earlier version 1 documents.",
+          "type": ["number", "null"]
+        },
+        "remaining_dollars": {
+          "description": "The remaining dollar amount, null when absent. Additive and optional for earlier version 1 documents.",
+          "type": ["number", "null"]
+        },
+        "locked_reason": {
+          "description": "The server's lock reason, null when empty. Additive and optional for earlier version 1 documents.",
+          "type": ["string", "null"]
         }
       }
     },

@@ -211,6 +211,43 @@ func TestRawBodiesKeepInsertionOrder(t *testing.T) {
 	}
 }
 
+func TestWindowDollarMemberShapes(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		window usage.LimitWindow
+		want   []string
+	}{
+		"success: ordinary windows emit explicit nulls": {
+			window: usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowSession}},
+			want:   []string{`"used_dollars": null`, `"limit_dollars": null`, `"remaining_dollars": null`, `"locked_reason": null`},
+		},
+		"success: dollar figures survive JSON serialization": {
+			window: usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "iguana_necktie"}, UsedDollars: new(1.08611), LimitDollars: new(250.0), RemainingDollars: new(248.91389), LockedReason: "budget"},
+			want:   []string{`"kind": "dollar_credit"`, `"label": "iguana_necktie (dollar credit)"`, `"used_dollars": 1.08611`, `"limit_dollars": 250`, `"remaining_dollars": 248.91389`, `"locked_reason": "budget"`},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			report := NewStatusReport(time.Date(2026, 9, 8, 1, 20, 5, 0, time.UTC), 0)
+			row := reportRow(t)
+			row.Plan, row.RateLimitTier = new("ultra"), new("default_claude_max_20x")
+			row.Windows = []JSONWindow{windowJSON(&tt.window)}
+			report.Rows = append(report.Rows, row)
+			document, err := MarshalStatusReport(&report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			testutil.ValidateSchema(t, "status.v1.json", document)
+			for _, want := range tt.want {
+				if !strings.Contains(string(document), want) {
+					t.Errorf("JSON missing %s:\n%s", want, document)
+				}
+			}
+		})
+	}
+}
+
 func TestWindowConversions(t *testing.T) {
 	at := time.Date(2026, 9, 8, 1, 20, 5, 0, time.UTC)
 	tests := map[string]struct {
@@ -224,6 +261,10 @@ func TestWindowConversions(t *testing.T) {
 		"success: an unknown kind keeps the server's spelling in its label": {
 			window: usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowUnknown, Name: "lunar_cycle"}},
 			want:   JSONWindow{Kind: "unknown", Label: "lunar_cycle (unknown kind)"},
+		},
+		"success: a dollar window carries figures and the lock reason": {
+			window: usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "iguana_necktie"}, UsedDollars: new(1.08611), LimitDollars: new(250.0), RemainingDollars: new(248.91389), LockedReason: "budget"},
+			want:   JSONWindow{Kind: "dollar_credit", Label: "iguana_necktie (dollar credit)", UsedDollars: new(1.08611), LimitDollars: new(250.0), RemainingDollars: new(248.91389), LockedReason: new("budget")},
 		},
 		"success: a scoped window names its scope": {
 			window: usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: "Fable"}},

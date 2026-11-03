@@ -49,23 +49,26 @@ const (
 	WindowWeeklyScoped
 	// WindowUnknown is a window kind this build does not recognise.
 	WindowUnknown
+	// WindowDollarCredit is a top-level dollar-credit window, kept for JSON only.
+	WindowDollarCredit
 )
 
 // WindowKind identifies one usage window: a class, plus — for a scoped
-// window — the scope's display name, or — for an unrecognised kind — the
-// kind string kept verbatim. The verbatim string matters because it is the
-// only evidence the user has that the server grew a window this build has
-// never seen. The type is comparable, so kinds can be matched with ==.
+// window — the scope's display name, or — for an unrecognised kind or a
+// dollar-credit window — the server's name kept verbatim. The verbatim
+// string is the only evidence the user has that the server grew a window
+// this build has never seen. The type is comparable, so kinds can be
+// matched with ==.
 type WindowKind struct {
 	// Class is the window family.
 	Class WindowClass
 	// Name is the scope display name for [WindowWeeklyScoped], the
-	// verbatim kind string for [WindowUnknown], and empty otherwise.
+	// verbatim kind string for [WindowUnknown], the verbatim top-level key
+	// for [WindowDollarCredit], and empty otherwise.
 	Name string
 }
 
-// Label returns the name a window of this kind carries in the table's
-// continuation rows.
+// Label returns the name a window of this kind carries in reports.
 //
 // Named windows say what they are scoped to; an unrecognised kind says so
 // verbatim, because the kind string is the only evidence the user has that
@@ -78,6 +81,8 @@ func (k WindowKind) Label() string {
 		return "weekly"
 	case WindowWeeklyScoped:
 		return k.Name + " (weekly)"
+	case WindowDollarCredit:
+		return k.Name + " (dollar credit)"
 	default:
 		return k.Name + " (unknown kind)"
 	}
@@ -105,10 +110,17 @@ type LimitWindow struct {
 	// IsActive reports whether this is the window currently constraining
 	// the account.
 	IsActive bool
+	// UsedDollars is the consumed dollar amount, or nil when absent.
+	UsedDollars *float64
+	// LimitDollars is the dollar ceiling, or nil when absent.
+	LimitDollars *float64
+	// RemainingDollars is the remaining dollar amount, or nil when absent.
+	RemainingDollars *float64
+	// LockedReason is the server's reason for locking this window, or empty.
+	LockedReason string
 }
 
-// Label returns the name this window carries in the table's continuation
-// rows.
+// Label returns the name this window carries in reports.
 func (w *LimitWindow) Label() string {
 	return w.Kind.Label()
 }
@@ -256,7 +268,8 @@ func (s *UsageSnapshot) ScopedWindow(scope string) *LimitWindow {
 // ExtraWindows returns every window that does not have a column of its
 // own, in order: scoped weeklies other than the headline one, and anything
 // of an unrecognised kind. These become the continuation rows under an
-// account.
+// account. Dollar-credit windows are intentionally excluded: they remain
+// available in JSON but Claude Code does not surface them in its usage UI.
 func (s *UsageSnapshot) ExtraWindows(headlineScope string) []*LimitWindow {
 	var extras []*LimitWindow
 	for i := range s.Windows {
@@ -273,11 +286,18 @@ func (s *UsageSnapshot) ExtraWindows(headlineScope string) []*LimitWindow {
 	return extras
 }
 
-// NextReset returns the soonest reset across every window, or false when no
-// window carries one.
+// NextReset returns the soonest reset across every window shown in the table,
+// or false when none carries one.
+//
+// Dollar-credit windows are kept for the JSON document only and are not shown
+// in the table or watch display, so their resets must not drive the next-reset
+// countdown those surfaces render. Their own resets_at remains on each JSON entry.
 func (s *UsageSnapshot) NextReset() (time.Time, bool) {
 	var soonest time.Time
 	for i := range s.Windows {
+		if s.Windows[i].Kind.Class == WindowDollarCredit {
+			continue
+		}
 		at := s.Windows[i].ResetsAt
 		if at.IsZero() {
 			continue

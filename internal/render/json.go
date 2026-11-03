@@ -169,10 +169,10 @@ type JSONRow struct {
 
 // JSONWindow is one usage window of the report.
 type JSONWindow struct {
-	// Kind is session, weekly_all, weekly_scoped or unknown.
+	// Kind is session, weekly_all, weekly_scoped, unknown or dollar_credit.
 	Kind string `json:"kind"`
-	// Label is the window's display label, which is where a scoped
-	// window's scope and an unrecognised window's raw kind string appear.
+	// Label is the window's display label: its scope, verbatim unknown
+	// kind, or verbatim top-level dollar-credit key.
 	Label string `json:"label"`
 	// Percent is the percentage the server sent, clamped to 0..=100.
 	Percent *float64 `json:"percent"`
@@ -184,6 +184,14 @@ type JSONWindow struct {
 	// IsActive reports whether this is the window currently constraining
 	// the account.
 	IsActive bool `json:"is_active"`
+	// UsedDollars is the consumed dollar amount, null when absent.
+	UsedDollars *float64 `json:"used_dollars"`
+	// LimitDollars is the dollar ceiling, null when absent.
+	LimitDollars *float64 `json:"limit_dollars"`
+	// RemainingDollars is the remaining dollar amount, null when absent.
+	RemainingDollars *float64 `json:"remaining_dollars"`
+	// LockedReason is the server's lock reason, null when empty.
+	LockedReason *string `json:"locked_reason"`
 }
 
 // JSONCredits is an account's extra-usage credits, flattened.
@@ -271,11 +279,17 @@ func WindowsOf(snapshot *usage.UsageSnapshot) []JSONWindow {
 // windowJSON flattens one window.
 func windowJSON(window *usage.LimitWindow) JSONWindow {
 	out := JSONWindow{
-		Kind:         windowKindToken(window.Kind),
-		Label:        window.Label(),
-		Percent:      window.Percent,
-		PercentFloor: window.PercentFloor,
-		IsActive:     window.IsActive,
+		Kind:             windowKindToken(window.Kind),
+		Label:            window.Label(),
+		Percent:          window.Percent,
+		PercentFloor:     window.PercentFloor,
+		IsActive:         window.IsActive,
+		UsedDollars:      window.UsedDollars,
+		LimitDollars:     window.LimitDollars,
+		RemainingDollars: window.RemainingDollars,
+	}
+	if window.LockedReason != "" {
+		out.LockedReason = new(window.LockedReason)
 	}
 	if !window.ResetsAt.IsZero() {
 		out.ResetsAt = new(FormatInstant(window.ResetsAt))
@@ -292,6 +306,8 @@ func windowKindToken(kind usage.WindowKind) string {
 		return "weekly_all"
 	case usage.WindowWeeklyScoped:
 		return "weekly_scoped"
+	case usage.WindowDollarCredit:
+		return "dollar_credit"
 	default:
 		return "unknown"
 	}
@@ -345,8 +361,8 @@ func onCredits(credits usage.Credits) JSONCredits {
 	return out
 }
 
-// NextResetOf builds the next_reset member: the soonest reset across
-// every window, or nil for a row that fetched nothing.
+// NextResetOf builds the next_reset member: the soonest reset across every
+// window shown in the table, or nil for a row that fetched nothing.
 func NextResetOf(snapshot *usage.UsageSnapshot) *string {
 	if snapshot == nil {
 		return nil

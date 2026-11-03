@@ -79,6 +79,14 @@ func statusFixture(ts *testscript.TestScript, neg bool, args []string) {
 		}
 		limit["resets_at"] = reset.Format(time.RFC3339)
 	}
+	document["iguana_necktie"] = map[string]any{
+		"utilization":       0.434444,
+		"resets_at":         weekly.Format(time.RFC3339),
+		"limit_dollars":     250,
+		"used_dollars":      1.08611,
+		"remaining_dollars": 248.91389,
+		"locked_reason":     nil,
+	}
 	body, err = json.Marshal(document)
 	ts.Check(err)
 	var status atomic.Int64

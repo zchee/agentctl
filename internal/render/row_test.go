@@ -62,6 +62,27 @@ func TestUsageGauges(t *testing.T) {
 			},
 			want: nil,
 		},
+		"success: extra windows do not add to the fixed gauges": {
+			snapshot: &usage.UsageSnapshot{
+				Windows: append(healthyWindows(t),
+					usage.LimitWindow{Kind: unknownWindowKind("monthly_foo"), PercentFloor: new(0)},
+					usage.LimitWindow{Kind: weeklyScopedWindowKind("opus"), PercentFloor: new(12)},
+					usage.LimitWindow{Kind: unknownWindowKind("unmeasured")},
+					usage.LimitWindow{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "iguana_necktie"}, PercentFloor: new(50)},
+				),
+				Credits: creditsOn(money(1234, "USD", 2), nil, 25),
+			},
+			want: []Gauge{{"5h", 21}, {"weekly", 35}, {"Fable", 56}, {"credits", 25}},
+		},
+		"success: unknown and dollar credit windows earn no gauge": {
+			snapshot: &usage.UsageSnapshot{
+				Windows: []usage.LimitWindow{
+					{Kind: unknownWindowKind("monthly_foo"), PercentFloor: new(7)},
+					{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "iguana_necktie"}, PercentFloor: new(50)},
+				},
+				Credits: creditsUnavailable(),
+			},
+		},
 		"success: a row without numbers earns no gauges": {
 			snapshot: nil,
 			want:     nil,

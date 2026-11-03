@@ -19,6 +19,7 @@ exec agentctl claude status --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
 stdout '5h reset'
 stdout 'Weekly reset'
+! stdout 'iguana_necktie|nimbus_quill|dollar credit'
 ! stdout 'Next reset'
 status-check resets stdout Asia/Tokyo
 cp stdout tokyo.stdout
@@ -35,6 +36,12 @@ env TZ=Asia/Tokyo
 exec agentctl claude status --json --account owner@example.com
 ! stderr 'sk-ant|SENTINEL'
 status-check json-resets stdout 1
+stdout '"kind": "dollar_credit"'
+stdout '"label": "iguana_necktie \(dollar credit\)"'
+stdout '"used_dollars": 1.08611'
+stdout '"limit_dollars": 250'
+stdout '"remaining_dollars": 248.91389'
+stdout '"locked_reason": null'
 cp stdout resets.json
 exec schema status.v1.json resets.json
 status-check read-only

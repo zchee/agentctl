@@ -98,21 +98,22 @@ func testClient(server *httptest.Server) *UsageClient {
 	return NewUsageClient(server.URL, "agentctl/test", 5*time.Second)
 }
 
-func TestTheCapturedFixtureYieldsExactlyThreeWindows(t *testing.T) {
+func TestTheCapturedFixtureYieldsEveryWindow(t *testing.T) {
 	t.Parallel()
 
 	snapshot := parsedFixture(t, "usage-2026-09-08.json", false)
-	if len(snapshot.Windows) != 3 {
-		t.Fatalf("the capture describes three windows, got %d", len(snapshot.Windows))
+	if len(snapshot.Windows) != 4 {
+		t.Fatalf("the capture describes three limits and one top-level window, got %d", len(snapshot.Windows))
 	}
 
 	wantKinds := []usage.WindowKind{
 		{Class: usage.WindowSession},
 		{Class: usage.WindowWeeklyAll},
 		{Class: usage.WindowWeeklyScoped, Name: "Fable"},
+		{Class: usage.WindowDollarCredit, Name: "nimbus_quill"},
 	}
-	wantFloors := []int{21, 35, 56}
-	wantActive := []bool{false, false, true}
+	wantFloors := []int{21, 35, 56, 0}
+	wantActive := []bool{false, false, true, false}
 	for i, window := range snapshot.Windows {
 		if window.Kind != wantKinds[i] {
 			t.Errorf("window %d kind = %+v, want %+v", i, window.Kind, wantKinds[i])
@@ -137,16 +138,82 @@ func TestTheCapturedFixtureYieldsExactlyThreeWindows(t *testing.T) {
 	}
 }
 
-func TestTheFlatKeysAreIgnoredWhenLimitsIsPresent(t *testing.T) {
+func TestKnownFlatKeysAreIgnoredWhenLimitsIsPresent(t *testing.T) {
 	t.Parallel()
 
-	// The capture carries nimbus_quill with utilization 0.0 alongside
-	// limits[]. Reading both shapes would invent a fourth window.
 	snapshot := parsedFixture(t, "usage-2026-09-08.json", false)
+	counts := map[usage.WindowClass]int{}
 	for _, window := range snapshot.Windows {
-		if window.Kind.Class == usage.WindowUnknown && window.Kind.Name == "nimbus_quill" {
-			t.Error("an unrecognised flat key must not become a window while limits[] exists")
-		}
+		counts[window.Kind.Class]++
+	}
+	want := map[usage.WindowClass]int{usage.WindowSession: 1, usage.WindowWeeklyAll: 1, usage.WindowWeeklyScoped: 1, usage.WindowDollarCredit: 1}
+	if diff := gocmp.Diff(want, counts); diff != "" {
+		t.Errorf("known legacy windows must not duplicate limits (-want +got):\n%s", diff)
+	}
+}
+
+func TestTopLevelUsageWindows(t *testing.T) {
+	t.Parallel()
+
+	const dollarWindow = `"iguana_necktie":{"utilization":0.434444,"resets_at":"2026-11-05T07:59:00+00:00","limit_dollars":250,"used_dollars":1.08611,"remaining_dollars":248.91389,"locked_reason":null}`
+	dollars := usage.LimitWindow{
+		Kind:    usage.WindowKind{Class: usage.WindowDollarCredit, Name: "iguana_necktie"},
+		Percent: new(0.434444), PercentFloor: new(0),
+		ResetsAt:    usageTS(t, "2026-11-05T07:59:00Z"),
+		UsedDollars: new(1.08611), LimitDollars: new(250.0), RemainingDollars: new(248.91389),
+	}
+	tests := map[string]struct {
+		body string
+		want []usage.LimitWindow
+	}{
+		"success: top-level dollar window follows limits": {
+			body: `{"limits":[{"kind":"session","percent":21},{"kind":"weekly_all","percent":35}],` + dollarWindow + `}`,
+			want: []usage.LimitWindow{
+				{Kind: usage.WindowKind{Class: usage.WindowSession}, Percent: new(21.0), PercentFloor: new(21)},
+				{Kind: usage.WindowKind{Class: usage.WindowWeeklyAll}, Percent: new(35.0), PercentFloor: new(35)},
+				dollars,
+			},
+		},
+		"success: top-level dollar window follows legacy windows": {
+			body: `{` + dollarWindow + `,"five_hour":{"utilization":21},"seven_day":{"utilization":35}}`,
+			want: []usage.LimitWindow{
+				{Kind: usage.WindowKind{Class: usage.WindowSession}, Percent: new(21.0), PercentFloor: new(21)},
+				{Kind: usage.WindowKind{Class: usage.WindowWeeklyAll}, Percent: new(35.0), PercentFloor: new(35)},
+				dollars,
+			},
+		},
+		"success: credits and spend are never windows even with both members": {
+			body: `{"extra_usage":{"is_enabled":true,"utilization":25,"resets_at":null},"spend":{"percent":25,"utilization":25,"resets_at":null}}`,
+		},
+		"success: null and non-object obfuscated members are absent": {
+			body: `{"iguana_necktie":null,"tangelo":[],"pace":4}`,
+		},
+		"success: both members must be present": {
+			body: `{"only_usage":{"utilization":0},"only_reset":{"resets_at":null}}`,
+		},
+		"success: null members qualify and body order survives": {
+			body: `{"zeta":{"utilization":null,"resets_at":null,"locked_reason":"budget"},"alpha":{"utilization":0,"resets_at":null}}`,
+			want: []usage.LimitWindow{
+				{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "zeta"}, LockedReason: "budget"},
+				{Kind: usage.WindowKind{Class: usage.WindowDollarCredit, Name: "alpha"}, Percent: new(0.0), PercentFloor: new(0)},
+			},
+		},
+		"success: known scoped keys do not duplicate limits": {
+			body: `{"limits":[{"kind":"weekly_scoped","scope":{"model":{"display_name":"Fable"}}}],"seven_day_fable":{"utilization":50,"resets_at":null}}`,
+			want: []usage.LimitWindow{{Kind: usage.WindowKind{Class: usage.WindowWeeklyScoped, Name: "Fable"}, ScopeLabel: "Fable"}},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			snapshot, err := ParseUsage(jsontext.Value(tt.body), time.Time{}, false)
+			if err != nil {
+				t.Fatalf("parse usage: %v", err)
+			}
+			if diff := gocmp.Diff(tt.want, snapshot.Windows); diff != "" {
+				t.Errorf("windows mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -849,8 +916,8 @@ func TestTheRequestCarriesExactlyTheHeadersTheEndpointNeeds(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Errorf("calls = %d, want 1", calls.Load())
 	}
-	if len(snapshot.Windows) != 3 {
-		t.Errorf("windows = %d, want 3", len(snapshot.Windows))
+	if len(snapshot.Windows) != 4 {
+		t.Errorf("windows = %d, want 4 including the top-level window", len(snapshot.Windows))
 	}
 }
 
