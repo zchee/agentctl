@@ -70,6 +70,10 @@
         },
         "email": { "type": ["string", "null"] },
         "org_name": { "type": ["string", "null"] },
+        "label": {
+          "description": "The name the user gave the account at login, null when none was given. Additive and optional for earlier version 1 documents.",
+          "type": ["string", "null"]
+        },
         "plan": {
           "description": "The display label derived from the stored subscription and rate-limit tier, null when unknown. Additive and optional for earlier version 1 documents; stored words are unchanged.",
           "type": ["string", "null"]

@@ -63,6 +63,11 @@ type StatusRow struct {
 	// Account is how the account is named in the first column: its email
 	// when known, otherwise the id the account flag accepts.
 	Account string
+	// Label is the name the user gave the account at login, empty when
+	// none was given. It joins Account in the first column rather than
+	// taking a column of its own: most rows — the live one, a keychain
+	// item, an owned account logged in without the flag — have none.
+	Label string
 	// Org is the organization's display name, or its UUID when unnamed.
 	Org string
 	// Plan is the subscription's display label.
@@ -91,6 +96,16 @@ type StatusRow struct {
 	// can carry them or no credential was read. A count only: the tokens
 	// themselves never reach a row.
 	MCPOAuthEntries *int
+}
+
+// AccountCell returns the first column's full text: the account, then
+// its label in parentheses when it has one. The same shape as the
+// state cell's notes, so a reader who knows one knows the other.
+func AccountCell(account, label string) string {
+	if label == "" {
+		return account
+	}
+	return account + " (" + label + ")"
 }
 
 // StateCell returns the state column's full text: the state, then its

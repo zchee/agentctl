@@ -115,6 +115,9 @@ type JSONRow struct {
 	Email *string `json:"email"`
 	// OrgName is the organization's display name, when it is known.
 	OrgName *string `json:"org_name"`
+	// Label is the name the user gave the account at login, when one was
+	// given.
+	Label *string `json:"label"`
 	// Plan is the display label derived from the stored subscription and tier.
 	Plan *string `json:"plan"`
 	// RateLimitTier is the stored rate-limit tier, verbatim when known.

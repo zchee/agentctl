@@ -302,7 +302,7 @@ func withKind(cells []string, report *Report, kind string) []string {
 // slot has been collected and each column's width is known.
 func accountRecord(row *StatusRow) []string {
 	cells := []string{
-		row.Account,
+		AccountCell(row.Account, row.Label),
 		orEmpty(row.Org),
 		orEmpty(row.Plan),
 		EmptyCell,

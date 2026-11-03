@@ -197,6 +197,48 @@ func TestCodexHeadingsKeepTheirOwnColumnList(t *testing.T) {
 	}
 }
 
+func TestAccountCellFoldsTheLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		account string
+		label   string
+		want    string
+	}{
+		"success: a label follows the account in parentheses": {account: "alice@example.com", label: "work", want: "alice@example.com (work)"},
+		"success: no label leaves the account bare":           {account: "alice@example.com", want: "alice@example.com"},
+		"success: an id stands in for a missing email":        {account: "5cdc535f", label: "work", want: "5cdc535f (work)"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if diff := gocmp.Diff(tt.want, AccountCell(tt.account, tt.label)); diff != "" {
+				t.Errorf("AccountCell(%q, %q) mismatch (-want +got):\n%s", tt.account, tt.label, diff)
+			}
+		})
+	}
+}
+
+func TestLabelledRowNamesItselfInTheAccountColumn(t *testing.T) {
+	t.Parallel()
+
+	labelled := healthyRow(t, "alice@example.com")
+	labelled.Label = "work"
+	plain := healthyRow(t, "bob@example.com")
+
+	rendered := Render(report(t, []StatusRow{labelled, plain}, false))
+	if got, want := cellsOf(t, rendered, "alice@example.com")[0], "alice@example.com (work)"; got != want {
+		t.Errorf("labelled Account cell = %q, want %q:\n%s", got, want, rendered)
+	}
+	if got, want := cellsOf(t, rendered, "bob@example.com")[0], "bob@example.com"; got != want {
+		t.Errorf("plain Account cell = %q, want %q:\n%s", got, want, rendered)
+	}
+	if strings.Contains(rendered, "Label") {
+		t.Errorf("the label joins the Account column rather than taking one of its own:\n%s", rendered)
+	}
+}
+
 func TestFooterAgreesWithItselfOnNumber(t *testing.T) {
 	t.Parallel()
 
