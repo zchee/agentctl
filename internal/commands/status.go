@@ -638,6 +638,7 @@ func statusRows(outcomes []rowOutcome, byIdentity bool) []render.StatusRow {
 func (o *rowOutcome) statusRow() render.StatusRow {
 	return render.StatusRow{
 		Account:            o.account,
+		Label:              labelOf(&o.record),
 		Org:                o.org,
 		Plan:               o.plan,
 		RateLimitTier:      o.rateLimitTier,
@@ -659,6 +660,7 @@ func (o *rowOutcome) jsonRow() render.JSONRow {
 		OrganizationUUID: o.record.OrganizationUUID,
 		Email:            o.record.Email,
 		OrgName:          o.record.OrgName,
+		Label:            o.record.Label,
 		RateLimitTier:    o.rateLimitTier,
 		Kind:             o.record.Kind.Name(),
 		Source:           o.source.Name(),

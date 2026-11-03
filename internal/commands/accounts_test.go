@@ -116,6 +116,18 @@ func TestAccountsList(t *testing.T) {
 			},
 			absent: []string{"sk-ant-"},
 		},
+		"success: folds the login label into the Account cell": {
+			seed: func(t *testing.T, store *seededStore) (*fakeKeychain, []string) {
+				t.Helper()
+				record := store.fixture.OwnedRecord(testutil.Acct, testutil.Org)
+				record["label"] = "work"
+				store.fixture.WriteRegistry([]any{record})
+				store.fixture.WriteCredentials(testutil.Acct, testutil.Org, store.fixture.Blob("sk-ant-oat01-owned", "sk-ant-ort01-owned", testutil.FreshAt()))
+				return unlockedKeychain(nil), nil
+			},
+			contains: []string{" " + testutil.Email + " (work) |"},
+			absent:   []string{"sk-ant-", "Label"},
+		},
 		"success: hides a forgotten row and a foreign item until --all": {
 			seed: func(t *testing.T, store *seededStore) (*fakeKeychain, []string) {
 				t.Helper()
@@ -200,6 +212,36 @@ func TestListRecord(t *testing.T) {
 				Source: claude.SourceFile,
 			},
 			want: []string{testutil.Acct, testutil.Email, "Acme", "owned", "file", "ok", "/store/ns"},
+		},
+		"success: a labelled row names the label beside the email": {
+			row: claude.AccountRow{
+				ID: testutil.Acct,
+				Record: config.AccountRecord{
+					AccountUUID:      testutil.Acct,
+					OrganizationUUID: testutil.Org,
+					Email:            &email,
+					OrgName:          &orgName,
+					Label:            new("work"),
+					Kind:             config.AccountKindOwned("/store/ns", "deadbeef"),
+				},
+				State:  claude.StateOfOK(),
+				Source: claude.SourceFile,
+			},
+			want: []string{testutil.Acct, testutil.Email + " (work)", "Acme", "owned", "file", "ok", "/store/ns"},
+		},
+		"success: a labelled row with no email still shows the label": {
+			row: claude.AccountRow{
+				ID: testutil.Acct,
+				Record: config.AccountRecord{
+					AccountUUID:      testutil.Acct,
+					OrganizationUUID: testutil.Org,
+					Label:            new("work"),
+					Kind:             config.AccountKindOwned("/store/ns", "deadbeef"),
+				},
+				State:  claude.StateOfOK(),
+				Source: claude.SourceFile,
+			},
+			want: []string{testutil.Acct, "— (work)", testutil.Org, "owned", "file", "ok", "/store/ns"},
 		},
 		"success: a row with no email and no org name falls back": {
 			row: claude.AccountRow{

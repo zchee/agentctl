@@ -133,13 +133,22 @@ func listRecord(row *claude.AccountRow, liveService string) []string {
 	}
 	return []string{
 		row.ID,
-		account,
+		render.AccountCell(account, labelOf(&row.Record)),
 		org,
 		row.Record.Kind.Name(),
 		row.Source.Name(),
 		row.State.Label(),
 		location(&row.Record, liveService),
 	}
+}
+
+// labelOf is the record's label, or empty when none was given: the
+// value the Account cell folds in beside the email.
+func labelOf(record *config.AccountRecord) string {
+	if record.Label == nil {
+		return ""
+	}
+	return *record.Label
 }
 
 // location is where a row's credentials are named, in the terms of its
